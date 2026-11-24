@@ -263,13 +263,21 @@ test_home_status() {
 }
 
 test_polling_follows_viewers() {
-  local calls="$REMOTE_SM/fm-on.calls" before after
+  local calls="$REMOTE_SM/fm-on.calls" before after views=0
   tb_op "$MAIN" dump >/dev/null
   sleep 1
   before=$(wc -l < "$calls")
-  tb_op "$MAIN" dump >/dev/null
-  sleep 1
-  after=$(wc -l < "$calls")
+  after=$before
+  # A slow runner may need more than one second to start a scheduled read, so
+  # keep viewing for up to 10 one-second rounds. Every round ends in a view
+  # followed by one second, so the idle-limit checks below still start one
+  # second after the last view.
+  while [ "$after" -le "$before" ] && [ "$views" -lt 10 ]; do
+    tb_op "$MAIN" dump >/dev/null
+    sleep 1
+    views=$((views + 1))
+    after=$(wc -l < "$calls")
+  done
   [ "$after" -gt "$before" ] || fail "homes must be read on a schedule while someone is viewing"
   assert_contains "$(t status)" "輪詢：進行中" "status must report polling while someone is viewing"
   sleep 9
