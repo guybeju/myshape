@@ -462,7 +462,7 @@ first mate 用 `propose` 開的議題停在提議中，要等使用者在頁面�
 
 使用者 2026-11-20：`archer-openwrt` 議題頁看不到任何一張卡被開、被回答的痕跡；可追蹤是這個設計重要的指標，要看板的設計強制存下紀錄。
 查到的（設計報告 `todo-history-trace-design` 第 1 節，在 B3 之後重新盤點）：一個改動可以不帶紀錄就回來（「先不關」、`todo adopt-done` 清掉的舊狀態、啟動時確認的封存提議、第一次啟動帶過來的狀態都沒有紀錄）；改動先存檔、紀錄後寫，中間當掉或寫不進去就只有改動；存下的紀錄在整個 fleet 寫滿 2000 筆更新之後從頁面上掉出去。
-使用者選了分兩步：B3 先把「要你動手」每一步記下來（#61），這一條是第二步，在 B4 之前。
+使用者選了分兩步：B3 先把「要你動手」每一步記下來（guybeju/firstmate#61），這一條是第二步，在 B4 之前。
 **做法**：
 
 - 型別：改動的結果一定帶至少一筆紀錄（`records.ts`、`topics.ts`、`todos.ts`），不帶就編譯不過；說「沒有改」的結果交回的狀態要和原本一樣，不然看板直接報錯。
@@ -508,11 +508,11 @@ C58 之後看板只記得在頁面上答的；在聊天裡答、first mate 自�
 
 ### C61　已關的待決事項、沒有議題的已關項目、更新空檔的開啟
 
-C58、C59 合併時留下的三個後續（#63、#64 的 PR 說明），使用者 2026-11-22 各選了 A：
+C58、C59 合併時留下的三個後續（guybeju/firstmate#63、guybeju/firstmate#64 的 PR 說明），使用者 2026-11-22 各選了 A：
 
 - 議題頁：已關的待決事項摺進「待決」最後的「已關 N」，和「要你動手」的一樣；紀錄不變，照樣也在「更新」裡（[stage-5-browser](stage-5-browser.markdown)）。關了的是有 `hold.answered` 或 `hold.closed` 紀錄的；同一個待決事項的兩筆關閉（頁面的「已在別處結束」與讀取資料的真正關閉）算一個，關閉之後的新 `hold.opened` 是下一輪。
 - 首頁：沒有議題、已關的要你動手項目放在「要你動手」下面的「沒有議題」，摺成「已關 N」，沒有時整段不顯示。放的位置使用者選了 C（一段叫「沒有議題」的），沒有選放進「要你動手」或「未分類」。
-- 讀取程式的 `code_commit` 換了不再重新開始：看板接著上一次成功讀取時記下的比，開著的 hold 這一次只以 task 認，而且只有 `hold_set` 不早於 `decisions.json` 記下的 `seen_at` 的才寫開啟，所以更新前後的空檔裡開的待決事項有開啟，之前就開著的、只是新的讀取程式才報出來的（#68 之後主 home 的 `動手：` hold）都不寫（[contracts](contracts.markdown) 第 3.3、3.7 節）。照舊不寫開啟的：同一個 task 在空檔裡關掉又重新 hold 的新的一輪；`hold_set` 不是確切時間的；換上這一版的那一次（較舊的看板沒記下 `seen_at`）。
+- 讀取程式的 `code_commit` 換了不再重新開始：看板接著上一次成功讀取時記下的比，開著的 hold 這一次只以 task 認，而且只有 `hold_set` 不早於 `decisions.json` 記下的 `seen_at` 的才寫開啟，所以更新前後的空檔裡開的待決事項有開啟，之前就開著的、只是新的讀取程式才報出來的（guybeju/firstmate#68 之後主 home 的 `動手：` hold）都不寫（[contracts](contracts.markdown) 第 3.3、3.7 節）。照舊不寫開啟的：同一個 task 在空檔裡關掉又重新 hold 的新的一輪；`hold_set` 不是確切時間的；換上這一版的那一次（較舊的看板沒記下 `seen_at`）。
 - 都只改顯示與讀取的比對：沒有新的操作、不改存的資料與 `commitChange`。
 - 防呆：`view.test.ts` 的 closed decisions、`decisions.test.ts` 的 across a change of the reader's code、`poller.test.ts`（換程式時失敗的讀取不交出去）、`stage-5-page.mjs`（兩個摺疊）、`stage-7-upgrade.sh` 從 `cbe6e42a` 升上來的那一步。
 

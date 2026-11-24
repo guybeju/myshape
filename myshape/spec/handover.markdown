@@ -68,37 +68,37 @@ trash "$H"                                        # 再把暫時的 home 丟進�
 
 ## 2. 每個問題的狀態
 
-[open-issues](open-issues.markdown) 的每一條。「完成」是已經照那一條寫的做法實作並進了 `carry`；PR 是那一條進 `carry` 的那一個。Mac 上找到的另外三個測試相容性問題沒有編號，在 #29、#30、#31：暫存目錄太深與 `ss`、輔助函式的預設值寫法、巢狀引號。
+[open-issues](open-issues.markdown) 的每一條。「完成」是已經照那一條寫的做法實作並進了 `carry`；PR 是那一條進 `carry` 的那一個。Mac 上找到的另外三個測試相容性問題沒有編號，在 guybeju/firstmate#29、guybeju/firstmate#30、guybeju/firstmate#31：暫存目錄太深與 `ss`、輔助函式的預設值寫法、巢狀引號。
 
 | 條目 | 狀態 | PR |
 | --- | --- | --- |
-| C1 到 C21 | 完成：規劃時定案，第一次交付就照著做 | #1 |
-| C22 到 C27 | 完成：實作時發現並修掉 | #1 |
-| C28 | 延後（使用者 2026-11-17 定），之後要補，清單在第 4 節 | #1 起持續記錄 |
-| C29 到 C31 | 完成 | #3 |
-| C32 | 完成 | #4 |
-| C33 | 完成 | #5 |
-| C34 | 完成 | #6 |
-| C35 | 完成 | #7 |
-| C36 | 完成 | #9 |
-| C37 | 完成 | #11 |
-| C38 | 完成 | #13 |
-| C39 | 完成 | #14 |
-| C40 | 完成 | #15 |
-| C41 | 完成 | #16 |
-| C42 | 完成，只有截圖驗過，沒有自動測試 | #17 |
-| C43 | 完成 | #18 |
-| C44 | 完成，真的 home 上實測過（回報） | #19 |
-| C45 | 完成 | #25 |
-| C46 | 完成；真的 home 上建立過項目，「做完了」到關閉的一整輪還開著（第 3 節） | #27 |
-| C47 | 完成，Mac 上通過 | #28 |
-| C48 | 完成，Mac 的 bash 3.2.57 上通過 | #29 |
-| C49 | 完成 | #32 |
-| C50 | 完成 | #33 |
-| C51 | 完成 | #34 |
-| C52 | 完成 | #49 |
-| C53 | 完成 | #51 |
-| C54 | 完成 | #52 |
+| C1 到 C21 | 完成：規劃時定案，第一次交付就照著做 | guybeju/firstmate#1 |
+| C22 到 C27 | 完成：實作時發現並修掉 | guybeju/firstmate#1 |
+| C28 | 延後（使用者 2026-11-17 定），之後要補，清單在第 4 節 | guybeju/firstmate#1 起持續記錄 |
+| C29 到 C31 | 完成 | guybeju/firstmate#3 |
+| C32 | 完成 | guybeju/firstmate#4 |
+| C33 | 完成 | guybeju/firstmate#5 |
+| C34 | 完成 | guybeju/firstmate#6 |
+| C35 | 完成 | guybeju/firstmate#7 |
+| C36 | 完成 | guybeju/firstmate#9 |
+| C37 | 完成 | guybeju/firstmate#11 |
+| C38 | 完成 | guybeju/firstmate#13 |
+| C39 | 完成 | guybeju/firstmate#14 |
+| C40 | 完成 | guybeju/firstmate#15 |
+| C41 | 完成 | guybeju/firstmate#16 |
+| C42 | 完成，只有截圖驗過，沒有自動測試 | guybeju/firstmate#17 |
+| C43 | 完成 | guybeju/firstmate#18 |
+| C44 | 完成，真的 home 上實測過（回報） | guybeju/firstmate#19 |
+| C45 | 完成 | guybeju/firstmate#25 |
+| C46 | 完成；真的 home 上建立過項目，「做完了」到關閉的一整輪還開著（第 3 節） | guybeju/firstmate#27 |
+| C47 | 完成，Mac 上通過 | guybeju/firstmate#28 |
+| C48 | 完成，Mac 的 bash 3.2.57 上通過 | guybeju/firstmate#29 |
+| C49 | 完成 | guybeju/firstmate#32 |
+| C50 | 完成 | guybeju/firstmate#33 |
+| C51 | 完成 | guybeju/firstmate#34 |
+| C52 | 完成 | guybeju/firstmate#49 |
+| C53 | 完成 | guybeju/firstmate#51 |
+| C54 | 完成 | guybeju/firstmate#52 |
 | C55 | 完成 | 這一條進 `carry` 的 PR（commit 訊息寫明 C55） |
 | C58 | 完成 | 這一條進 `carry` 的 PR |
 | C59 | 完成 | 這一條進 `carry` 的 PR |
