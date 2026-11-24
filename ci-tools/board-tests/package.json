@@ -1,0 +1,9 @@
+{
+  "name": "carry-board-tests-ci-tools",
+  "private": true,
+  "description": "CI only: the tools .github/workflows/carry-board-tests.yml installs with npm ci.",
+  "dependencies": {
+    "pnpm": "12.21.0",
+    "tasks-axi": "0.2.6"
+  }
+}

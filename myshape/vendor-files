@@ -1,0 +1,16 @@
+bin/myshape.sh
+bin/myshape-lib.sh
+myshape/dist
+myshape/public
+myshape/package.json
+
+myshape/.gitignore
+myshape/vendor-files
+myshape/test/contract
+myshape/test/kit
+myshape/test/firstmate-names
+myshape/test/signal-lib.sh
+myshape/test/signal-guard.sh
+myshape/test/check-signals.sh
+myshape/test/standalone-lib.sh
+myshape/test/stub-aggregator

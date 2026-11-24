@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "code_commit": "fixture-commit",
+  "generated": "2026-11-19T00:00:00Z",
+  "ledger_enabled": true,
+  "tasks": [
+    {
+      "id": "sm-loose",
+      "kind": "ship",
+      "state": "working",
+      "source": "pane",
+      "detail": "",
+      "unstarted": false
+    }
+  ],
+  "queued": [],
+  "holds": [
+    {
+      "id": "call-sm",
+      "title": "Ship it?",
+      "question": "要出貨嗎？\n選項：好 | 不要",
+      "hold_bucket": "live",
+      "hold_until": null,
+      "unresolved_blocker_ids": [],
+      "hold_age_days": 0,
+      "origin": "",
+      "on_answer": "close",
+      "hold_set": "2026-11-18T00:00:00Z"
+    }
+  ],
+  "status_decisions": [],
+  "topics": {},
+  "ledger": {
+    "status": "absent",
+    "to_offset": 0,
+    "to_prefix_sha256": "-",
+    "more": false,
+    "lines": []
+  },
+  "closed_holds": [],
+  "closed_cursor": {
+    "status": "delta",
+    "to_offset": 0,
+    "to_prefix_sha256": "-",
+    "more": false
+  }
+}

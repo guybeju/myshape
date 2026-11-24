@@ -1,0 +1,7 @@
+{"v":1,"ts":1795000000,"event":"task.dispatched","task":"t1","kind":"ship"}
+{"v":1,"ts":1795000100,"event":"task.status","task":"t1","state":"working","text":"halfway"}
+{"v":1,"ts":1795000200,"event":"task.pr_ready","task":"t1","pr":"https://example.invalid/pr/7"}
+{"v":1,"ts":1795000300,"event":"task.dispatched","task":"gone-merged","kind":"ship"}
+{"v":1,"ts":1795000400,"event":"task.merged","task":"gone-merged","pr":"https://example.invalid/pr/8"}
+{"v":1,"ts":1795000500,"event":"task.dispatched","task":"gone-dropped","kind":"ship"}
+{"v":1,"ts":1795000600,"event":"task.cleaned_up","task":"gone-dropped"}

@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>議題看板 原型（用完即丟）</title>
+<!--
+PROTOTYPE，不是正式程式。票：tickets/10-layout-prototype.md
+三個版面變體，用 ?variant=A|B|C 切換；情境用 ?scene=ok|down|stale|noledger 切換。
+全部是假資料，狀態只在記憶體裡，重新整理就還原。不連任何服務。
+-->
+<style>
+:root{--bg:#f4f2ee;--card:#fff;--ink:#22252a;--mute:#6b7078;--line:#d9d5cc;--accent:#2f5fa8;
+--red:#b3261e;--amber:#9a6700;--green:#2e7d4f;--grey:#8a8f98;--blue:#2f5fa8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,"Noto Sans TC",sans-serif;padding-bottom:90px}
+header{display:flex;gap:16px;align-items:center;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header h1{font-size:16px;margin:0}
+a,button.link{color:var(--accent);cursor:pointer;background:none;border:0;padding:0;font:inherit;text-decoration:underline}
+main{padding:16px;max-width:1400px;margin:0 auto}
+h2{font-size:15px;margin:0 0 8px}h3{font-size:13px;margin:12px 0 6px;color:var(--mute)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:8px}
+.topic{cursor:grab}.topic.dragging{opacity:.45;outline:2px dashed var(--accent);background:#eaf1fb}
+.topic .name{font-weight:600}.goal{color:var(--mute);font-size:13px}
+.meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;margin-top:4px}
+.pill{border-radius:10px;padding:0 7px;font-size:12px;border:1px solid var(--line);white-space:nowrap}
+.pill.red{background:var(--red);color:#fff;border-color:var(--red)}
+.pill.warn{background:#fff4d6;border-color:#e6c766}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.l-decide{background:var(--red)}.l-stuck{background:var(--amber)}.l-working{background:var(--blue)}
+.l-done{background:var(--green)}.l-unknown{background:var(--grey)}
+.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.queue{background:#ebe8e1;border-radius:6px;padding:8px;min-height:120px}
+.queue.over{outline:2px dashed var(--accent)}
+.row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);background:#fff}
+.row .grow{flex:1;min-width:0}
+.side>div:first-child .row{flex-wrap:wrap}.side>div:first-child .row .goal{display:none}.side>div:first-child .row .grow{flex-basis:100%}
+.btns input[type=text]{min-width:0}.three>div:first-child .btns{flex-direction:column;align-items:stretch}.three>div:first-child .btns input,.three>div:first-child select{width:100%!important}
+.split{display:grid;grid-template-columns:minmax(320px,1fr) minmax(360px,1.2fr);gap:16px}
+.side{display:grid;grid-template-columns:260px 1fr;gap:16px}
+.three{display:grid;grid-template-columns:240px minmax(300px,1fr) minmax(360px,1.3fr);gap:14px}
+textarea,input[type=text],select{font:inherit;padding:5px;border:1px solid var(--line);border-radius:4px;width:100%}
+button{font:inherit;padding:4px 10px;border:1px solid var(--line);border-radius:4px;background:#fff;cursor:pointer}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+button.danger{border-color:var(--red);color:var(--red)}
+.btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.upd{padding:6px 0;border-bottom:1px solid var(--line)}
+.upd .t{color:var(--mute);font-size:12px;margin-right:6px}
+.upd.summary{background:#f1f6ff;padding:6px 8px;border-left:3px solid var(--accent)}
+.upd.system{color:var(--mute);font-style:italic}
+.wr{font-size:12px;margin-top:4px;padding:4px 6px;background:#f7f5f0;border-radius:4px}
+.note{font-size:12px;color:var(--mute)}
+.banner{padding:10px 16px;background:var(--red);color:#fff}
+.banner.warn{background:#fff4d6;color:var(--ink);border-bottom:1px solid #e6c766}
+#toast{position:fixed;right:16px;bottom:80px;max-width:360px;z-index:20}
+#toast .card{box-shadow:0 2px 10px #0003}
+#bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#111;color:#fff;border-radius:22px;padding:6px 12px;display:flex;gap:10px;align-items:center;z-index:30;box-shadow:0 2px 12px #0006;font-size:13px}
+#bar button,#bar select{background:#333;color:#fff;border:0;border-radius:12px;width:auto;padding:3px 9px}
+pre.q{white-space:pre-wrap;font:inherit;margin:0 0 4px}
+details>summary{cursor:pointer;color:var(--mute)}
+.tabs{display:flex;gap:4px;margin-bottom:8px}.tabs button.on{background:var(--ink);color:#fff}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<div id="bar"></div>
+<script>
+'use strict';
+const VARIANTS = {A: '三欄看板', B: '清單加詳情欄', C: '對照組：Bearings 式四段'};
+const SCENES = {ok: '正常', down: '看板服務沒有回應', stale: '遠端 home 超過 3 分鐘沒更新', noledger: '遠端 home 帳本未開'};
+const QUEUES = {high: '高', normal: '一般', later: '待辦'};
+const LIGHTS = {decide: '待你決定', stuck: '卡住', working: '進行中', done: '完成', unknown: '未知'};
+const WRITE_BAD = ['失敗', '未送達', '結果不明'];
+
+const S = {
+  homes: {main: {label: '主 home'}, 'sm-tokyo': {label: 'sm-tokyo（遠端）', remote: true}},
+  queues: {high: ['auth'], normal: ['billing', 'docs'], later: ['perf', 'ops']},
+  topics: {
+    auth: {name: '登入改版', goal: '把登入流程換成 passkey'},
+    billing: {name: '帳單匯出', goal: '月結帳單可匯出 CSV', closeProposal: {reason: '匯出功能已合併，使用者回報正常'}},
+    docs: {name: '文件整理', goal: '把安裝文件搬到新站'},
+    perf: {name: '效能調查', goal: '首頁載入時間壓到 1 秒內'},
+    ops: {name: '只跟 first mate 有關的雜事', goal: '沒有 agent 的議題'},
+  },
+  proposed: [{id: 't7', name: '搜尋壞掉的回報', goal: '查清楚搜尋結果為什麼少一半', suggested: 'normal'}],
+  archived: [{id: 'onboard', name: '新手引導', goal: '第一次登入的導覽', archivedAt: '11-02'}],
+  agents: [
+    {home: 'main', task: 'auth-passkey', topic: 'auth', light: 'decide', status: 'done: PR https://github.com/acme/web/pull/41 checks green', upd: '2 分鐘前'},
+    {home: 'main', task: 'auth-migrate', topic: 'auth', light: 'working', status: 'working: 寫遷移腳本', upd: '1 分鐘前'},
+    {home: 'sm-tokyo', task: 'auth-mobile', topic: 'auth', light: 'stuck', status: 'blocked: 等 iOS 憑證', upd: '4 分鐘前'},
+    {home: 'main', task: 'bill-csv', topic: 'billing', light: 'done', status: 'done: 已合併', upd: '1 小時前'},
+    {home: 'sm-tokyo', task: 'docs-move', topic: 'docs', light: 'working', status: 'working: 搬第 3 章', upd: '30 秒前'},
+    {home: 'main', task: 'perf-scout', topic: 'perf', light: 'done', status: 'done: 報告在 data/perf-scout/report.md', upd: '昨天'},
+    {home: 'main', task: 'fix-typo', topic: null, light: 'working', status: 'working: 改錯字', upd: '5 分鐘前'},
+  ],
+  holds: [
+    {id: 'auth-passkey', home: 'main', topic: 'auth', bucket: 'live', age: '2 天', irreversible: true,
+      q: 'PR #41 檢查都過了，要合併嗎？\n選項：合併 | 先不合併 | 捨棄', options: ['合併', '先不合併', '捨棄']},
+    {id: 'auth-copy', home: 'sm-tokyo', topic: 'auth', bucket: 'live', age: '3 小時',
+      q: '登入頁的文案要用「通行密鑰」還是「passkey」？這個沒有固定選項，請直接寫。', options: null},
+    {id: 'docs-host', home: 'main', topic: 'docs', bucket: 'dated', why: '延到 2026-12-01',
+      q: '文件站要不要換主機？\n選項：換 | 不換', options: ['換', '不換']},
+    {id: 'perf-budget', home: 'main', topic: 'perf', bucket: 'aged', why: '已放超過 14 天',
+      q: '效能預算訂多少？', options: null},
+    {id: 'bill-tax', home: 'main', topic: 'billing', bucket: 'blocked', why: '等 bill-csv 完成',
+      q: '稅額欄位要不要一起匯出？\n選項：要 | 不要', options: ['要', '不要']},
+    {id: 'misc-license', home: 'main', topic: null, bucket: 'live', age: '1 天',
+      q: 'first mate 問：授權條款要不要補到 README？\n選項：要 | 不要', options: ['要', '不要']},
+  ],
+  questions: [{home: 'main', task: 'auth-migrate', topic: 'auth', text: 'needs-decision: 舊帳號要不要保留密碼登入？'}],
+  updates: [
+    {topic: 'auth', t: '14:02', type: 'summary', kind: '就緒', task: 'auth-passkey', home: 'main', text: 'passkey 註冊與登入都做完了，PR 檢查全過。等你決定要不要合併。', pr: 'https://github.com/acme/web/pull/41'},
+    {topic: 'auth', t: '14:01', type: 'ledger', task: 'auth-passkey', home: 'main', text: 'task.pr_ready https://github.com/acme/web/pull/41'},
+    {topic: 'auth', t: '13:40', type: 'ledger', task: 'auth-mobile', home: 'sm-tokyo', text: 'task.status blocked: 等 iOS 憑證'},
+    {topic: 'auth', t: '11:15', type: 'system', text: '你在看板上回答了「auth-scope」：只做網頁版'},
+    {topic: 'auth', t: '09:30', type: 'ledger', task: 'auth-migrate', home: 'main', text: 'task.dispatched ship'},
+    {topic: 'billing', t: '昨天', type: 'ledger', task: 'bill-csv', home: 'main', text: 'task.merged via pr（這個里程碑沒有摘要）', pr: 'https://github.com/acme/web/pull/38'},
+    {topic: 'billing', t: '昨天', type: 'system', text: 'first mate 提議關閉這個議題'},
+    {topic: 'docs', t: '13:55', type: 'ledger', task: 'docs-move', home: 'sm-tokyo', text: 'task.status working: 搬第 3 章'},
+    {topic: 'perf', t: '昨天', type: 'summary', kind: '報告', task: 'perf-scout', home: 'main', text: '量過了，瓶頸在首頁的三張大圖。建議先壓圖，再看要不要做延遲載入。'},
+    {topic: null, t: '13:58', type: 'summary', kind: '失敗', task: 'fix-typo', home: 'main', text: '改錯字的 worker 第一次跑失敗（測試環境起不來），已重派。'},
+  ],
+  writes: [
+    {id: 1, topic: 'auth', where: 'agent:auth-migrate', text: '遷移前先備份 users 表', state: '已送達'},
+    {id: 2, topic: 'auth', where: 'agent:auth-mobile', text: '憑證我下午給你', state: '重試中', detail: '第 2 次，1 分鐘後再試；上次：ssh 逾時'},
+    {id: 3, topic: 'docs', where: 'agent:docs-move', text: '第 3 章的圖先不要搬', state: '未送達', detail: '5 次重試都連不上 sm-tokyo'},
+    {id: 4, topic: 'auth', where: 'input', text: '登入改版這週先衝網頁版', state: '已送達'},
+    {id: 5, topic: 'docs', where: 'hold:docs-host', text: '不換', state: '已由別處處理', detail: '這題已經在聊天裡答過了'},
+    {id: 6, topic: 'perf', where: 'agent:perf-scout', text: '報告補一張瀑布圖', state: '結果不明', detail: '送到一半看板重啟了，可能已送到'},
+    {id: 7, topic: 'billing', where: 'input', text: '帳單匯出要加日期範圍', state: '失敗', detail: 'fm-inbox.sh: state/ 不可寫'},
+  ],
+  open: new URLSearchParams(location.search).get('open'), showArchive: false, tab: 'pending', drag: null, timer: null, confirm: null, nextId: 8,
+};
+
+const P = new URLSearchParams(location.search);
+let variant = VARIANTS[P.get('variant')] ? P.get('variant') : 'A';
+let scene = SCENES[P.get('scene')] ? P.get('scene') : 'ok';
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const homeStale = (h) => scene === 'stale' && S.homes[h].remote;
+const lightOf = (a) => (homeStale(a.home) ? 'unknown' : a.light);
+const queueOf = (id) => Object.keys(QUEUES).find((q) => S.queues[q].includes(id));
+const topicName = (id) => (id ? S.topics[id].name : '未分類');
+const agentsOf = (id) => S.agents.filter((a) => a.topic === id);
+const holdsOf = (id) => S.holds.filter((h) => h.topic === id);
+const liveCount = (id) => holdsOf(id).filter((h) => h.bucket === 'live').length;
+const badCount = (id) => S.writes.filter((w) => w.topic === id && WRITE_BAD.includes(w.state) && !w.ignored).length;
+const orderedTopics = () => Object.keys(QUEUES).flatMap((q) => S.queues[q]);
+
+function light(a) {
+  const l = lightOf(a);
+  return `<span class="pill"><span class="dot l-${l}"></span>${LIGHTS[l]}</span>`;
+}
+function topicBadges(id) {
+  const ag = agentsOf(id);
+  const counts = {};
+  ag.forEach((a) => { const l = lightOf(a); counts[l] = (counts[l] || 0) + 1; });
+  const lights = Object.keys(counts).map((l) => `<span title="${LIGHTS[l]}"><span class="dot l-${l}"></span>${counts[l]}</span>`).join(' ');
+  const live = liveCount(id);
+  const bad = badCount(id);
+  return `${ag.length ? `<span>${ag.length} 個 agent</span> ${lights}` : '<span class="note">沒有 agent</span>'}
+    ${live ? `<span class="pill warn">待你決定 ${live}</span>` : ''}
+    ${S.topics[id].closeProposal ? '<span class="pill warn">提議關閉</span>' : ''}
+    ${bad ? `<span class="pill red" title="失敗、未送達或結果不明的寫入">沒送到 ${bad}</span>` : ''}`;
+}
+function topicCard(id, compact, fixed) {
+  const t = S.topics[id];
+  const inner = compact
+    ? `<span class="grow"><a data-act="open" data-id="${id}">${esc(t.name)}</a> <span class="goal">${esc(t.goal)}</span></span><span class="meta" style="margin:0">${topicBadges(id)}</span>`
+    : `<div class="name"><a data-act="open" data-id="${id}">${esc(t.name)}</a></div><div class="goal">${esc(t.goal)}</div><div class="meta">${topicBadges(id)}</div>`;
+  return fixed ? `<div class="row">${inner}</div>`
+    : `<div class="${compact ? 'row' : 'card'} topic" draggable="true" data-topic="${id}">${inner}</div>`;
+}
+function queueBox(q, compact) {
+  const hint = q === 'later' ? '<div class="note">不自動開工</div>' : '';
+  return `<div class="queue" data-queue="${q}"><h2>${QUEUES[q]} <span class="note">${S.queues[q].length}</span></h2>${hint}
+    ${S.queues[q].map((id) => topicCard(id, compact)).join('') || '<div class="note">（空的，可以把議題拖進來）</div>'}</div>`;
+}
+function writeTag(w) {
+  const bad = WRITE_BAD.includes(w.state) && !w.ignored;
+  const acts = bad ? `<button data-act="resend" data-id="${w.id}">重送</button><button data-act="ignore" data-id="${w.id}">忽略</button>` : '';
+  const confirm = S.confirm === 'w' + w.id
+    ? `<div class="btns"><b>這則可能已經送到，重送可能會重複。</b><button class="danger" data-act="resend2" data-id="${w.id}">仍要重送</button><button data-act="cancel">取消</button></div>` : '';
+  return `<div class="wr">「${esc(w.text)}」 <span class="pill ${bad ? 'red' : ''}">${w.state}${w.ignored ? '（已忽略）' : ''}</span>
+    ${w.detail ? `<span class="note">${esc(w.detail)}</span>` : ''} ${acts}${confirm}</div>`;
+}
+const writesAt = (where) => S.writes.filter((w) => w.where === where).map(writeTag).join('');
+
+function holdCard(h, showTopic) {
+  const stale = homeStale(h.home) ? '<span class="pill warn">可能已過時</span>' : '';
+  const why = h.bucket === 'live' ? `<span class="note">等了 ${h.age}</span>` : `<span class="pill">${esc(h.why)}</span>`;
+  const opts = (h.options || []).map((o) => `<button data-act="answer" data-id="${h.id}" data-ans="${esc(o)}">${esc(o)}</button>`).join('');
+  const confirm = S.confirm && S.confirm.hold === h.id
+    ? `<div class="card" style="border-color:var(--red)"><b>確認：把「${esc(S.confirm.ans)}」記成你的答覆，並通知 first mate 去執行。</b>
+       <div class="note">看板自己不會合併或捨棄。這個確認 2 分鐘內有效；PR 有變動就要重來。</div>
+       <div class="btns"><button class="danger" data-act="answer2">確認送出</button><button data-act="cancel">取消</button></div></div>` : '';
+  return `<div class="card">
+    <div class="meta" style="margin:0 0 4px">${showTopic ? `<a data-act="open" data-id="${h.topic || ''}">${esc(topicName(h.topic))}</a>` : ''}
+      <span class="pill">${esc(S.homes[h.home].label)}</span>${why}${stale}</div>
+    <pre class="q">${esc(h.q)}</pre>
+    <div class="btns">${opts}</div>
+    <div class="btns"><input type="text" placeholder="或直接寫答覆" data-ans-for="${h.id}" style="flex:1;width:auto"><button data-act="answer-text" data-id="${h.id}">送出</button></div>
+    ${confirm}${writesAt('hold:' + h.id)}</div>`;
+}
+function pendingBlock(id) {
+  const hs = holdsOf(id);
+  const live = hs.filter((h) => h.bucket === 'live');
+  const parked = hs.filter((h) => h.bucket !== 'live');
+  const qs = S.questions.filter((q) => q.topic === id);
+  const cp = id && S.topics[id].closeProposal;
+  return `<h2>待決佇列</h2>
+    ${cp ? `<div class="card" style="border-color:#e6c766"><b>first mate 提議關閉這個議題</b><div>${esc(cp.reason)}</div>
+      <div class="btns"><button data-act="archive" data-id="${id}">關閉並封存</button><button data-act="keep" data-id="${id}">先不關</button></div></div>` : ''}
+    ${live.map((h) => holdCard(h)).join('') || (cp ? '' : '<div class="note">沒有等你決定的事。</div>')}
+    ${parked.length ? `<details><summary>暫緩 ${parked.length}</summary>${parked.map((h) => holdCard(h)).join('')}</details>` : ''}
+    ${qs.length ? `<h3>worker 提問（first mate 處理中，不能在這裡作答；要插話請用輸入框）</h3>${qs.map((q) => `<div class="card note">${esc(q.task)}：${esc(q.text)}</div>`).join('')}` : ''}`;
+}
+function agentsBlock(id) {
+  const rows = agentsOf(id).map((a) => {
+    const via = S.homes[a.home].remote ? `經 ${a.home} 轉達` : '直送';
+    return `<div class="card"><div class="meta" style="margin:0">${light(a)}<b>${esc(a.task)}</b><span class="pill">${esc(S.homes[a.home].label)}</span>
+      <span class="note">最後更新 ${a.upd}${homeStale(a.home) ? '（這個 home 已 4 分鐘沒更新）' : ''}</span></div>
+      <div>${esc(a.status)}</div>
+      <div class="btns"><input type="text" placeholder="給這個 agent 的訊息" data-dm-for="${a.task}" style="flex:1;width:auto"><button data-act="dm" data-id="${a.task}">${via}</button></div>
+      ${writesAt('agent:' + a.task)}</div>`;
+  }).join('');
+  return `<h2>關聯 agent</h2>${rows || '<div class="note">這個議題沒有 agent。</div>'}`;
+}
+function updatesBlock(id) {
+  const rows = S.updates.filter((u) => u.topic === id).map((u) => {
+    const who = u.task ? `<span class="note">${esc(u.task)}・${esc(S.homes[u.home].label)}</span>` : '';
+    const pr = u.pr ? ` <a href="${esc(u.pr)}">PR</a>` : '';
+    const head = u.type === 'summary' ? `<span class="pill">${u.kind}</span> ` : '';
+    return `<div class="upd ${u.type}"><span class="t">${u.t}</span>${head}${esc(u.text)}${pr} ${who}</div>`;
+  }).join('');
+  const off = scene === 'noledger' && agentsOf(id).some((a) => S.homes[a.home].remote)
+    ? '<div class="card" style="border-color:#e6c766">sm-tokyo 的帳本未開，看不到它的更新。請跑：<code>bin/fm-on.sh sm-tokyo fm-board.sh setup</code></div>' : '';
+  return `<h2>更新</h2>${off}${rows || '<div class="note">還沒有更新。</div>'}
+    <div class="note" style="margin-top:6px">藍底是 first mate 寫的里程碑摘要；斜體是看板自己的系統紀錄；其餘是帳本事件。</div>`;
+}
+function inputBlock(id) {
+  return `<h2>輸入框</h2><textarea rows="2" id="note-text" placeholder="給 first mate 的話（會附上議題名稱「${esc(topicName(id))}」）"></textarea>
+    <div class="btns"><button class="primary" data-act="note" data-id="${id}">送給 first mate</button>
+    <span class="note">要直接跟某個 agent 說，用它那一列的按鈕。深入討論請到 agent 的終端機。</span></div>${writesAt('input')
+    && S.writes.filter((w) => w.where === 'input' && w.topic === id).map(writeTag).join('')}`;
+}
+function topicHead(id) {
+  const t = S.topics[id];
+  return `<div><a data-act="home">← 回看板</a></div><h2 style="font-size:20px;margin-top:6px">${esc(t.name)}
+    <span class="pill">${QUEUES[queueOf(id)]}</span></h2><div class="goal" style="margin-bottom:12px">${esc(t.goal)}</div>`;
+}
+function unsortedBlock() {
+  const sel = (attr) => `<select ${attr} style="width:auto"><option value="">歸併到…</option>${orderedTopics().map((id) => `<option value="${id}">${esc(S.topics[id].name)}</option>`).join('')}</select>`;
+  const props = S.proposed.map((p) => `<div class="card"><b>提議中：${esc(p.name)}</b><div class="goal">${esc(p.goal)}</div>
+    <div class="btns"><button data-act="confirm-topic" data-id="${p.id}">確認（放「${QUEUES[p.suggested]}」）</button>${sel(`data-merge-prop="${p.id}"`)}</div></div>`).join('');
+  const ags = agentsOf(null).map((a) => `<div class="card"><div class="meta" style="margin:0">${light(a)}<b>${esc(a.task)}</b><span class="note">沒有議題標記</span></div>
+    <div>${esc(a.status)}</div><div class="btns">${sel(`data-merge-agent="${a.task}"`)}</div></div>`).join('');
+  const ups = S.updates.filter((u) => u.topic === null && u.type === 'summary').map((u) => `<div class="upd summary"><span class="t">${u.t}</span><span class="pill">${u.kind}</span> ${esc(u.text)} <span class="note">${esc(u.task)}</span></div>`).join('');
+  const hs = holdsOf(null).map((h) => holdCard(h)).join('');
+  return `<h2>未分類 <span class="note">${S.proposed.length + agentsOf(null).length + holdsOf(null).length}</span></h2>${props}${ags}${ups}${hs}
+    ${!props && !ags && !hs ? '<div class="note">沒有未分類的東西。</div>' : ''}`;
+}
+function archiveBlock() {
+  return `<details ${S.showArchive ? 'open' : ''}><summary>已封存 ${S.archived.length}</summary>
+    ${S.archived.map((a) => `<div class="card"><b>${esc(a.name)}</b> <span class="note">${a.archivedAt} 封存</span><div class="goal">${esc(a.goal)}</div>
+    <div class="btns"><button data-act="reopen" data-id="${a.id}">重開（放「一般」）</button></div></div>`).join('') || '<div class="note">沒有封存的議題。</div>'}</details>`;
+}
+
+/* 變體 A：三欄看板；議題頁是整頁，左欄待決與輸入框，右欄 agent 與更新 */
+function homeA() {
+  return `<div class="cols">${Object.keys(QUEUES).map((q) => queueBox(q)).join('')}</div>
+    <div class="split" style="margin-top:16px"><div>${unsortedBlock()}</div><div>${archiveBlock()}</div></div>`;
+}
+function topicA(id) {
+  return `${topicHead(id)}<div class="split"><div>${pendingBlock(id)}<div style="margin-top:16px">${inputBlock(id)}</div></div>
+    <div>${agentsBlock(id)}<div style="margin-top:16px">${updatesBlock(id)}</div></div></div>`;
+}
+/* 變體 B：左側欄放未分類與封存，中間是一條直的清單，右邊是議題詳情（分頁） */
+function viewB() {
+  const id = S.open;
+  const tabs = {pending: '待決', agents: 'agent', updates: '更新'};
+  const body = {pending: pendingBlock, agents: agentsBlock, updates: updatesBlock};
+  const detail = id
+    ? `<h2 style="font-size:18px">${esc(S.topics[id].name)} <span class="pill">${QUEUES[queueOf(id)]}</span></h2><div class="goal">${esc(S.topics[id].goal)}</div>
+       <div class="tabs" style="margin-top:8px">${Object.keys(tabs).map((k) => `<button class="${S.tab === k ? 'on' : ''}" data-act="tab" data-id="${k}">${tabs[k]}</button>`).join('')}</div>
+       ${body[S.tab](id)}<div style="margin-top:16px;position:sticky;bottom:70px;background:var(--bg);padding-top:8px">${inputBlock(id)}</div>`
+    : '<div class="note">點左邊的議題，詳情會出現在這裡。</div>';
+  return `<div class="three"><div>${unsortedBlock()}<div style="margin-top:12px">${archiveBlock()}</div></div>
+    <div>${Object.keys(QUEUES).map((q) => queueBox(q, true)).join('<div style="height:10px"></div>')}</div><div>${detail}</div></div>`;
+}
+/* 變體 C：照 /bearings 的四段排（等你決定、最近落地、進行中、排定的），佇列順序縮在側欄 */
+function homeC() {
+  const rank = (h) => (h.topic ? orderedTopics().indexOf(h.topic) : 999);
+  const live = S.holds.filter((h) => h.bucket === 'live').sort((a, b) => rank(a) - rank(b));
+  const landed = S.updates.filter((u) => u.type === 'summary' && ['落地', '報告', '就緒'].includes(u.kind));
+  const under = S.agents.filter((a) => ['working', 'stuck', 'unknown'].includes(lightOf(a)));
+  const agentRow = (a) => `<div class="row">${light(a)}<span class="grow"><b>${esc(a.task)}</b> ${esc(a.status)}</span>
+    <a data-act="open" data-id="${a.topic || ''}">${esc(topicName(a.topic))}</a><span class="pill">${esc(S.homes[a.home].label)}</span></div>`;
+  return `<div class="side"><div><h2>優先順序</h2>${Object.keys(QUEUES).map((q) => queueBox(q, true)).join('<div style="height:8px"></div>')}
+      <div style="margin-top:12px">${archiveBlock()}</div></div>
+    <div><h2>等你決定 <span class="note">${live.length}</span></h2>${live.map((h) => holdCard(h, true)).join('')}
+      ${Object.keys(S.topics).filter((id) => S.topics[id].closeProposal).map((id) => `<div class="card"><a data-act="open" data-id="${id}">${esc(S.topics[id].name)}</a>：first mate 提議關閉</div>`).join('')}
+      <h2 style="margin-top:16px">最近的結果</h2>${landed.map((u) => `<div class="upd summary"><span class="t">${u.t}</span><span class="pill">${u.kind}</span> ${esc(u.text)} <a data-act="open" data-id="${u.topic || ''}">${esc(topicName(u.topic))}</a></div>`).join('')}
+      <h2 style="margin-top:16px">進行中</h2>${under.map(agentRow).join('')}
+      <h2 style="margin-top:16px">排定的（待辦與暫緩）</h2>${S.queues.later.map((id) => topicCard(id, true, true)).join('')}
+      ${S.holds.filter((h) => h.bucket !== 'live').map((h) => `<div class="row"><span class="grow">${esc(h.q.split('\n')[0])}</span><span class="pill">${esc(h.why)}</span><a data-act="open" data-id="${h.topic}">${esc(topicName(h.topic))}</a></div>`).join('')}
+      <div style="margin-top:16px">${unsortedBlock()}</div></div></div>`;
+}
+function topicC(id) {
+  return `${topicHead(id)}<div style="max-width:760px">${pendingBlock(id)}<div style="margin-top:16px">${updatesBlock(id)}</div>
+    <div style="margin-top:16px">${agentsBlock(id)}</div>
+    <div style="margin-top:16px;position:sticky;bottom:70px;background:var(--bg);padding-top:8px">${inputBlock(id)}</div></div>`;
+}
+
+function render() {
+  const banners = (scene === 'down' ? '<div class="banner">看板服務沒有回應。畫面是最後一次拿到的資料，現在送不出任何東西。請在終端機跑 <code>bin/myshape.sh open</code>。</div>' : '')
+    + (scene === 'stale' ? '<div class="banner warn">sm-tokyo 已 4 分鐘沒有更新：它的燈號顯示「未知」，待決事項可能已過時。</div>' : '');
+  let body;
+  if (variant === 'B') body = viewB();
+  else if (S.open && S.topics[S.open]) body = variant === 'A' ? topicA(S.open) : topicC(S.open);
+  else body = variant === 'A' ? homeA() : homeC();
+  document.getElementById('app').innerHTML = `<header><h1>議題看板</h1><span class="note">原型・假資料</span>
+    <span style="flex:1"></span><span class="note">每 10 秒更新・<a data-act="noop">立刻更新</a></span></header>${banners}<main>${body}</main>`;
+  document.getElementById('bar').innerHTML = `<button data-act="prev">←</button><b>${variant}（${VARIANTS[variant]}）</b><button data-act="next">→</button>
+    <span>情境</span><select id="scene">${Object.keys(SCENES).map((k) => `<option value="${k}" ${k === scene ? 'selected' : ''}>${SCENES[k]}</option>`).join('')}</select>`;
+}
+function setUrl() {
+  history.replaceState(null, '', `?variant=${variant}&scene=${scene}`);
+  render();
+}
+let toastTimer = null;
+function toast(html) {
+  const box = document.getElementById('toast');
+  box.innerHTML = html ? `<div class="card" title="點一下關閉" style="cursor:pointer">${html}</div>` : '';
+  clearTimeout(toastTimer);
+  if (html) toastTimer = setTimeout(() => { box.innerHTML = ''; }, 6000);
+}
+document.getElementById('toast').addEventListener('click', () => toast(''));
+function addWrite(topic, where, text) {
+  if (scene === 'down') { toast('看板服務沒有回應，這則沒有送出。'); return; }
+  const w = {id: S.nextId++, topic, where, text, state: '送出中'};
+  S.writes.push(w);
+  setTimeout(() => { w.state = '已送達'; render(); }, 1200);
+}
+function dropFeedback(id, from, to) {
+  clearInterval(S.timer);
+  if (from === 'later' && to !== 'later') {
+    let left = 5;
+    const tick = () => {
+      if (left === 0) { clearInterval(S.timer); toast(`已通知 first mate 重新評估派工：「${esc(S.topics[id].name)}」已移出待辦。`); return; }
+      toast(`「${esc(S.topics[id].name)}」已移出待辦。${left} 秒後通知 first mate 重新評估派工（正式版是 30 秒）。拖回待辦就不通知。`);
+      left -= 1;
+    };
+    tick();
+    S.timer = setInterval(tick, 1000);
+  } else if (to === 'later' && from !== 'later') {
+    toast('已移到待辦。已經在跑的 worker 不會停；還在排隊的項目，等 first mate 下次重新評估時才會停住。');
+  } else {
+    toast('順序已更新。first mate 下次重新評估派工時才會照新順序，不會馬上開工。');
+  }
+}
+function answer(holdId, ans) {
+  const h = S.holds.find((x) => x.id === holdId);
+  S.holds = S.holds.filter((x) => x.id !== holdId);
+  if (h.topic) S.updates.unshift({topic: h.topic, t: '剛剛', type: 'system', text: `你在看板上回答了「${h.id}」：${ans}`});
+  S.confirm = null;
+  toast(`已記下答覆「${esc(ans)}」，接著通知 first mate。兩步算一筆，狀態會顯示在這裡。`);
+}
+function tryAnswer(holdId, ans) {
+  if (!ans.trim()) return;
+  if (scene === 'down') { toast('看板服務沒有回應，答覆沒有送出。'); return; }
+  const h = S.holds.find((x) => x.id === holdId);
+  if (h.irreversible && ['合併', '捨棄'].includes(ans)) S.confirm = {hold: holdId, ans};
+  else answer(holdId, ans);
+}
+
+const ACTS = {
+  open: (d) => { if (d.id) { S.open = d.id; S.tab = 'pending'; } },
+  home: () => { S.open = null; },
+  tab: (d) => { S.tab = d.id; },
+  noop: () => toast('已更新（原型裡沒有真的輪詢）。'),
+  prev: () => { const k = Object.keys(VARIANTS); variant = k[(k.indexOf(variant) + k.length - 1) % k.length]; setUrl(); },
+  next: () => { const k = Object.keys(VARIANTS); variant = k[(k.indexOf(variant) + 1) % k.length]; setUrl(); },
+  cancel: () => { S.confirm = null; },
+  answer: (d) => tryAnswer(d.id, d.ans),
+  'answer-text': (d) => tryAnswer(d.id, document.querySelector(`[data-ans-for="${d.id}"]`).value),
+  answer2: () => answer(S.confirm.hold, S.confirm.ans),
+  note: (d) => { const v = document.getElementById('note-text').value; if (v.trim()) addWrite(d.id, 'input', v); },
+  dm: (d) => {
+    const v = document.querySelector(`[data-dm-for="${d.id}"]`).value;
+    if (!v.trim()) return;
+    if (/^[\/$-]/.test(v)) { toast('以 /、$ 或 - 開頭會被當成指令或選項，這則沒有送出。要跑指令請到終端機，要傳文字請在開頭加字。'); return; }
+    addWrite(S.agents.find((a) => a.task === d.id).topic, 'agent:' + d.id, v);
+  },
+  resend: (d) => {
+    const w = S.writes.find((x) => x.id === +d.id);
+    if (w.state === '結果不明') { S.confirm = 'w' + w.id; return; }
+    ACTS.resend2(d);
+  },
+  resend2: (d) => { const w = S.writes.find((x) => x.id === +d.id); w.state = '送出中'; w.detail = ''; S.confirm = null; setTimeout(() => { w.state = '已送達'; render(); }, 1200); },
+  ignore: (d) => { S.writes.find((x) => x.id === +d.id).ignored = true; },
+  archive: (d) => { const t = S.topics[d.id]; const q = queueOf(d.id); S.queues[q] = S.queues[q].filter((x) => x !== d.id); S.archived.push({id: d.id, name: t.name, goal: t.goal, archivedAt: '今天', keep: t}); S.open = null; toast('已封存，可以在「已封存」裡重開。'); },
+  keep: (d) => { delete S.topics[d.id].closeProposal; },
+  reopen: (d) => { const a = S.archived.find((x) => x.id === d.id); S.archived = S.archived.filter((x) => x !== a); S.topics[a.id] = a.keep || {name: a.name, goal: a.goal}; S.queues.normal.push(a.id); toast('已重開，放在「一般」的最後。正式版 30 秒後會通知 first mate 重新評估派工。'); },
+  'confirm-topic': (d) => { const p = S.proposed.find((x) => x.id === d.id); S.proposed = S.proposed.filter((x) => x !== p); S.topics[p.id] = {name: p.name, goal: p.goal}; S.queues[p.suggested].push(p.id); },
+};
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  e.preventDefault();
+  ACTS[el.dataset.act](el.dataset);
+  render();
+});
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.id === 'scene') { scene = el.value; setUrl(); return; }
+  if (!el.value) return;
+  if (el.dataset.mergeAgent) S.agents.find((a) => a.task === el.dataset.mergeAgent).topic = el.value;
+  if (el.dataset.mergeProp) { S.proposed = S.proposed.filter((p) => p.id !== el.dataset.mergeProp); toast(`已併進「${esc(S.topics[el.value].name)}」。`); }
+  render();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input,textarea,select,[contenteditable]')) return;
+  if (e.key === 'ArrowLeft') ACTS.prev();
+  if (e.key === 'ArrowRight') ACTS.next();
+});
+/* 拖曳時直接搬動 DOM，順序在拖的當下就更新；放開時才把 DOM 的順序寫回狀態。 */
+document.addEventListener('dragstart', (e) => {
+  const el = e.target.closest('[data-topic]');
+  if (!el) return;
+  S.drag = {id: el.dataset.topic, from: queueOf(el.dataset.topic), dropped: false};
+  e.dataTransfer.setData('text/plain', S.drag.id);
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => el.classList.add('dragging'), 0);
+});
+document.addEventListener('dragover', (e) => {
+  const q = e.target.closest('[data-queue]');
+  const el = document.querySelector('.topic.dragging');
+  if (!q || !S.drag || !el) return;
+  e.preventDefault();
+  const others = [...q.querySelectorAll('[data-topic]')].filter((x) => x !== el);
+  const next = others.find((x) => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+  if (next) { if (el.nextElementSibling !== next) q.insertBefore(el, next); }
+  else if (q.lastElementChild !== el) q.appendChild(el);
+  document.querySelectorAll('.queue.over').forEach((x) => x.classList.remove('over'));
+  q.classList.add('over');
+});
+document.addEventListener('drop', (e) => {
+  if (!S.drag || !e.target.closest('[data-queue]')) return;
+  e.preventDefault();
+  S.drag.dropped = true;
+  document.querySelectorAll('[data-queue]').forEach((q) => {
+    S.queues[q.dataset.queue] = [...q.querySelectorAll('[data-topic]')].map((x) => x.dataset.topic);
+  });
+  dropFeedback(S.drag.id, S.drag.from, queueOf(S.drag.id));
+});
+document.addEventListener('dragend', () => { S.drag = null; render(); });
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Installed in a board-only root as bin/fm-board.sh, the one program a board
+# from before the binding file runs (the older side of stage-7-upgrade.sh):
+# hands "feed" and "deliver" to the stub tb-stub.conf beside it names (fm or
+# plain), which sits beside it in bin/.
+set -euo pipefail
+# shellcheck source=/dev/null
+. "$(dirname "$0")/tb-stub.conf"
+case "${TB_STUB:-}" in
+  fm | plain) exec "$(dirname "$0")/stub-$TB_STUB" "$@" ;;
+  *) printf 'tb-stub.conf must name TB_STUB fm or plain\n' >&2; exit 2 ;;
+esac
