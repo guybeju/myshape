@@ -13,16 +13,18 @@
 | `bin/fm-board.sh` | 轉接指令：看板執行的 `feed` 與 `deliver`（第 3 節），寫看板設定檔的 `bind`（第 3 節），`tag`、`setup`、帶 task 的 `split`、`--in-home`、`install-rules`、`rules` |
 | `bin/fm-board-io-lib.sh` | `feed` 與 `deliver` 的程式；只有 `fm-board.sh` source 它 |
 | `bin/fm-board-lib.sh` | 找同機 secondmate 的 home、在那個 home 執行指令；`fm-board.sh` 與 `fm-topic-board-read.sh` source 它 |
+| `bin/fm-board-vendor.sh` | 把看板與這一側從 guybeju/myshape 的一個 commit 複製進 fork（`vendor <commit>`），或檢查 fork 裡的副本與 `myshape.lock` 記的 commit 相同（`--check`）；不 source 任何檔，用法寫在檔頭 |
 | `bin/fm-queue-source-lib.sh` | second mate 的 home 去哪裡讀主 home 的議題清單、副本能不能用；`fm-dispatch-plan.sh` 與 `fm-board.sh tag`（只在 subshell 裡）source 它 |
 | `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，其餘的列在「先不派」並附原因，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
 | `bin/fm-backlog-archive-lib.sh` | tasks-axi 的 Done 保留把完成的項目搬去的封存檔在哪裡、裡面有哪些完成的 id；上游的 `fm-fleet-snapshot.sh` source 它（見下面） |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
-| `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`bind`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），看板存項目之前的要你動手，與舊版搬上來的項目換到新程式之後（`stage-3-handson-holds.sh`，第 3.3 節），設定檔、session start 與群組能寫的 checkout（`stage-4-binding.sh`），規則與安裝說明（`stage-6-*.sh`、`check-guide.sh`）；彙整腳本（`stage-1-read.sh`），session start 的檢查（`stage-2-startup.sh`），看板改過的議題接上 `tag`（`stage-2-topics-tag.sh`），看板接上真的 `fm-board.sh` 的第三到五段（`stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`），跨 fork 歷史的升級（`stage-7-upgrade.sh`）；建 first mate 的 home 與替身的 `helpers.sh`，它先載入看板的測試套件 `myshape/test/kit/helpers.sh` |
+| `fm-board/vendor-files` | fork 要 vendor 的這一側的檔，一行一個 fork 裡的路徑，來源是 myshape 的 `adapters/firstmate/<那一行>`；看板的檔列在 `myshape/vendor-files` |
+| `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`bind`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），看板存項目之前的要你動手，與舊版搬上來的項目換到新程式之後（`stage-3-handson-holds.sh`，第 3.3 節），設定檔、session start 與群組能寫的 checkout（`stage-4-binding.sh`），規則（`stage-6-rules.sh`），vendor 腳本（`stage-8-vendor.sh`）；彙整腳本（`stage-1-read.sh`），session start 的檢查（`stage-2-startup.sh`），看板改過的議題接上 `tag`（`stage-2-topics-tag.sh`），看板接上真的 `fm-board.sh` 的第三到五段（`stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`），跨 fork 歷史的升級（`stage-7-upgrade.sh`）；建 first mate 的 home 與替身的 `helpers.sh`，它先載入看板的測試套件 `myshape/test/kit/helpers.sh` |
 | `dispatch-plan/test/` | `run.sh` 與 `fm-dispatch-plan.sh` 的測試（`stage-1` 到 `stage-4`） |
 | `dispatch-plan/spec/` | `fm-dispatch-plan.sh` 的說明 |
 | `fm-board/spec/` | 這一頁、[rollout](rollout.markdown)（上線）、[handover](handover.markdown)（這一側的測試與交接之後的分工） |
 
-`bin/` 底下的六支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
+`bin/` 底下的七支和看板的指令一樣，要通過 `bin/fm-lint.sh <檔>` 與 bash 3.2 的語法檢查。
 `fm-board.sh` 與 `fm-dispatch-plan.sh` 要在 git 裡是可執行的：遠端 home 的 `tag`、`setup`、`order` 與 `queues-in` 經 `fm-on.sh` 跑，它只執行追蹤、可執行的 `bin/fm-*.sh`。
 上游的 `bin/fm-backlog-handoff.sh` 在 fork 上多一行：把 backlog 項目交給遠端 second mate 之前跑 `fm-dispatch-plan.sh queues-push --to <id>`（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown) 第 5 節）。
 上游的 `bin/fm-fleet-snapshot.sh` 在 fork 上多讀封存檔：source `bin/fm-backlog-archive-lib.sh`，`unresolved_blocker_ids` 把 backlog 裡沒有、但在封存檔裡是完成的 id 算成已解決（dispatch-plan 第 2 節），檔頭說明那一句跟著改；它的測試是上游既有的 `tests/fm-fleet-snapshot-view.test.sh` 多的 `test_archived_done_blockers_resolve`。
@@ -161,7 +163,7 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 ## 6. 規則範本
 
 - 標記行的開頭是 `<!-- myshape:begin`、結尾是 `<!-- myshape:end -->`：`install-rules` 以這個開頭（容許前面的空白）找區塊，所以裝過的區塊會原地換掉，不會多出第二份。
-- 第一行的 `vN` 給人看，內容才決定是不是最新；改了範本就升版本號，`fm-board/test/stage-6-rules.sh` 裡的版本、`FORK-SETUP.markdown` 寫的版本跟著改（`check-guide.sh` 會檢查後者）。
+- 第一行的 `vN` 給人看，內容才決定是不是最新；改了範本就升版本號，`fm-board/test/stage-6-rules.sh` 裡的版本、`FORK-SETUP.markdown` 寫的版本跟著改（fork 自己的安裝說明檢查會檢查後者）。
 - 三個範本合計的 token 上限在 `stage-6-rules.sh`（`(位元組 + 2) / 3`）。
 - 真的 home 要由使用者明講之後重跑 `bin/fm-board.sh install-rules`；有 second mate 時先確認每個 home 都在同一版（[FORK-SETUP](../../FORK-SETUP.markdown) 第 8 節）。
 
@@ -243,7 +245,7 @@ argv 的確切形狀與結果怎麼判在第 3.2 節。
 | `myshape/spec/` | 這份 spec，副檔名 `.markdown` | 一 |
 | `myshape/test/` | 看板自己的測試與 `run.sh`，看板的測試函式庫 `lib.sh`、守門 helper `signal-guard.sh` 與測試套件 `kit/`（看板與 aggregator 的測試都用） | 一起；函式庫、守門 helper 與測試套件是拆 repo 的準備 |
 | `myshape/package.json`、`pnpm-lock.yaml`、`tsconfig.json`、`.gitignore` | 只有開發期相依；`.gitignore` 忽略 `node_modules/` 與 `.metrics/` | 二 |
-| `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；`fm-board/test/check-guide.sh` 檢查它引用的名稱 | 上線後 |
+| `FORK-SETUP.markdown`（根目錄） | 新機器從零安裝 fork 與看板的說明；fork 自己的一支檢查腳本檢查它引用的名稱 | 上線後 |
 
 first mate 這一側的檔（`bin/fm-board*.sh`、`bin/fm-dispatch-plan.sh`、規則範本 `fm-board/rules/`、它們的測試與說明）不是看板的，列在這一頁第 1 節；這一側改到的上游檔案（`bin/fm-backlog-handoff.sh`、`bin/fm-fleet-snapshot.sh`）也列在那裡。
 

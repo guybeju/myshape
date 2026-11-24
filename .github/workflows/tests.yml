@@ -6,9 +6,10 @@ name: Tests
 # Board: the board's own checks at this repository's root.
 # Firstmate adapter: the adapter's suites source Firstmate's tests/lib.sh and
 #   run Firstmate's real scripts, so they run in a checkout of guybeju/firstmate
-#   (public, read without a token) at FIRSTMATE_COMMIT, with this repository's
-#   board files and adapters/firstmate/* laid over its root and committed there
-#   locally: the shape a Firstmate fork has after vendoring this repository.
+#   (public, read without a token) at FIRSTMATE_COMMIT, with exactly the files
+#   this repository's two vendor lists name laid over its root and committed
+#   there locally: the shape a Firstmate fork has after vendoring this
+#   repository.
 # macOS bash 3.2: /bin/bash -n on every shell file, then the suites that run on
 #   macOS's BSD tools without a browser, with macOS's own /bin/bash first on
 #   PATH so every script and every `#!/usr/bin/env bash` gets 3.2.
@@ -99,7 +100,6 @@ jobs:
               /bin/bash firstmate/fm-board/test/stage-4-binding.sh
               /bin/bash firstmate/fm-board/test/stage-4-writes.sh
               /bin/bash firstmate/fm-board/test/stage-5-http.sh
-              /bin/bash firstmate/fm-board/test/stage-6-guide.sh
               /bin/bash firstmate/fm-board/test/stage-6-rules.sh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -119,27 +119,51 @@ jobs:
           fetch-depth: 0
       - name: Lay the board and the adapter over the Firstmate root
         if: matrix.firstmate
-        # The paths the import took from Firstmate are replaced by this
-        # repository's copies and committed in the runner's checkout, so the
-        # suites see them tracked and unchanged, as in a vendoring fork. The
-        # commit stays on the runner; nothing is pushed.
+        # The shape a fork has after vendoring this commit, the way
+        # adapters/firstmate/bin/fm-board-vendor.sh writes it: myshape/,
+        # fm-board/, dispatch-plan/ and each bin/ file the two lists name are
+        # removed, exactly the tracked files the lists name are copied in, and
+        # the result is committed in the runner's checkout, so the suites see
+        # them tracked and unchanged. A line of myshape/vendor-files keeps its
+        # path; a line of adapters/firstmate/fm-board/vendor-files names
+        # adapters/firstmate/<line> here and <line> in the fork. The fork keeps
+        # its own ci-tools/board-tests. The commit stays on the runner; nothing
+        # is pushed.
         run: |
-          imported=(
-            bin/myshape.sh bin/myshape-lib.sh myshape ci-tools/board-tests
-            bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh
-            bin/fm-dispatch-plan.sh bin/fm-topic-board-read.sh
-            bin/fm-topic-session-start.sh bin/fm-queue-source-lib.sh
-            fm-board dispatch-plan
-          )
-          git -C firstmate rm -r -q -- "${imported[@]}"
-          cp board/bin/myshape.sh board/bin/myshape-lib.sh firstmate/bin/
-          cp -R board/myshape firstmate/
-          mkdir -p firstmate/ci-tools
-          cp -R board/ci-tools/board-tests firstmate/ci-tools/
-          cp -R board/adapters/firstmate/. firstmate/
+          lines=$RUNNER_TEMP/vendor-lines
+          : > "$lines"
+          while IFS= read -r line || [ -n "$line" ]; do
+            [ -z "$line" ] || printf '%s\t%s\n' "$line" "$line" >> "$lines"
+          done < board/myshape/vendor-files
+          while IFS= read -r line || [ -n "$line" ]; do
+            [ -z "$line" ] || printf 'adapters/firstmate/%s\t%s\n' "$line" "$line" >> "$lines"
+          done < board/adapters/firstmate/fm-board/vendor-files
+          remove=(myshape fm-board dispatch-plan)
+          while IFS=$'\t' read -r source target; do
+            case "$target" in
+              bin/*) remove+=("$target") ;;
+            esac
+          done < "$lines"
+          git -C firstmate rm -r -q --ignore-unmatch -- "${remove[@]}"
+          laid=0
+          while IFS=$'\t' read -r source target; do
+            found=0
+            while IFS= read -r -d '' path; do
+              to=firstmate/$target${path#"$source"}
+              mkdir -p "$(dirname "$to")"
+              cp -p "board/$path" "$to"
+              found=$((found + 1))
+            done < <(git -C board ls-files -z -- "$source")
+            if [ "$found" -eq 0 ]; then
+              echo "::error::the vendor list line $target names no tracked file"
+              exit 1
+            fi
+            laid=$((laid + found))
+          done < "$lines"
           git -C firstmate add -A
           git -C firstmate -c user.name='myshape CI' -c user.email='ci@example.invalid' \
             commit -q --allow-empty -m "Lay guybeju/myshape@$GITHUB_SHA over the root"
+          echo "Laid $laid files that the two vendor lists name" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Changed against $FIRSTMATE_COMMIT:"
           git -C firstmate diff --stat "$FIRSTMATE_COMMIT" HEAD
           if [ -n "$(git -C firstmate status --porcelain)" ]; then
@@ -147,6 +171,7 @@ jobs:
             git -C firstmate status --short
             exit 1
           fi
+          echo 'The laid-over checkout has no uncommitted change.'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: '22'
@@ -158,11 +183,7 @@ jobs:
           npm ci --ignore-scripts --prefix board/ci-tools/board-tests
           echo "$GITHUB_WORKSPACE/board/ci-tools/board-tests/node_modules/.bin" >> "$GITHUB_PATH"
       - name: pnpm install --frozen-lockfile
-        run: |
-          pnpm --dir board/myshape install --frozen-lockfile
-          if [ -d firstmate ]; then
-            pnpm --dir firstmate/myshape install --frozen-lockfile
-          fi
+        run: pnpm --dir board/myshape install --frozen-lockfile
       - name: Put macOS's /bin/bash 3.2 first on PATH
         if: matrix.bash32
         run: |

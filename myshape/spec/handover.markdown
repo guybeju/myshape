@@ -40,7 +40,7 @@ shellcheck -x bin/myshape.sh bin/myshape-lib.sh myshape/test/*.sh myshape/test/k
 - `run.sh` 用啟動它的那個 bash 跑每個腳本，但腳本裡呼叫的 `bin/myshape*.sh` 是照自己第一行的 `#!/usr/bin/env bash` 找 bash。要在 macOS 上驗 bash 3.2，兩邊都要是 3.2：`PATH="/bin:$PATH" /bin/bash myshape/test/run.sh`。正式環境裡遠端的 home 用哪個 bash，同樣取決於當時 `PATH` 上第一個是哪一個。
 - 測試用的環境變數由各腳本自己設：`MYSHAPE_TEST=1` 打開只給測試用的 socket 操作，`MYSHAPE_READ_MS` 等縮短輪詢與重試的間隔。不用事先設任何變數。
 - 看板的測試 source 看板自己的測試函式庫 `myshape/test/lib.sh`，不用上游的 `tests/lib.sh`，所以只有看板自己的檔也跑得起來。驅動真的看板的那些 fixture 是測試套件 `myshape/test/kit/`（`helpers.sh` 與 `browser.mjs`），看板自己與 aggregator 的測試都用它。
-- `myshape/vendor-files` 一行一個路徑：第一個空行之前是看板的執行期（`tb_make_board_root` 照它建只有看板的副本），之後是 aggregator 要和執行期一起留著的檔（契約範例、測試套件與它們用到的檔）。
+- `myshape/vendor-files` 一行一個路徑：第一個空行之前是看板的執行期（`tb_make_board_root` 照它建只有看板的副本），之後是 aggregator 要和執行期一起留著的檔（契約範例、測試套件與它們用到的檔、這份 spec）。
 - 看板的測試只經一個守門 helper `myshape/test/signal-guard.sh` 送訊號：`myshape/test/signal-lib.sh` 的 `kill_own_child` 與 `myshape/test/lib.sh` 的 `fm_test_signal` 都經它送，結束時的清理也是。它只接受送訊號的 shell 自己的子程序（活著的父程序就是那個 shell），或命令列有這次測試建立、帶記號的暫存根目錄的程序。
 - `myshape/test/check-signals.sh` 檢查整個 `myshape/test`：唯一的送訊號指令是守門 helper 的那一行，其他只能是送 0 的探測；JavaScript 只有瀏覽器驅動程式對自己子程序的那一行與送 0 的探測。`FM_TEST_SIGNAL_DRY_RUN=1 FM_TEST_SIGNAL_LOG=<絕對路徑>` 讓這些腳本什麼都不送，只記下每一次會送給誰。在 fork 裡，上游的 `tests/check-signals.sh` 另外檢查每一個測試目錄，`bin/fm-lint.sh` 每一次都跑它。
 - 暫存目錄：macOS 預設的暫存目錄很深，會讓 socket 路徑超過 103 位元組的上限。`myshape/test/lib.sh` 與測試套件的 `helpers.sh` 在預設暫存目錄的路徑超過 40 個字元時改用 `/tmp`。
