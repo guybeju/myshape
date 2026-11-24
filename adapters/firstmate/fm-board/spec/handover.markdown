@@ -17,17 +17,18 @@
 指令（工作目錄是 checkout 的根目錄）：
 
 ```
-fm-board/test/run.sh                  # 這一側的全部：feed、deliver、tag、setup、--in-home、帶 task 的 split、彙整腳本、session start 的檢查、接上 first mate 的第三到五段、跨 fork 歷史的升級、舊的要你動手、規則、安裝說明、改名前的名字
+fm-board/test/run.sh                  # 這一側的全部：feed、deliver、tag、setup、--in-home、帶 task 的 split、彙整腳本、session start 的檢查、接上 first mate 的第三到五段、跨 fork 歷史的升級、舊的要你動手、規則、vendor 腳本、改名前的名字
 dispatch-plan/test/run.sh             # order、queues-in、queues-push
 bash fm-board/test/stage-4-writes.sh  # 單跑一個腳本
 bin/fm-doc-audience-check.sh          # 上游的檢查；新增的檔不能違反
-shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-topic-board-read.sh bin/fm-topic-session-start.sh bin/fm-dispatch-plan.sh fm-board/test/*.sh dispatch-plan/test/*.sh
+shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-board-vendor.sh bin/fm-topic-board-read.sh bin/fm-topic-session-start.sh bin/fm-dispatch-plan.sh fm-board/test/*.sh dispatch-plan/test/*.sh
 ```
 
 - 這一側的測試 source 上游的 `tests/lib.sh`，再 source `fm-board/test/helpers.sh`：它先載入看板的測試套件 `myshape/test/kit/helpers.sh`，再加上建 first mate 的 home 與替身的那幾個（`tb_write_registry`、`tb_seed_unstarted`、`tb_make_fake_root`）。`dispatch-plan/test` 只用測試套件。
 - `stage-1-read.sh` 測彙整腳本 `bin/fm-topic-board-read.sh`，`stage-2-startup.sh` 測 session start 的檢查 `bin/fm-topic-session-start.sh`，跑的是真的框架指令。
 - 第三到五段（`stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`）跑接上真的 `bin/fm-board.sh` 的看板與框架的替身；看板只接替身 aggregator 的版本是看板自己的第七段。`stage-2-topics-tag.sh` 跑看板改過的議題（合併過的 id、開服務時確認的提議）接上 `fm-board.sh tag`。
 - `stage-7-upgrade.sh` 從 fork 歷史裡釘住的 commit 起舊版看板，所以只能在有完整歷史的 checkout 裡跑；看板自己的 repo 沒有這些 commit。
+- `stage-8-vendor.sh` 測 `bin/fm-board-vendor.sh`：在自己的暫存目錄建小的來源 repo 與 fork，用 `--source` 跑 fork 裡的那一份，不連網路。
 - 送訊號：這一側的測試經 `tests/lib.sh` 的 `fm_test_signal`（守門 helper `tests/signal-guard.sh`）、經看板的 `myshape/test/signal-lib.sh` 的 `kill_own_child`（看板的守門 helper `myshape/test/signal-guard.sh`），或直接對自己剛用 `&` 啟動、記下 `$!` 的子程序送。
   `fm-board/test` 與 `dispatch-plan/test` 由上游的 `tests/check-signals.sh` 靜態檢查，`bin/fm-lint.sh` 每一次都跑它；看板自己的 `myshape/test/check-signals.sh` 只檢查 `myshape/test`。
 - 範圍：遠端的 home 只跑 `bin/fm-topic-board-read.sh` 與 `bin/fm-board.sh`（`tag`、`setup`），不跑服務也不開頁面，所以在 Mac 上要過的是看板的第一段（`myshape/test/run.sh 1`）、`fm-board/test/stage-1-read.sh` 與 `stage-1-tag.sh`。
@@ -41,6 +42,10 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
 - 看板的檔案是 `myshape/**` 與 `bin/myshape*.sh`，另外在上游的 `bin/fm-session-start.sh` 裡有一個呼叫點（[adapter](adapter.markdown) 第 9 節），`bin/fm-captain-hold.sh` 裡有兩處（adapter 第 8 節）。改到 adapter 第 7 節列的任何一支框架指令時，跑那一列寫的測試。
 - first mate 這一側接看板的檔是 `bin/fm-board.sh`、`bin/fm-board-lib.sh`、`bin/fm-board-io-lib.sh`、`bin/fm-dispatch-plan.sh`、`fm-board/**` 與 `dispatch-plan/**`（[adapter](adapter.markdown)）；改它們走同樣的流程，這一節的規則也適用。
 - 規則範本改了要升版本號（`fm-board/rules/captain.block.md.tmpl` 第一行），`fm-board/test/stage-6-rules.sh` 裡的版本與 token 上限跟著改，真的 home 由使用者明講之後重跑 `bin/fm-board.sh install-rules`。
-- 看板每次修改（程式、指令、規則範本、需要的工具）都要在同一個修改裡對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，改掉不一致的地方。
-  PR 說明要寫出那一頁查過了、改了什麼。
-  `fm-board/test/check-guide.sh`（`fm-board/test/run.sh` 會跑）只檢查那一頁引用的名稱存在、寫的規則範本版本正確；步驟的順序、每一步的輸出、平台與需要的工具要讀過才知道，清單在那一頁的最後一節。
+- 看板與這一側的修改都在 guybeju/myshape 做、在那裡合併。
+  fork 經一個同步 PR 拿到它們：在 worker 自己的 checkout、名稱含 `board-sync` 的分支上跑 `bin/fm-board-vendor.sh vendor <commit>`，提交它寫的檔與 `myshape.lock`；不在 home 裡跑。
+  `<commit>` 要在 myshape `main` 的 first-parent 鏈上（PR 的合併 commit），而且它自己在 `main` 上的 push run 裡 `Board` 與 `Firstmate adapter` 兩個 job 都是 success。
+  看的是這兩個 job 的結果，不是整個 run 的結果：不是必過的 macOS job 失敗時，整個 run 是 failure。
+  要 vendor 的檔列在看板的 `myshape/vendor-files` 與這一側的 `fm-board/vendor-files`；腳本的用法、會拒絕的情況與 `--check` 的輸出寫在它的檔頭。
+- 同步 PR 要對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，在同一個 PR 裡改掉不一致的地方，PR 說明寫出那一頁查過了、改了什麼。
+  檢查那一頁引用的名稱的腳本屬於 fork，跟著那一頁放在 fork 裡，不 vendor；步驟的順序、每一步的輸出、平台與需要的工具要讀過才知道，清單在那一頁的最後一節。
