@@ -1,0 +1,16 @@
+{
+  "delivered": {
+    "outcome": "delivered"
+  },
+  "handled_elsewhere": {
+    "outcome": "handled_elsewhere"
+  },
+  "retry": {
+    "outcome": "retry",
+    "error": "not woken yet"
+  },
+  "failed": {
+    "outcome": "failed",
+    "error": "no such worker"
+  }
+}

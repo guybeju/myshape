@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# An aggregator written only from the board's contract (contracts section 7,
+# statements C1 to C12), knowing nothing of Firstmate. Its work for each home
+# is $TB_AGG/plain/<home>.json: tasks, queued, holds, status_decisions and
+# topics, plus optional further homes for the root. It reports no ledger
+# ("absent"), unless $TB_AGG/plain/<home>.events exists: then its ledger
+# cursor is the number of event lines already handed over, with a token of its
+# own making. Its name on the board is "plain". stub-lib.sh says where every
+# call is logged and how to make it misbehave.
+# shellcheck source=myshape/test/stub-aggregator/stub-lib.sh
+. "$(dirname "$0")/stub-lib.sh"
+
+ledger() {  # <events-file> <offset> <token>
+  local file=$1 offset=$2 token=$3 count
+  if [ ! -f "$file" ]; then
+    printf '%s\n' '{"status":"absent","to_offset":0,"to_prefix_sha256":"-","more":false,"lines":[]}'
+    return
+  fi
+  count=$(grep -c '' "$file" || true)
+  if [ "$offset" -gt "$count" ] || { [ "$offset" -gt 0 ] && [ "$token" != "$(printf 'plain-%s' "$offset" | sha256sum | cut -d' ' -f1)" ]; }; then
+    printf '%s\n' '{"status":"continuity-broken","to_offset":0,"to_prefix_sha256":"-","more":false,"lines":[]}'
+    return
+  fi
+  tail -n +"$((offset + 1))" "$file" | jq -R -s --argjson count "$count" \
+    --arg token "$(printf 'plain-%s' "$count" | sha256sum | cut -d' ' -f1)" \
+    '{status: "delta", to_offset: $count, to_prefix_sha256: $token, more: false, lines: (split("\n") | map(select(length > 0)))}'
+}
+
+apply() {
+  stub_apply_tag "$TB_AGG/plain/$(jq -r .home <<< "$1").json" "$1"
+}
+
+case "${1:-}" in
+  feed)
+    shift
+    stub_log feed "$@"
+    stub_env_probe "$1"
+    stub_control "$1"
+    [ -f "$TB_AGG/plain/$1.json" ] || { printf 'plain has no home %s\n' "$1" >&2; exit 2; }
+    jq -c --arg home "$1" --argjson ledger "$(ledger "$TB_AGG/plain/$1.events" "$2" "$3")" '
+      {schema: 1, code_commit: (.code_commit // "plain-0.1"), ledger_enabled: (.ledger_enabled // false),
+       tasks: (.tasks // []), queued: (.queued // []), holds: (.holds // []),
+       status_decisions: (.status_decisions // []), topics: (.topics // {}), ledger: $ledger}
+      + (if $home == "main" then {aggregator: {name: "plain", label: "plain"}, secondmates: (.secondmates // [])} else {} end)' \
+      "$TB_AGG/plain/$1.json"
+    ;;
+  deliver) stub_deliver apply ;;
+  *) printf 'plain: feed or deliver\n' >&2; exit 2 ;;
+esac

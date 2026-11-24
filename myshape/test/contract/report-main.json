@@ -1,0 +1,162 @@
+{
+  "schema": 1,
+  "code_commit": "fixture-commit",
+  "generated": "2026-11-19T00:00:00Z",
+  "ledger_enabled": true,
+  "tasks": [
+    {
+      "id": "t1",
+      "kind": "ship",
+      "state": "working",
+      "source": "pane",
+      "detail": "on the tests",
+      "unstarted": false
+    },
+    {
+      "id": "loose",
+      "kind": "scout",
+      "state": "blocked",
+      "source": "status",
+      "detail": "needs a key",
+      "unstarted": false
+    }
+  ],
+  "queued": [
+    {
+      "id": "q-ready",
+      "kind": "ship",
+      "title": "Ready item",
+      "hold": null,
+      "captain": false,
+      "blockers": [],
+      "topic_hint": "solo"
+    },
+    {
+      "id": "q-decide",
+      "kind": "ship",
+      "title": "Waits for you",
+      "hold": "要先決定嗎？",
+      "captain": true,
+      "blockers": [],
+      "topic_hint": "solo"
+    },
+    {
+      "id": "q-parked",
+      "kind": "ship",
+      "title": "Parked",
+      "hold": "等 CI 修好",
+      "captain": false,
+      "blockers": [],
+      "topic_hint": "solo"
+    },
+    {
+      "id": "q-after",
+      "kind": "ship",
+      "title": "After t1",
+      "hold": null,
+      "captain": false,
+      "blockers": [
+        "t1"
+      ],
+      "topic_hint": "solo"
+    }
+  ],
+  "holds": [
+    {
+      "id": "call-close",
+      "title": "Merge it?",
+      "question": "要合併嗎？\n選項：A | B",
+      "hold_bucket": "live",
+      "hold_until": null,
+      "unresolved_blocker_ids": [],
+      "hold_age_days": 1,
+      "origin": "t1",
+      "on_answer": "close",
+      "hold_set": "2026-11-18T00:00:00Z"
+    },
+    {
+      "id": "call-release",
+      "title": "Go on?",
+      "question": "要繼續嗎？",
+      "hold_bucket": "live",
+      "hold_until": null,
+      "unresolved_blocker_ids": [],
+      "hold_age_days": 1,
+      "origin": "t1",
+      "on_answer": "release",
+      "hold_set": "2026-11-18T00:00:00Z"
+    },
+    {
+      "id": "call-none",
+      "title": "Which way?",
+      "question": "走哪一條？",
+      "hold_bucket": "live",
+      "hold_until": null,
+      "unresolved_blocker_ids": [],
+      "hold_age_days": 1,
+      "origin": "",
+      "on_answer": null,
+      "hold_set": "2026-11-18T00:00:00Z"
+    }
+  ],
+  "status_decisions": [
+    {
+      "id": "t1",
+      "key": "which",
+      "summary": "which way for the cache?"
+    }
+  ],
+  "topics": {
+    "t1": "solo 2026-11-19T00:00:00Z",
+    "call-close": "solo 2026-11-19T00:00:00Z",
+    "gone-merged": "solo 2026-11-19T00:00:00Z",
+    "gone-dropped": "solo 2026-11-19T00:00:00Z"
+  },
+  "ledger": {
+    "status": "absent",
+    "to_offset": 0,
+    "to_prefix_sha256": "-",
+    "more": false,
+    "lines": []
+  },
+  "closed_holds": [
+    {
+      "id": "call-done",
+      "title": "Ship it?",
+      "origin": "t1",
+      "mode": "answered",
+      "answer": "要",
+      "label": "",
+      "source": "",
+      "digest": "8f65270ef990764ffcbd99fbec01964542f09bffdb2d1daa22e580c12210341f",
+      "occurrence": 1,
+      "opened_at": 1795400000,
+      "closed_at": 1795400600
+    }
+  ],
+  "closed_cursor": {
+    "status": "delta",
+    "to_offset": 0,
+    "to_prefix_sha256": "-",
+    "more": false
+  },
+  "secondmates": [
+    {
+      "id": "sm1",
+      "remote": false,
+      "home": "/srv/sm1"
+    },
+    {
+      "id": "far1",
+      "remote": true,
+      "home": "/srv/far1",
+      "read_every_s": 60,
+      "read_timeout_s": 400
+    }
+  ],
+  "aggregator": {
+    "name": "firstmate",
+    "label": "first mate",
+    "update_hint": "請在主 home 跑 /updatefirstmate。"
+  }
+}

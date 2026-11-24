@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# A Firstmate-shaped stub aggregator. Its feed prints $TB_AGG/fm/<home>.json
+# (a test copies myshape/test/contract/report-<home>.json there and edits it)
+# with a ledger read from $TB_AGG/fm/<home>.ledger the way Firstmate reads
+# its own: a byte offset and the SHA-256 of the bytes before it. Its deliverer
+# records each action and applies a delivered tag to the home's report.
+# stub-lib.sh says where everything is logged and how to make it misbehave.
+# shellcheck source=myshape/test/stub-aggregator/stub-lib.sh
+. "$(dirname "$0")/stub-lib.sh"
+
+broken() {
+  printf '%s\n' '{"status":"continuity-broken","to_offset":0,"to_prefix_sha256":"-","more":false,"lines":[]}'
+}
+
+ledger() {  # <file> <offset> <sha>
+  local file=$1 offset=$2 sha=$3 size
+  if [ ! -f "$file" ]; then
+    printf '%s\n' '{"status":"absent","to_offset":0,"to_prefix_sha256":"-","more":false,"lines":[]}'
+    return
+  fi
+  size=$(wc -c < "$file" | tr -d ' ')
+  if [ "$offset" -gt "$size" ]; then broken; return; fi
+  if [ "$offset" -gt 0 ] && [ "$(head -c "$offset" "$file" | sha256sum | cut -d' ' -f1)" != "$sha" ]; then
+    broken
+    return
+  fi
+  tail -c +"$((offset + 1))" "$file" | jq -R -s --argjson size "$size" --arg sha "$(sha256sum < "$file" | cut -d' ' -f1)" \
+    '{status: "delta", to_offset: $size, to_prefix_sha256: $sha, more: false, lines: (split("\n") | map(select(length > 0)))}'
+}
+
+apply() {
+  stub_apply_tag "$TB_AGG/fm/$(jq -r .home <<< "$1").json" "$1"
+}
+
+case "${1:-}" in
+  feed)
+    shift
+    stub_log feed "$@"
+    stub_env_probe "$1"
+    stub_control "$1"
+    [ -f "$TB_AGG/fm/$1.json" ] || { printf 'stub-fm has no home %s\n' "$1" >&2; exit 2; }
+    jq -c --argjson ledger "$(ledger "$TB_AGG/fm/$1.ledger" "$2" "$3")" '. + {ledger: $ledger}' "$TB_AGG/fm/$1.json"
+    ;;
+  deliver) stub_deliver apply ;;
+  *) printf 'stub-fm: feed or deliver\n' >&2; exit 2 ;;
+esac

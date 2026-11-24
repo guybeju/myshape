@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "code_commit": "fixture-commit",
+  "generated": "2026-11-19T00:00:00Z",
+  "ledger_enabled": false,
+  "tasks": [
+    {
+      "id": "far-work",
+      "kind": "ship",
+      "state": "working",
+      "source": "pane",
+      "detail": "",
+      "unstarted": false
+    }
+  ],
+  "queued": [],
+  "holds": [],
+  "status_decisions": [],
+  "topics": {
+    "far-work": "solo 2026-11-19T00:00:00Z"
+  },
+  "ledger": {
+    "status": "absent",
+    "to_offset": 0,
+    "to_prefix_sha256": "-",
+    "more": false,
+    "lines": []
+  },
+  "ledger_hint": "home far1 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 bin/fm-on.sh far1 fm-board.sh setup",
+  "closed_holds": [],
+  "closed_cursor": {
+    "status": "delta",
+    "to_offset": 0,
+    "to_prefix_sha256": "-",
+    "more": false
+  }
+}
