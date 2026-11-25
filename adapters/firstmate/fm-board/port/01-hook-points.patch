@@ -1,0 +1,284 @@
+diff --git a/bin/fm-backlog-archive-lib.sh b/bin/fm-backlog-archive-lib.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4622a1959a3944ec461c9822ec2301ed310e6bf
+--- /dev/null
++++ b/bin/fm-backlog-archive-lib.sh
+@@ -0,0 +1,75 @@
++# shellcheck shell=bash
++# The finished items tasks-axi's Done retention has moved out of a markdown
++# backlog into its archive, so a reader can tell an archived finished id from an
++# id nobody knows. Sourced only; it sources bin/fm-tasks-axi-lib.sh and
++# bin/fm-backlog-transition-lib.sh for the backlog's own addressing. Written for
++# bash 3.2 and BSD tools. bin/fm-fleet-snapshot.sh uses it to resolve blockers.
++#
++# fm_backlog_archive_path <data-dir>
++#   Prints the archive tasks-axi appends to for the backlog <data-dir>/backlog.md,
++#   with tasks-axi's own precedence: the [markdown] archive key of the backlog
++#   root's .tasks.toml, else of $HOME/.tasks-axi/config.toml (a relative value
++#   resolves against the backlog root), else done-archive.md beside the backlog.
++#   The backlog root is fm_backlog_root's, the directory tasks-axi runs from.
++#   Returns 1, printing nothing, when the data directory cannot be resolved or
++#   the configured backend is not markdown and so keeps no archive.
++#
++# fm_backlog_archived_done_ids <archive>
++#   Prints each id with a checked row ("- [x] <id> - ...", the form tasks-axi
++#   writes a Done row in) in <archive> once, in first-seen order. A row archived
++#   unchecked (`tasks-axi prune --state queued`) is not finished and is skipped.
++#   Prints nothing for a missing or unreadable archive; it never fails.
++
++_fm_backlog_archive_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++# shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
++. "$_fm_backlog_archive_lib_dir/fm-tasks-axi-lib.sh"
++# shellcheck source=bin/fm-backlog-transition-lib.sh disable=SC1091
++. "$_fm_backlog_archive_lib_dir/fm-backlog-transition-lib.sh"
++
++# _fm_backlog_archive_setting <toml-file>: the [markdown] archive value, or nothing.
++_fm_backlog_archive_setting() {
++  [ -f "$1" ] && [ -r "$1" ] || return 0
++  LC_ALL=C awk '
++    function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
++    {
++      line = $0
++      sub(/[[:space:]]*#.*/, "", line)
++      line = trim(line)
++      if (line ~ /^\[[^]]+\]$/) { insection = (line == "[markdown]"); next }
++      if (insection && line ~ /^archive[[:space:]]*=/) {
++        sub(/^archive[[:space:]]*=[[:space:]]*/, "", line)
++        gsub(/^"|"$/, "", line); gsub(/^'\''|'\''$/, "", line)
++        print line
++        exit
++      }
++    }
++  ' "$1"
++}
++
++fm_backlog_archive_path() {  # <data-dir>
++  local data root backend archive
++  data=$(fm_backlog_data_absolute "$1" 2>/dev/null) || return 1
++  root=$(fm_backlog_root "$data") || return 1
++  backend=$(fm_tasks_axi_backend "$root" 2>/dev/null) || return 1
++  [ "$backend" = markdown ] || return 1
++  archive=$(_fm_backlog_archive_setting "$root/.tasks.toml")
++  if [ -z "$archive" ] && [ -n "${HOME:-}" ]; then
++    archive=$(_fm_backlog_archive_setting "$HOME/.tasks-axi/config.toml")
++  fi
++  case "$archive" in
++    '') printf '%s/done-archive.md\n' "${data%/}" ;;
++    /*) printf '%s\n' "$archive" ;;
++    *) printf '%s/%s\n' "${root%/}" "$archive" ;;
++  esac
++}
++
++fm_backlog_archived_done_ids() {  # <archive>
++  [ -f "$1" ] && [ -r "$1" ] || return 0
++  LC_ALL=C awk '
++    /^[-*] \[[xX]\] [^[:space:]]+[[:space:]]+-[[:space:]]/ {
++      id = substr($0, 7)
++      sub(/[[:space:]].*$/, "", id)
++      if (!(id in seen)) { seen[id] = 1; print id }
++    }
++  ' "$1" 2>/dev/null || true
++}
+diff --git a/bin/fm-captain-hold.sh b/bin/fm-captain-hold.sh
+index 1c1caadab10f1cbdfbac24eeb3c59bb31fe12c89..ae1bd99c583cd11dedfda6eddbe5f3056ad7976b 100755
+--- a/bin/fm-captain-hold.sh
++++ b/bin/fm-captain-hold.sh
+@@ -21,7 +21,8 @@
+ #
+ # Usage:
+ #   fm-captain-hold.sh hold <task-id> --reason <reason> \
+-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
++#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD] \
++#     [--on-answer close|release]
+ #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
+ #   fm-captain-hold.sh pr-policy <task-id> <PR-url> <merged|closed|terminal> <close|release>
+ #   fm-captain-hold.sh settle-pr <task-id> <PR-url>
+@@ -58,6 +59,12 @@
+ # `--until` records the captain's own deferral date through `tasks-axi hold
+ # --until`, so a "revisit later" answer is stored as a date instead of a live
+ # card.
++# `--on-answer` records, on a `Captain hold on answer: close|release` body line,
++# what the caller declares the captain's answer does to the task, so a channel
++# can show that outcome and declare it as the close mode instead of asking.
++# `close` is for a task that holds only the decision, `release` for one that
++# still gates unfinished work. Repeating an active hold without the flag keeps
++# the record; a new hold lifecycle without it drops a previous call's record.
+ #
+ # `answer` records the captain's exact words and resolves the call in the same
+ # act. It requires a non-empty captain decision file of at most 8192 bytes and
+@@ -283,9 +290,28 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+ # shellcheck disable=SC1091
+ . "$SCRIPT_DIR/fm-afk-contract.sh"
+ 
++# Fork addition (myshape/spec/contracts.markdown section 2): every hold and
++# resolution this script publishes also appends one line to
++# state/captain-hold-events.jsonl, in every home, with the time the backlog
++# keeps nowhere: {"v":1,"ts":<epoch>,"task":"<id>","occurrence":<n>,
++# "event":"held"|"resolved"}. <n> is the parent-channel key's lifecycle
++# number. A replay appends again, so a reader takes the earliest line per
++# task, occurrence and event. The change is already durable in the backlog, so
++# a line that cannot be appended is reported as `actionable:` on stderr, like
++# a parent channel that cannot be written, and changes nothing else.
++record_hold_line() {  # <task-id> <occurrence> <verb>
++  local event=resolved
++  [ "$3" = resolved ] || event=held
++  printf '{"v":1,"ts":%s,"task":"%s","occurrence":%s,"event":"%s"}\n' \
++    "$(date +%s)" "$1" "$2" "$event" 2>/dev/null >> "$STATE/captain-hold-events.jsonl" \
++    || printf 'actionable: the %s time of task %s was not recorded in %s\n' \
++      "$event" "$1" "$STATE/captain-hold-events.jsonl" >&2
++}
++
+ PARENT_HOLD_PUBLISHED=0
+ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note> [until-date]
+   local id=$1 occurrence=$2 verb=$3 note=$4 until=${5:-} head rc=0
++  record_hold_line "$id" "$occurrence" "$verb"
+   PARENT_HOLD_PUBLISHED=0
+   head="$verb [key=captain-hold-$id-$occurrence]"
+   [ -z "$until" ] || head="$head [until=$until]"
+@@ -889,28 +915,30 @@ task_identity() {
+   printf '%s' "$id"
+ }
+ 
+-write_hold_origin() {  # <task-id> <shown-body> <origin>
+-  local id=$1 body=$2 origin=$3 stamp rest new_body tmp
++write_hold_line() {  # <task-id> <shown-body> <label> <value>
++  local id=$1 body=$2 label=$3 value=$4 stamp rest new_body tmp
+   body=$(decode_shown_value "$body") \
+     || fail "could not decode the existing body for $id"
+   stamp=$(printf '%s\n' "$body" | sed -n 1p)
+   [ -n "$(body_hold_set_timestamp "$body")" ] \
+-    || fail "task $id lost its hold-set stamp before its origin was recorded"
+-  rest=$(printf '%s\n' "$body" | sed 1d | awk '!/^Captain hold origin: /' \
++    || fail "task $id lost its hold-set stamp before its $label was recorded"
++  rest=$(printf '%s\n' "$body" | sed 1d \
++    | awk -v prefix="Captain hold $label: " 'index($0, prefix) != 1' \
+     | awk 'NF || started { started = 1; print }')
+-  new_body=$(printf '%s\nCaptain hold origin: %s' "$stamp" "$origin")
++  new_body=$stamp
++  [ -z "$value" ] || new_body=$(printf '%s\nCaptain hold %s: %s' "$stamp" "$label" "$value")
+   if [ -n "$rest" ]; then
+     new_body=$(printf '%s\n\n%s' "$new_body" "$rest")
+   fi
+-  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-origin.XXXXXX") \
+-    || fail "cannot stage the hold origin"
++  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-line.XXXXXX") \
++    || fail "cannot stage the hold $label"
+   if ! printf '%s\n' "$new_body" > "$tmp"; then
+     rm -f -- "$tmp"
+-    fail "cannot stage the hold origin for $id"
++    fail "cannot stage the hold $label for $id"
+   fi
+   if ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
+     rm -f -- "$tmp"
+-    printf 'fm-captain-hold: could not record the hold origin on %s\n' "$id" >&2
++    printf 'fm-captain-hold: could not record the hold %s on %s\n' "$label" "$id" >&2
+     return 1
+   fi
+   rm -f -- "$tmp"
+@@ -1117,7 +1145,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
+ }
+ 
+ command_hold() {
+-  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
++  local id=${1:-} title='' reason='' repo='' origin='' until='' on_answer='' show state existing_title body='' hold_kind hold_set occurrence
+   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason original_body='' hold_status=0
+   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+   shift
+@@ -1128,11 +1156,16 @@ command_hold() {
+       --repo) shift; repo=${1:-} ;;
+       --origin) shift; origin=${1:-} ;;
+       --until) shift; until=${1:-} ;;
++      --on-answer) shift; on_answer=${1:-} ;;
+       *) usage >&2; exit 2 ;;
+     esac
+     shift
+   done
+   validate_slug task-id "$id"
++  case "$on_answer" in
++    ''|close|release) : ;;
++    *) fail "--on-answer must be close or release: $on_answer" ;;
++  esac
+   [ -n "$reason" ] || fail "reason must not be empty"
+   # bin/fm-hold-reason-lib.sh owns the storage constraint and reversible encoding.
+   stored_reason=$(fm_hold_reason_encode "$reason") || fail "could not encode the hold reason"
+@@ -1226,7 +1259,12 @@ command_hold() {
+   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
+   publish_parent_hold "$id" "$occurrence" needs-decision "$reason" "$until"
+   if [ -n "$origin" ]; then
+-    write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
++    write_hold_line "$id" "$(show_field "$show" body)" origin "$origin" || exit $?
++    task_show_or_fail "$id" "task $id disappeared while recording its origin"
++  fi
++  if [ -n "$on_answer" ] || { [ "$preserve_hold_set" = 0 ] \
++    && show_field_value "$show" body | grep -q '^Captain hold on answer: '; }; then
++    write_hold_line "$id" "$(show_field "$show" body)" 'on answer' "$on_answer" || exit $?
+   fi
+   printf '%s\n' "$id"
+ }
+diff --git a/bin/fm-fleet-snapshot.sh b/bin/fm-fleet-snapshot.sh
+index a4d018846c9b2ddfe9b6dcb3741bd5e74428a948..162b4127ebccec9a96996e9ecc1df230d1dba944 100755
+--- a/bin/fm-fleet-snapshot.sh
++++ b/bin/fm-fleet-snapshot.sh
+@@ -232,6 +232,8 @@ esac
+ . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
+ # shellcheck source=bin/fm-hold-reason-lib.sh
+ . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
++# shellcheck source=bin/fm-backlog-archive-lib.sh
++. "$SCRIPT_DIR/fm-backlog-archive-lib.sh"
+ 
+ usage() {
+   cat <<'EOF'
+@@ -390,16 +392,18 @@ first_pr_url_in_file() {  # <file>
+ 
+ # Isolate this read-only projection from the fleet collector's shell state.
+ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
+-  local backlog=${1:-$BACKLOG}
++  local backlog=${1:-$BACKLOG} archive=/dev/null
+   if [ ! -f "$backlog" ]; then
+     jq -n --arg path "$backlog" '{path:$path,present:false,records:[]}'
+     return 0
+   fi
+ 
++  archive=$(fm_backlog_archive_path "${backlog%/*}") || archive=/dev/null
+   set -o pipefail
+   # shellcheck disable=SC2094
+   jq -Rn --arg path "$backlog" --arg today "$SNAPSHOT_TODAY" --arg now "$SNAPSHOT_NOW" \
+-    --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" '
++    --argjson age_days "$FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS" \
++    --rawfile archived <(fm_backlog_archived_done_ids "$archive") '
+     def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+     def timestamp_epoch($d):
+       if ($d | type) != "string" then null
+@@ -553,12 +557,14 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
+     | .records as $records
+     | (reduce ($records[] | select(.structured)) as $record ({};
+          .[$record.id] = ((.[$record.id] // true) and ($record.state == "done")))) as $resolved_ids
++    | ($archived | split("\n") | map(select(. != "") | {key: ., value: true}) | from_entries) as $archived_ids
+     | .records |= map(
+         if .structured then
+           . as $record
+           | .unresolved_blocker_ids = [
+               $record.blocked_by_ids[] as $blocker
+-              | select($resolved_ids[$blocker] != true)
++              | select(if $resolved_ids | has($blocker) then $resolved_ids[$blocker] != true
++                       else $archived_ids[$blocker] != true end)
+               | $blocker
+             ]
+           | .current_role =
+diff --git a/bin/fm-session-start.sh b/bin/fm-session-start.sh
+index ad4bce804772b72a4d7b7211759f6f573fc79f3e..35316ecb6b9992a17833b595e9e8246302cc747a 100755
+--- a/bin/fm-session-start.sh
++++ b/bin/fm-session-start.sh
+@@ -1026,6 +1026,12 @@ if fm_pf_relay_active "$FM_HOME" \
+   fi
+ fi
+ 
++# The topic board's one line; bin/fm-topic-session-start.sh owns when it prints
++# and what it starts. Full locked starts only: a read-only session starts nothing.
++if [ "$READ_ONLY" -eq 0 ] && [ "$REEMIT" -eq 0 ]; then
++  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-topic-session-start.sh" 2>/dev/null || true
++fi
++
+ # --- 7. network checks ------------------------------------------------------
+ # Deliberately here and not later: these lines are actionable (a stuck clone, a
+ # secondmate that could not be relaunched, broken GitHub auth), and the section
