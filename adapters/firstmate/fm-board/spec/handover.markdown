@@ -45,7 +45,7 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
 - 看板與這一側的修改都在 guybeju/myshape 做、在那裡合併。
   fork 經一個同步 PR 拿到它們：在 worker 自己的 checkout、名稱含 `board-sync` 的分支上跑 `bin/fm-board-vendor.sh vendor <commit>`，提交它寫的檔與 `myshape.lock`；不在 home 裡跑。
   `<commit>` 要在 myshape `main` 的 first-parent 鏈上（PR 的合併 commit），而且它自己在 `main` 上的 push run 裡 `Board` 與 `Firstmate adapter` 兩個 job 都是 success。
-  看的是這兩個 job 的結果，不是整個 run 的結果：不是必過的 macOS job 失敗時，整個 run 是 failure。
+  看的是這兩個 job 的結果，不是整個 run 的結果。
   要 vendor 的檔列在看板的 `myshape/vendor-files` 與這一側的 `fm-board/vendor-files`；腳本的用法、會拒絕的情況與 `--check` 的輸出寫在它的檔頭。
 - 同步 PR 要對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，在同一個 PR 裡改掉不一致的地方，PR 說明寫出那一頁查過了、改了什麼。
   檢查那一頁引用的名稱的腳本屬於 fork，跟著那一頁放在 fork 裡，不 vendor；步驟的順序、每一步的輸出、平台與需要的工具要讀過才知道，清單在那一頁的最後一節。
