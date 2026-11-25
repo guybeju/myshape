@@ -92,6 +92,7 @@ session start 只要 `bind` 寫了設定檔，就印一次 `看板服務：已�
 ```
 
 fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/fm-backlog-archive-lib.sh` 整支（fork 自己的檔，不在 `fm-board/vendor-files`，vendor 不會帶來）與 `bin/fm-fleet-snapshot.sh` 裡 source 它、呼叫 `fm_backlog_archived_done_ids` 的那幾行（第 1 節），提交後更新那個 home；下一次讀取就照常回報。
+不跟 `carry` 的 fork 照 [port kit](port-to-a-fork.markdown) 第 2.2 節移植這個修正與其他 hook 點。
 這個修正以別的寫法進到上游或 fork 時（例如函式改名），檢查找的字要在 guybeju/myshape 的 `tb_capability_gap` 跟著改，否則有修正的 home 也會顯示缺少。
 
 讀到的回報原樣交給看板，另外加上：

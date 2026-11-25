@@ -50,6 +50,7 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
   要 vendor 的檔列在看板的 `myshape/vendor-files` 與這一側的 `fm-board/vendor-files`；腳本的用法、會拒絕的情況與 `--check` 的輸出寫在它的檔頭。
 - 彙整腳本讀之前檢查框架有沒有這一側要的、上游 `main` 沒有的能力（[adapter](adapter.markdown) 第 3.1 節「能力檢查」）。今天只檢查一項：`bin/fm-fleet-snapshot.sh` 的封存 blocker 修正，缺了時那個 home 在看板上是 `無法回報`，橫幅寫「這個 home 的 first mate 缺少封存 blocker 的修正：…」。
   fork 補上的方法是把 `carry` 的這個修正（`bin/fm-backlog-archive-lib.sh` 與 `bin/fm-fleet-snapshot.sh` 裡呼叫 `fm_backlog_archived_done_ids` 的幾行）移植過去再更新那個 home；這是 fork 自己的修改，vendor 不會帶來。
+  不跟 `carry` 的 fork 照 [port kit](port-to-a-fork.markdown) 移植這個修正與其他 hook 點。
   這個修正以別的寫法進到上游或 fork 時，在這裡改 `bin/fm-board-lib.sh` 的 `tb_capability_gap` 找的字；這一側之後要用到另一項上游 `main` 沒有的能力，而缺了會讓回報變成錯的資料時，也加在那裡，並寫進 adapter 第 3.1 節的表。
 - 同步 PR 要對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，在同一個 PR 裡改掉不一致的地方，PR 說明寫出那一頁查過了、改了什麼。
   檢查那一頁引用的名稱的腳本屬於 fork，跟著那一頁放在 fork 裡，不 vendor；步驟的順序、每一步的輸出、平台與需要的工具要讀過才知道，清單在那一頁的最後一節。
