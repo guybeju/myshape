@@ -68,11 +68,23 @@ export function appendLineDurable(file, line, mode) {
 export function fileSize(file) {
     return fs.existsSync(file) ? fs.statSync(file).size : 0;
 }
-/** The pid stored in `file`, or null when the file is missing or malformed. */
+/**
+ * The pid stored in `file`, or null when the file is missing or malformed. A
+ * file deleted between the existence check and the read counts as missing.
+ */
 export function readPidFile(file) {
     if (!fs.existsSync(file))
         return null;
-    const pid = Number(fs.readFileSync(file, "utf8").trim());
+    let content;
+    try {
+        content = fs.readFileSync(file, "utf8");
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return null;
+        throw error;
+    }
+    const pid = Number(content.trim());
     return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 export function isAlive(pid) {
