@@ -55,8 +55,15 @@
 # true when that cap cut it short. A failure in this part leaves both keys out
 # rather than failing the read.
 #
+# Before it reads anything, it checks that the Firstmate scripts beside it
+# have what a true report needs beyond upstream's main (tb_capability_gap in
+# bin/fm-board-lib.sh, which only reads their text). When one is missing it
+# prints the one line naming it on stderr and exits 4, so the board shows that
+# line for the home instead of a report that is wrong.
+#
 # "schema" is this output format's version. This script writes nothing in the
-# home. Exit codes: 0 success, 1 failure (nothing is printed), 2 usage error.
+# home. Exit codes: 0 success, 1 failure (nothing is printed), 2 usage error,
+# 4 a capability missing (nothing is printed on stdout).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -362,7 +369,7 @@ check_cursor() {  # <offset> <prefix-sha256>
 }
 
 main() {
-  local offset prefix home is_secondmate=false ledger_enabled=false code_commit
+  local offset prefix home is_secondmate=false ledger_enabled=false code_commit gap
   local closed_offset='' closed_prefix=-
   if [ "${1:-}" = --in-home ]; then
     [ "$#" -eq 4 ] || [ "$#" -eq 7 ] ||
@@ -382,6 +389,10 @@ main() {
   check_cursor "$1" "$2"
   offset=$1
   prefix=$2
+  gap=$(tb_capability_gap "$SCRIPT_DIR") || {
+    printf '%s\n' "$gap" >&2
+    exit 4
+  }
   command -v jq >/dev/null 2>&1 ||
     tb_die 1 "fm-topic-board-read.sh needs jq, which was not found. Install: $(tb_jq_install_hint)"
 

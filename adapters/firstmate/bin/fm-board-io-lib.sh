@@ -17,9 +17,11 @@
 # carried closed_cursor, so a home on older code never gets the extra arguments.
 # and adds what the board asks of an aggregator: the aggregator block (main
 # only), a ledger_hint for a home whose ledger is off, and read hints of 60 s
-# and 400 s for remote secondmates. Exit 0 prints the report; 4 says the remote
-# checkout has no reader, with one line on stderr; 2 an unknown home; any other
-# code is the reader's own failure.
+# and 400 s for remote secondmates. Exit 0 prints the report; 4 says the home
+# cannot report, with one line on stderr: the remote checkout has no reader, or
+# the reader found the Firstmate it runs on missing a capability it needs (the
+# reader's own exit 4 and line, passed on unchanged; for a remote home its own
+# code root's); 2 an unknown home; any other code is the reader's own failure.
 #
 # deliver reads one action record on stdin and prints one outcome line,
 # {"outcome":"delivered|handled_elsewhere|retry|failed"[,"error":…]}, always

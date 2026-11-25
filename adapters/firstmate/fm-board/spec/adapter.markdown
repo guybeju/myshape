@@ -12,11 +12,11 @@
 | --- | --- |
 | `bin/fm-board.sh` | 轉接指令：看板執行的 `feed` 與 `deliver`（第 3 節），寫看板設定檔的 `bind`（第 3 節），`tag`、`setup`、帶 task 的 `split`、`--in-home`、`install-rules`、`rules` |
 | `bin/fm-board-io-lib.sh` | `feed` 與 `deliver` 的程式；只有 `fm-board.sh` source 它 |
-| `bin/fm-board-lib.sh` | 找同機 secondmate 的 home、在那個 home 執行指令；`fm-board.sh` 與 `fm-topic-board-read.sh` source 它 |
+| `bin/fm-board-lib.sh` | 找同機 secondmate 的 home、在那個 home 執行指令，彙整腳本讀之前的能力檢查 `tb_capability_gap`（第 3.1 節）；`fm-board.sh` 與 `fm-topic-board-read.sh` source 它 |
 | `bin/fm-board-vendor.sh` | 把看板與這一側從 guybeju/myshape 的一個 commit 複製進 fork（`vendor <commit>`），或檢查 fork 裡的副本與 `myshape.lock` 記的 commit 相同（`--check`）；不 source 任何檔，用法寫在檔頭 |
 | `bin/fm-queue-source-lib.sh` | second mate 的 home 去哪裡讀主 home 的議題清單、副本能不能用；`fm-dispatch-plan.sh` 與 `fm-board.sh tag`（只在 subshell 裡）source 它 |
 | `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，其餘的列在「先不派」並附原因，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
-| `bin/fm-backlog-archive-lib.sh` | tasks-axi 的 Done 保留把完成的項目搬去的封存檔在哪裡、裡面有哪些完成的 id；上游的 `fm-fleet-snapshot.sh` source 它（見下面） |
+| `bin/fm-backlog-archive-lib.sh` | tasks-axi 的 Done 保留把完成的項目搬去的封存檔在哪裡、裡面有哪些完成的 id；上游的 `fm-fleet-snapshot.sh` source 它（見下面）。它是 fork 自己的檔，不在這個 repo、不在 `fm-board/vendor-files`，vendor 不會帶來 |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
 | `fm-board/vendor-files` | fork 要 vendor 的這一側的檔，一行一個 fork 裡的路徑，來源是 myshape 的 `adapters/firstmate/<那一行>`；看板的檔列在 `myshape/vendor-files` |
 | `fm-board/test/` | `run.sh` 與這一側的測試：`feed`（`stage-1-feed.sh`），`deliver`（`stage-2-deliver.sh`），`tag`、`setup`、`bind`、`--in-home`（`stage-1-tag.sh`），帶 task 的 `split`（`stage-3-split.sh`），看板存項目之前的要你動手，與舊版搬上來的項目換到新程式之後（`stage-3-handson-holds.sh`，第 3.3 節），設定檔、session start 與群組能寫的 checkout（`stage-4-binding.sh`），規則（`stage-6-rules.sh`），vendor 腳本（`stage-8-vendor.sh`）；彙整腳本（`stage-1-read.sh`），session start 的檢查（`stage-2-startup.sh`），看板改過的議題接上 `tag`（`stage-2-topics-tag.sh`），看板接上真的 `fm-board.sh` 的第三到五段（`stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`），跨 fork 歷史的升級（`stage-7-upgrade.sh`）；建 first mate 的 home 與替身的 `helpers.sh`，它先載入看板的測試套件 `myshape/test/kit/helpers.sh` |
@@ -28,6 +28,7 @@
 `fm-board.sh` 與 `fm-dispatch-plan.sh` 要在 git 裡是可執行的：遠端 home 的 `tag`、`setup`、`order` 與 `queues-in` 經 `fm-on.sh` 跑，它只執行追蹤、可執行的 `bin/fm-*.sh`。
 上游的 `bin/fm-backlog-handoff.sh` 在 fork 上多一行：把 backlog 項目交給遠端 second mate 之前跑 `fm-dispatch-plan.sh queues-push --to <id>`（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown) 第 5 節）。
 上游的 `bin/fm-fleet-snapshot.sh` 在 fork 上多讀封存檔：source `bin/fm-backlog-archive-lib.sh`，`unresolved_blocker_ids` 把 backlog 裡沒有、但在封存檔裡是完成的 id 算成已解決（dispatch-plan 第 2 節），檔頭說明那一句跟著改；它的測試是上游既有的 `tests/fm-fleet-snapshot-view.test.sh` 多的 `test_archived_done_blockers_resolve`。
+彙整腳本讀之前檢查這個修正在不在（第 3.1 節「能力檢查」），不在就不回報。
 合併上游時保留這兩處；衝突時先保留上游的改動，再把這幾行加回去。
 
 ## 2. 舊的寫法
@@ -69,6 +70,29 @@ session start 只要 `bind` 寫了設定檔，就印一次 `看板服務：已�
 | 其他 | exit 2，什麼都不跑 |
 
 看板給了已關的待決事項的游標（contracts 第 4 節）時，三種都在 `<offset>` 前面加 `--closed-since <closed-offset> <closed-sha>`；沒給時參數和以前一樣，所以舊版的遠端照樣讀得到。
+彙整腳本自己的 exit code 原樣交回：0 是回報，4 是下面的能力檢查，其他是讀取失敗；遠端的 exit 4 與它的 stderr 經 `fm-on.sh` 原樣交回。
+
+**能力檢查。** 彙整腳本檢查完參數、讀任何東西之前，先看它要跑的框架指令有沒有這一側要的、上游 `main` 沒有的能力（`bin/fm-board-lib.sh` 的 `tb_capability_gap`）。
+它只讀那些腳本的文字，不執行任何框架指令、不寫任何檔，也不讀事件紀錄的內容，所以看板每次讀都可以跑。
+看的是彙整腳本自己旁邊的 `bin/`：主 home 與同機的 secondmate 是主 home 的 code root（同機的 secondmate 用主 home 的彙整腳本與 snapshot 讀），遠端的 secondmate 是那台自己的 code root。
+缺了一項就不讀，stderr 一行說缺什麼、exit 4；看板把那個 home 標成 `無法回報`，那一行當成它的橫幅（contracts C11，頁面上是 `home <id>：<那一行>`），不採用它的資料。
+參數錯照舊是 exit 2，所以看板照舊在那時忘掉已關的待決事項的游標。
+
+| 上游 `main` 沒有的能力 | 檢查 | 缺了時 |
+| --- | --- | --- |
+| `bin/fm-fleet-snapshot.sh` 的封存 blocker 修正（第 1 節） | 有：它的文字裡有 `fm_backlog_archived_done_ids`（那個修正呼叫 `bin/fm-backlog-archive-lib.sh` 的這個函式）；檔案不在或讀不了不算缺，讀取照舊失敗 | exit 4。Done 的保留搬進封存檔的 blocker 被當成沒完成：`holds[].unresolved_blocker_ids`、`hold_bucket` 的 `blocked`、`queued[].blockers` 會說項目在等已經做完的事，這是錯的資料 |
+| `fm-captain-hold.sh hold --on-answer` 寫的 `Captain hold on answer:` 那一行 | 不檢查 | 照常回報：`holds[].on_answer` 是 `null`，contracts 第 4 節允許的值，完整的 fork 上沒帶這個旗標開的 hold 也是 `null`；頁面當成沒有記下，照預設處理 |
+| `fm-captain-hold.sh` 寫的 `state/captain-hold-events.jsonl` | 不檢查 | 照常回報：`closed_holds[]` 照樣取自 backlog 與封存檔的 Resolution 紀錄，只有 `opened_at`、`closed_at` 是 `null`（C13 的「不知道」）；看板用讀到的時間，兩次讀取之間開了又關的待決事項不補記開啟 |
+| `bin/fm-session-start.sh` 裡的呼叫點（第 9 節） | 不檢查 | 和讀取無關：開 session 時不啟動看板；看板在跑、在讀時，回報不受影響 |
+
+缺封存 blocker 修正時的那一行（`<path>` 是那個 code root 的 `bin/fm-fleet-snapshot.sh` 的絕對路徑）：
+
+```
+這個 home 的 first mate 缺少封存 blocker 的修正：<path> 會把已搬進 Done 封存的 blocker 當成沒完成，項目會看起來卡住，所以先不回報。把 fork 的這個修正（bin/fm-fleet-snapshot.sh 呼叫 bin/fm-backlog-archive-lib.sh 的 fm_backlog_archived_done_ids）移植到那個 code root，再更新。
+```
+
+fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/fm-backlog-archive-lib.sh` 整支（fork 自己的檔，不在 `fm-board/vendor-files`，vendor 不會帶來）與 `bin/fm-fleet-snapshot.sh` 裡 source 它、呼叫 `fm_backlog_archived_done_ids` 的那幾行（第 1 節），提交後更新那個 home；下一次讀取就照常回報。
+這個修正以別的寫法進到上游或 fork 時（例如函式改名），檢查找的字要在 guybeju/myshape 的 `tb_capability_gap` 跟著改，否則有修正的 home 也會顯示缺少。
 
 讀到的回報原樣交給看板，另外加上：
 
@@ -90,7 +114,7 @@ session start 只要 `bind` 寫了設定檔，就印一次 `看板服務：已�
 - `secondmates[]` 只在主 home 的輸出裡有，資料取自上游的 `fm-secondmate-registry-lib.sh` 逐行解析 `data/secondmates.md`。
 - 腳本自己設 `FM_CREW_STATE_NO_FORGE=1`。
 
-測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4、`test_closed_decisions` 的游標與封存）。
+測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4、`test_a_missing_capability_is_exit_4` 的三種 home 缺封存 blocker 修正、`test_closed_decisions` 的游標與封存）；彙整腳本的能力檢查不執行 snapshot、不寫 home：`stage-1-read.sh` 的 `test_a_snapshot_without_the_archive_fix_is_exit_4`。
 
 ### 3.2 `deliver`
 
@@ -191,7 +215,7 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 
 | 框架的東西 | 誰用 | 這一側靠的是 | 測試 |
 | --- | --- | --- | --- |
-| `bin/fm-fleet-snapshot.sh --json`，環境變數 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1`、`FM_CREW_STATE_NO_FORGE=1`、`FM_HOME` | `fm-topic-board-read.sh` | exit 0 並在 stdout 印一個 JSON 物件；失敗時非 0。用到的欄位見下一張表 | 真的：`fm-board/test/stage-1-feed.sh`、`stage-1-read.sh` 全部、`stage-3-data.sh` 全部 |
+| `bin/fm-fleet-snapshot.sh --json`，環境變數 `FM_SNAPSHOT_SECONDMATES=1`、`FM_SNAPSHOT_BUDGET=1`、`FM_CREW_STATE_NO_FORGE=1`、`FM_HOME` | `fm-topic-board-read.sh` | exit 0 並在 stdout 印一個 JSON 物件；失敗時非 0。用到的欄位見下一張表。執行之前，它的文字裡要有 `fm_backlog_archived_done_ids`（第 3.1 節「能力檢查」） | 真的：`fm-board/test/stage-1-feed.sh`、`stage-1-read.sh` 全部、`stage-3-data.sh` 全部；沒有修正的替身：`stage-1-feed.sh` 的 `test_a_missing_capability_is_exit_4`、`stage-1-read.sh` 的 `test_a_snapshot_without_the_archive_fix_is_exit_4` |
 | `state/fleet-ledger.jsonl` | `fm-topic-board-read.sh` 逐位元組分段讀；服務解析每一行 | 只會從尾端增加的 JSONL。每行是物件，有字串 `event`、字串 `task`、數字 `ts`；另外用到 `kind`、`pr`、`text`、`state`。`event` 認得 `task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`，其他的照原樣顯示 | `stage-1-read.sh` 的 `test_ledger_delta_and_continuity`；`stage-3-data.sh` 的 `test_updates_and_topics`、`test_ledger_is_stored_once_and_survives_rewrites`（帳本是測試自己寫的固定內容，不是框架產生的） |
 | `config/fleet-ledger` 存在與否 | `fm-topic-board-read.sh` | 檔案存在就是這個 home 的帳本開著（由 first mate 這一側的 `fm-board.sh setup` 建立） | `stage-3-data.sh` 的 `test_home_status` |
 | `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-topic-board-read.sh`、`fm-topic-session-start.sh` | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home`；`stage-2-startup.sh` 的 `test_secondmate_home_gets_nothing` |

@@ -24,10 +24,13 @@ EOF
 # tb_seed_unstarted <code-root> <task>: make <code-root>'s snapshot report <task>
 # the way upstream does for a harness that has not taken its first turn since
 # spawn (the busy record is still fm-spawn's seed). A real one needs a live pane.
+# The stand-in names fm_backlog_archived_done_ids, as the reader's capability
+# check looks for, because it passes the real snapshot's report through.
 tb_seed_unstarted() {
   rm -f "$1/bin/fm-fleet-snapshot.sh"
   cat > "$1/bin/fm-fleet-snapshot.sh" <<SH
 #!/usr/bin/env bash
+# The real snapshot, with its archived-blocker fix (fm_backlog_archived_done_ids).
 set -euo pipefail
 "$ROOT/bin/fm-fleet-snapshot.sh" "\$@" | jq -c --arg task "$2" '
   (.tasks[] | select(.id == \$task) | .current_state) =
