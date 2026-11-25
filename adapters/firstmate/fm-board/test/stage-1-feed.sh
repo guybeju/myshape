@@ -2,7 +2,8 @@
 # AT4.1: fm-board.sh feed, the board's feed contract on Firstmate's side. It
 # prints one home's report with the aggregator's additions, reads a local
 # secondmate with --in-home and a remote one through fm-on.sh, and turns a
-# remote checkout that has no reader into exit 4 with one line.
+# remote checkout that has no reader, and a Firstmate that lacks a capability
+# the report needs, into exit 4 with one line.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -286,6 +287,37 @@ test_remote_failures() {
   pass "a remote checkout without the reader is exit 4 with one line; other fm-on.sh failures pass through"
 }
 
+# A code root whose fm-fleet-snapshot.sh lacks the fork's archived-blocker fix:
+# feed of every kind of home is exit 4 with the reader's one line, the board's
+# "this home cannot report" (C11). The stand-in passes the real snapshot
+# through but lacks the fix's marker, which is all the check reads. A remote
+# home is read by its own checkout's reader; here, as everywhere in this
+# suite, that is the same code root.
+test_a_missing_capability_is_exit_4() {
+  local gap="$TMP_ROOT/gap-root" home out rc line
+  tb_make_fake_root "$gap"
+  rm "$gap/bin/fm-fleet-snapshot.sh"
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$ROOT/bin/fm-fleet-snapshot.sh" > "$gap/bin/fm-fleet-snapshot.sh"
+  chmod +x "$gap/bin/fm-fleet-snapshot.sh"
+  line="這個 home 的 first mate 缺少封存 blocker 的修正：$(cd "$gap/bin" && pwd)/fm-fleet-snapshot.sh 會把已搬進 Done 封存的 blocker 當成沒完成，項目會看起來卡住，所以先不回報。把 fork 的這個修正（bin/fm-fleet-snapshot.sh 呼叫 bin/fm-backlog-archive-lib.sh 的 fm_backlog_archived_done_ids）移植到那個 code root，再更新。"
+  for home in main sm1 far1; do
+    rc=0
+    out=$(feed "$gap" "$home" 0 - 2>"$TMP_ROOT/err") || rc=$?
+    expect_code 4 "$rc" "feed $home on a Firstmate without the archived-blocker fix"
+    assert_equals "$line" "$(cat "$TMP_ROOT/err")" "feed $home: stderr must be exactly the one line naming the gap"
+    assert_equals '' "$out" "feed $home: a home that cannot report must print no report"
+  done
+  rc=0
+  feed "$gap" main 0 - 0 - >/dev/null 2>&1 || rc=$?
+  expect_code 4 "$rc" "feed main with a closed decisions' cursor on a Firstmate without the fix"
+  rm "$gap/bin/fm-fleet-snapshot.sh"
+  ln -s "$ROOT/bin/fm-fleet-snapshot.sh" "$gap/bin/fm-fleet-snapshot.sh"
+  for home in main sm1 far1; do
+    expect_code 0 "$(feed_code "$gap" "$home" 0 -)" "feed $home once the real snapshot is back"
+  done
+  pass "a Firstmate without the archived-blocker fix cannot report: exit 4 with one line, for every home"
+}
+
 # archive_row <home> <id> <answer-line...>: appends one released row to <home>'s Done archive.
 archive_row() {
   local home=$1 id=$2 line
@@ -394,4 +426,5 @@ test_usage_errors() {
 
 fm_test_run test_main_report_carries_the_backlog test_main_report_has_the_contract_keys \
   test_aggregator_block_and_read_hints test_ledger_hint_only_when_the_ledger_is_off \
-  test_secondmates_are_read_in_their_own_homes test_remote_failures test_closed_decisions test_usage_errors
+  test_secondmates_are_read_in_their_own_homes test_remote_failures test_a_missing_capability_is_exit_4 \
+  test_closed_decisions test_usage_errors

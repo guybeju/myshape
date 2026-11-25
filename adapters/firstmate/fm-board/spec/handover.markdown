@@ -26,6 +26,7 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
 
 - 這一側的測試 source 上游的 `tests/lib.sh`，再 source `fm-board/test/helpers.sh`：它先載入看板的測試套件 `myshape/test/kit/helpers.sh`，再加上建 first mate 的 home 與替身的那幾個（`tb_write_registry`、`tb_seed_unstarted`、`tb_make_fake_root`）。`dispatch-plan/test` 只用測試套件。
 - `stage-1-read.sh` 測彙整腳本 `bin/fm-topic-board-read.sh`，`stage-2-startup.sh` 測 session start 的檢查 `bin/fm-topic-session-start.sh`，跑的是真的框架指令。
+- 彙整腳本讀之前的能力檢查（[adapter](adapter.markdown) 第 3.1 節）讀它旁邊的 `bin/fm-fleet-snapshot.sh` 的文字。測試換掉 snapshot 的替身要留著 `fm_backlog_archived_done_ids` 這個字（`tb_seed_unstarted` 的替身有），不然讀取會是 exit 4，不是替身要測的結果；`stage-1-read.sh` 與 `stage-1-feed.sh` 各有一個沒有這個字的替身，測 exit 4 與那一行。
 - 第三到五段（`stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`）跑接上真的 `bin/fm-board.sh` 的看板與框架的替身；看板只接替身 aggregator 的版本是看板自己的第七段。`stage-2-topics-tag.sh` 跑看板改過的議題（合併過的 id、開服務時確認的提議）接上 `fm-board.sh tag`。
 - `stage-7-upgrade.sh` 從 fork 歷史裡釘住的 commit 起舊版看板，所以只能在有完整歷史的 checkout 裡跑；看板自己的 repo 沒有這些 commit。
 - `stage-8-vendor.sh` 測 `bin/fm-board-vendor.sh`：在自己的暫存目錄建小的來源 repo 與 fork，用 `--source` 跑 fork 裡的那一份，不連網路。
@@ -47,5 +48,8 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
   `<commit>` 要在 myshape `main` 的 first-parent 鏈上（PR 的合併 commit），而且它自己在 `main` 上的 push run 裡 `Board` 與 `Firstmate adapter` 兩個 job 都是 success。
   看的是這兩個 job 的結果，不是整個 run 的結果：不是必過的 macOS job 失敗時，整個 run 是 failure。
   要 vendor 的檔列在看板的 `myshape/vendor-files` 與這一側的 `fm-board/vendor-files`；腳本的用法、會拒絕的情況與 `--check` 的輸出寫在它的檔頭。
+- 彙整腳本讀之前檢查框架有沒有這一側要的、上游 `main` 沒有的能力（[adapter](adapter.markdown) 第 3.1 節「能力檢查」）。今天只檢查一項：`bin/fm-fleet-snapshot.sh` 的封存 blocker 修正，缺了時那個 home 在看板上是 `無法回報`，橫幅寫「這個 home 的 first mate 缺少封存 blocker 的修正：…」。
+  fork 補上的方法是把 `carry` 的這個修正（`bin/fm-backlog-archive-lib.sh` 與 `bin/fm-fleet-snapshot.sh` 裡呼叫 `fm_backlog_archived_done_ids` 的幾行）移植過去再更新那個 home；這是 fork 自己的修改，vendor 不會帶來。
+  這個修正以別的寫法進到上游或 fork 時，在這裡改 `bin/fm-board-lib.sh` 的 `tb_capability_gap` 找的字；這一側之後要用到另一項上游 `main` 沒有的能力，而缺了會讓回報變成錯的資料時，也加在那裡，並寫進 adapter 第 3.1 節的表。
 - 同步 PR 要對照新機器的安裝說明 [FORK-SETUP](../../FORK-SETUP.markdown)，在同一個 PR 裡改掉不一致的地方，PR 說明寫出那一頁查過了、改了什麼。
   檢查那一頁引用的名稱的腳本屬於 fork，跟著那一頁放在 fork 裡，不 vendor；步驟的順序、每一步的輸出、平台與需要的工具要讀過才知道，清單在那一頁的最後一節。

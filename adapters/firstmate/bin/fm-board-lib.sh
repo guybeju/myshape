@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Firstmate's helpers for the topic board: reaching a local secondmate home on
-# the board's behalf (bin/fm-board.sh, bin/fm-topic-board-read.sh), and running
-# the board's own command (bin/fm-board.sh, bin/fm-topic-session-start.sh).
+# the board's behalf (bin/fm-board.sh, bin/fm-topic-board-read.sh), checking
+# that the Firstmate scripts the reader runs can give a true report
+# (bin/fm-topic-board-read.sh), and running the board's own command
+# (bin/fm-board.sh, bin/fm-topic-session-start.sh).
 # Sourced only; defines functions and has no side effects on source.
 #
 # tb_local_secondmate_home needs fm-secondmate-registry-lib.sh and
-# myshape-lib.sh sourced first; tb_board_env needs nothing.
+# myshape-lib.sh sourced first; tb_capability_gap and tb_board_env need nothing.
 
 # tb_local_secondmate_home <registry-file> <secondmate-id>: print the home of a
 # LOCAL registered secondmate. Returns 1 after printing the reason to stderr
@@ -40,6 +42,29 @@ tb_exec_in_home() {
   shift
   exec env -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE -u FM_CONFIG_OVERRIDE \
     -u FM_PROJECTS_OVERRIDE FM_HOME="$home" "$@"
+}
+
+# tb_capability_gap <bin-dir>: whether the Firstmate scripts in <bin-dir> have
+# what fm-topic-board-read.sh needs beyond upstream's main for its report to be
+# true. Prints one line naming the missing capability and returns 1 when one is
+# missing; returns 0 otherwise. It reads the scripts' text and nothing else, so
+# it runs no Firstmate command and writes nothing.
+#
+# The one capability checked is the fork's archived-blocker fix in
+# fm-fleet-snapshot.sh, marked by its call of fm_backlog_archived_done_ids
+# (bin/fm-backlog-archive-lib.sh): without it a blocker that Done retention
+# moved to the markdown archive counts as unresolved, so holds and queued items
+# are reported blocked by finished work. A snapshot script that is missing or
+# unreadable is no gap here: the read fails on its own, as before.
+tb_capability_gap() {
+  local snapshot="$1/fm-fleet-snapshot.sh" rc=0
+  grep -qF fm_backlog_archived_done_ids "$snapshot" 2>/dev/null || rc=$?
+  [ "$rc" -eq 1 ] || return 0
+  printf '%s%s%s%s\n' "這個 home 的 first mate 缺少封存 blocker 的修正：${snapshot} " \
+    "會把已搬進 Done 封存的 blocker 當成沒完成，項目會看起來卡住，所以先不回報。" \
+    "把 fork 的這個修正（bin/fm-fleet-snapshot.sh 呼叫 bin/fm-backlog-archive-lib.sh 的 " \
+    "fm_backlog_archived_done_ids）移植到那個 code root，再更新。"
+  return 1
 }
 
 # tb_board_env: set TB_BOARD_ENV to the env(1) arguments that run

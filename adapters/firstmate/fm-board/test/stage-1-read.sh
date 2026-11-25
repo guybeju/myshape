@@ -194,22 +194,60 @@ test_secondmates_and_in_home() {
 }
 
 test_usage_and_failure() {
-  local home root out
+  local home root out rc=0
   home=$(tb_make_home read-usage)
   expect_code 2 "$(tb_code "$home" "$BOARD_READ")" "no arguments"
   expect_code 2 "$(tb_code "$home" "$BOARD_READ" -1 -)" "a negative offset"
   expect_code 2 "$(tb_code "$home" "$BOARD_READ" 0 nothex)" "a malformed prefix hash"
   expect_code 2 "$(tb_code "$home" "$BOARD_READ" 0 - extra)" "an extra argument"
   root="$TMP_ROOT/read-root"
-  mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-board-lib.sh \
-    "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-tasks-axi-lib.sh "$root/bin/"
-  printf '#!/usr/bin/env bash\necho partial\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
+  read_root "$root"
+  # The stand-in has the archived-blocker fix's marker, so it is the snapshot that fails.
+  printf '#!/usr/bin/env bash\n# fm_backlog_archived_done_ids\necho partial\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 - 2>/dev/null) &&
-    fail "a failed snapshot must fail the read"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 - 2>/dev/null) || rc=$?
+  expect_code 1 "$rc" "a failed snapshot must fail the read"
   assert_equals "" "$out" "a failed read must not print partial JSON"
   pass "bad arguments are usage errors and a failed snapshot prints nothing"
+}
+
+# read_root <dir>: a code root with this checkout's reader and the libraries it
+# sources, and no fm-fleet-snapshot.sh yet.
+read_root() {
+  mkdir -p "$1/bin"
+  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-board-lib.sh \
+    "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-tasks-axi-lib.sh "$1/bin/"
+}
+
+# A Firstmate whose fm-fleet-snapshot.sh lacks the fork's archived-blocker fix
+# (upstream's main) counts a blocker moved to the Done archive as unresolved.
+# The reader refuses to report on it: exit 4 and one line naming the gap, found
+# from the script's text alone, without running it or writing anything.
+test_a_snapshot_without_the_archive_fix_is_exit_4() {
+  local home root out rc=0 ran="$TMP_ROOT/gap-snapshot-ran" line
+  home=$(tb_make_home read-gap)
+  write_fleet "$home"
+  root="$TMP_ROOT/read-gap-root"
+  read_root "$root"
+  printf '#!/usr/bin/env bash\n: > %q\nexec %q "$@"\n' "$ran" "$ROOT/bin/fm-fleet-snapshot.sh" \
+    > "$root/bin/fm-fleet-snapshot.sh"
+  chmod +x "$root/bin/fm-fleet-snapshot.sh"
+  line="這個 home 的 first mate 缺少封存 blocker 的修正：$(cd "$root/bin" && pwd)/fm-fleet-snapshot.sh 會把已搬進 Done 封存的 blocker 當成沒完成，項目會看起來卡住，所以先不回報。把 fork 的這個修正（bin/fm-fleet-snapshot.sh 呼叫 bin/fm-backlog-archive-lib.sh 的 fm_backlog_archived_done_ids）移植到那個 code root，再更新。"
+  ls -A "$home" > "$TMP_ROOT/gap-home-before"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 - 2>"$TMP_ROOT/gap-err") || rc=$?
+  expect_code 4 "$rc" "a read on a snapshot without the archived-blocker fix"
+  assert_equals "$line" "$(cat "$TMP_ROOT/gap-err")" "stderr must be exactly the one line naming the gap"
+  assert_equals "" "$out" "a read that cannot report must print no report"
+  assert_absent "$ran" "the check must not run the snapshot"
+  assert_equals "$(cat "$TMP_ROOT/gap-home-before")" "$(ls -A "$home")" "the check must write nothing in the home"
+  expect_code 2 "$(tb_code "$home" "$root/bin/fm-topic-board-read.sh" 0 nothex)" \
+    "a malformed cursor is still a usage error on a home that cannot report"
+  printf '#!/usr/bin/env bash\n# fm_backlog_archived_done_ids\nexec %q "$@"\n' "$ROOT/bin/fm-fleet-snapshot.sh" \
+    > "$root/bin/fm-fleet-snapshot.sh"
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 -) ||
+    fail "a read on a snapshot with the fix must succeed"
+  assert_equals '1' "$(jq -r .schema <<< "$out")" "with the fix in place the reader reports again"
+  pass "a snapshot without the archived-blocker fix is exit 4 with one line, found without running it"
 }
 
 test_a_spawn_seeded_worker_is_unstarted() {
@@ -217,9 +255,7 @@ test_a_spawn_seeded_worker_is_unstarted() {
   home=$(tb_make_home read-unstarted)
   write_fleet "$home"
   root="$TMP_ROOT/read-unstarted-root"
-  mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-topic-board-read.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-board-lib.sh \
-    "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-tasks-axi-lib.sh "$root/bin/"
+  read_root "$root"
   tb_seed_unstarted "$root" run-a
   assert_equals 'run-a|working|true' \
     "$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-topic-board-read.sh" 0 - |
@@ -233,13 +269,16 @@ test_a_spawn_seeded_worker_is_unstarted() {
 # unbound variable. Linux cannot show that failure, so the shape is checked.
 # The board's own two scripts have the same check in myshape/test/stage-1-topic.sh.
 test_variables_are_braced_before_wide_characters() {
-  local hits
-  hits=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$ROOT/bin/fm-topic-board-read.sh" || true)
-  assert_equals "" "$hits" "fm-topic-board-read.sh: write \${name} when a non-ASCII character follows the variable"
+  local hits file
+  for file in fm-topic-board-read.sh fm-board-lib.sh; do
+    hits=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' "$ROOT/bin/$file" || true)
+    assert_equals "" "$hits" "$file: write \${name} when a non-ASCII character follows the variable"
+  done
   pass "no variable is directly followed by a non-ASCII character"
 }
 
 fm_test_run test_first_read_reports_the_whole_home test_ledger_delta_and_continuity \
   test_a_very_large_ledger_can_be_read test_large_ledger_is_read_in_bounded_pieces \
   test_secondmates_and_in_home test_usage_and_failure \
+  test_a_snapshot_without_the_archive_fix_is_exit_4 \
   test_a_spawn_seeded_worker_is_unstarted test_variables_are_braced_before_wide_characters
