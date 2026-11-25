@@ -37,9 +37,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The guybeju/firstmate commit the adapter is tested against: the commit the
-  # import came from. Changing it is a pull request here.
-  FIRSTMATE_COMMIT: 763b758ba65ccf0d5d766690c7195c8b39602a29
+  # The guybeju/firstmate commit the adapter is tested against: the merge of
+  # guybeju/firstmate#76, whose carry vendors this repository. Changing it is a
+  # pull request here.
+  FIRSTMATE_COMMIT: 31c0cb3d168e3d9e7ef7e24a604547290fd1ec32
 
 defaults:
   run:
