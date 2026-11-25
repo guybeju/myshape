@@ -1,0 +1,15 @@
+diff --git a/bin/fm-backlog-handoff.sh b/bin/fm-backlog-handoff.sh
+index 2b982c486ef56f5afd96ce3a69a0fb7d024a4731..0eab2db0fff60de2a1c093310901b6d30ebc70f8 100755
+--- a/bin/fm-backlog-handoff.sh
++++ b/bin/fm-backlog-handoff.sh
+@@ -689,6 +689,10 @@ remote_deliver_outbox() { # <secondmate-id> <outbox-path>
+       return 1
+     }
+   remote_rel="state/handoff/$id.outbox.md"
++  # A routed item's "topic:" line must be in the mate's queue copy when it tags
++  # the item at intake; a push that fails does not stop the handoff.
++  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-dispatch-plan.sh" queues-push --to "$id" \
++    </dev/null >/dev/null 2>&1 || true
+   if ! "$SCRIPT_DIR/fm-on.sh" --stdin "$id" fm-remote-file.sh put "$remote_rel" 1048576 \
+     "$bytes" "$hash" "$generation" <"$snapshot"; then
+     rm -f -- "$snapshot"
