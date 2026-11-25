@@ -69,10 +69,20 @@ export function fileSize(file: string): number {
   return fs.existsSync(file) ? fs.statSync(file).size : 0;
 }
 
-/** The pid stored in `file`, or null when the file is missing or malformed. */
+/**
+ * The pid stored in `file`, or null when the file is missing or malformed. A
+ * file deleted between the existence check and the read counts as missing.
+ */
 export function readPidFile(file: string): number | null {
   if (!fs.existsSync(file)) return null;
-  const pid = Number(fs.readFileSync(file, "utf8").trim());
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const pid = Number(content.trim());
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
