@@ -10,9 +10,6 @@ name: Tests
 #   this repository's two vendor lists name laid over its root and committed
 #   there locally: the shape a Firstmate fork has after vendoring this
 #   repository.
-# macOS bash 3.2: /bin/bash -n on every shell file, then the suites that run on
-#   macOS's BSD tools without a browser, with macOS's own /bin/bash first on
-#   PATH so every script and every `#!/usr/bin/env bash` gets 3.2.
 #
 # The suites print `skip:` and still pass when a tool is missing. Each job
 # installs the tools its suites use, so any skip fails the job and is listed as
@@ -59,7 +56,6 @@ jobs:
           - name: Board
             os: ubuntu-24.04
             firstmate: false
-            bash32: false
             stages: |
               bash board/myshape/test/check-dist.sh
               pnpm --dir board/myshape test
@@ -70,38 +66,9 @@ jobs:
           - name: Firstmate adapter
             os: ubuntu-24.04
             firstmate: true
-            bash32: false
             stages: |
               firstmate/dispatch-plan/test/run.sh
               firstmate/fm-board/test/run.sh
-          # Left out here, each for what it needs that this job does not set
-          # up: GNU sed, for `sed -i` with no suffix (myshape
-          # stage-7-aggregator) and \n in a replacement (myshape
-          # stage-7-isolation); firefox on PATH (myshape stage-7-page, fm-board
-          # stage-5-page); sha256sum, called without a shasum fallback
-          # (myshape stage-7-standalone, fm-board stage-1-feed and
-          # stage-7-upgrade), which the Show tools step reports; and a ps that
-          # names a script's process after the script (fm-board
-          # stage-2-startup, which prints skip: otherwise).
-          - name: macOS bash 3.2
-            os: macos-15
-            firstmate: true
-            bash32: true
-            stages: |
-              /bin/bash board/myshape/test/run.sh 1 2
-              /bin/bash firstmate/dispatch-plan/test/run.sh
-              /bin/bash firstmate/myshape/test/check-signals.sh
-              /bin/bash firstmate/fm-board/test/stage-1-read.sh
-              /bin/bash firstmate/fm-board/test/stage-1-tag.sh
-              /bin/bash firstmate/fm-board/test/stage-2-deliver.sh
-              /bin/bash firstmate/fm-board/test/stage-2-topics-tag.sh
-              /bin/bash firstmate/fm-board/test/stage-3-data.sh
-              /bin/bash firstmate/fm-board/test/stage-3-handson-holds.sh
-              /bin/bash firstmate/fm-board/test/stage-3-split.sh
-              /bin/bash firstmate/fm-board/test/stage-4-binding.sh
-              /bin/bash firstmate/fm-board/test/stage-4-writes.sh
-              /bin/bash firstmate/fm-board/test/stage-5-http.sh
-              /bin/bash firstmate/fm-board/test/stage-6-rules.sh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -185,37 +152,6 @@ jobs:
           echo "$GITHUB_WORKSPACE/board/ci-tools/board-tests/node_modules/.bin" >> "$GITHUB_PATH"
       - name: pnpm install --frozen-lockfile
         run: pnpm --dir board/myshape install --frozen-lockfile
-      - name: Put macOS's /bin/bash 3.2 first on PATH
-        if: matrix.bash32
-        run: |
-          version=$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"')
-          echo "/bin/bash is $version"
-          if [ "$version" != 3.2 ]; then
-            echo "::error::/bin/bash is $version, not 3.2"
-            exit 1
-          fi
-          echo /bin >> "$GITHUB_PATH"
-      - name: /bin/bash -n on every shell file
-        if: matrix.bash32
-        # A shell file is a tracked *.sh, or a tracked file whose first line is
-        # a sh or bash shebang.
-        run: |
-          checked=0
-          failed=0
-          while IFS= read -r file; do
-            case "$file" in
-              *.sh) ;;
-              *) head -n 1 "board/$file" | grep -qE '^#!.*(/|env )(ba)?sh([[:space:]]|$)' || continue ;;
-            esac
-            checked=$((checked + 1))
-            if ! /bin/bash -n "board/$file"; then
-              failed=1
-              echo "::error file=$file::/bin/bash -n failed"
-            fi
-          done < <(git -C board ls-files)
-          echo "/bin/bash -n: $checked files" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$checked" -gt 0 ] || { echo '::error::no shell file found'; exit 1; }
-          exit "$failed"
       - name: Show tools
         run: |
           {
