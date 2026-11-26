@@ -100,7 +100,7 @@ describe("the words", () => {
   });
 
   it("suggests a use for each rt but none", () => {
-    expect(rtHint("hard-rt", "first mate")).toBe("建議 first mate：這一場的時限不能錯過");
+    expect(rtHint("hard-rt", "plain")).toBe("建議 plain：這一場的時限不能錯過");
     expect(rtHint("soft-rt", "plain")).toBe("建議 plain：盡量在合理時間內處理，晚一點可以");
     expect(rtHint("none", "plain")).toBeNull();
   });
