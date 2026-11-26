@@ -8,7 +8,7 @@ import { stringField } from "./files.js";
 import type { BoardResponse } from "./protocol.js";
 import type { Actor, Draft, Frozen, Records, StoredRecord } from "./records.js";
 import { commitChange } from "./store.js";
-import type { CommitFile, CommitTarget, StoredBoard } from "./store.js";
+import type { CommitFile, CommitTarget, SchedulePart, StoredBoard } from "./store.js";
 import * as topics from "./topics.js";
 import type { MovePosition, Queue, TopicResult, TopicState } from "./topics.js";
 import * as todos from "./todos.js";
@@ -16,6 +16,9 @@ import type { CloseWords, TodoNotice, TodoResult, TodoStore } from "./todos.js";
 import type { NoticeEvent } from "./writes.js";
 import * as hashtags from "./hashtags.js";
 import type { Carried, HashtagRecord, HashtagResult, HashtagStore } from "./hashtags.js";
+import * as schedules from "./schedules.js";
+import type { ScheduleResult, ScheduleStore } from "./schedules.js";
+import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
 
 /** What an operation reads: the board as it is, who the agent side is, and the time. */
 export interface OpContext {
@@ -23,8 +26,11 @@ export interface OpContext {
   todos: Frozen<TodoStore>;
   confirmations: Frozen<ConfirmationStore>;
   hashtags: Frozen<HashtagStore>;
-  /** The board's saved records, oldest first, which the hashtag rails read. */
+  schedules: Frozen<ScheduleStore>;
+  /** The board's saved records, oldest first, which the hashtag and schedule rails read. */
   records: readonly HashtagRecord[];
+  /** This machine's time zone, for a schedule made without one. */
+  zone: string;
   /** Who asks: the captain on the page or the aggregator over the socket. */
   by: "captain" | "aggregator";
   /** The agent side's label, which its records and texts use. */
@@ -49,6 +55,8 @@ interface TopicOperation {
   run: (ctx: OpContext, args: Record<string, unknown>) => TopicResult | Usage;
   /** The change's follow-up in hashtags.json, from the topic result it follows. */
   hashtags?: (ctx: OpContext, args: Record<string, unknown>, result: TopicOk) => Follow;
+  /** The change's part in schedules.json (archiving pauses the topic's schedule), or null. */
+  schedules?: (ctx: OpContext, result: TopicOk) => SchedulePart | null;
 }
 
 type TopicOk = Extract<TopicResult, { ok: true }>;
@@ -72,7 +80,23 @@ interface ConfirmOperation {
   run: (ctx: OpContext, args: Record<string, unknown>) => ConfirmResult;
 }
 
-export type Operation = TopicOperation | TodoOperation | ConfirmOperation | HashtagOperation;
+export interface ScheduleOperation {
+  channel: Channel;
+  commitFile: "schedules";
+  run: (ctx: OpContext, args: Record<string, unknown>) => ScheduleResult;
+}
+
+export type Operation =
+  | TopicOperation
+  | TodoOperation
+  | ConfirmOperation
+  | HashtagOperation
+  | ScheduleOperation;
+
+/** The schedule on `id`, if any. */
+function scheduled(ctx: OpContext, id: string): boolean {
+  return schedules.scheduleOfTopic(ctx.schedules, ctx.topics, id) !== null;
+}
 
 function optionalQueue(args: Record<string, unknown>): Queue | undefined | null {
   const value = args["queue"];
@@ -100,6 +124,14 @@ function optionalId(args: Record<string, unknown>): { id?: string } | null {
   const id = args["id"];
   if (id === undefined) return {};
   return typeof id === "string" ? { id } : null;
+}
+
+/** Archiving a scheduled topic pauses its schedule and ends an open occurrence, each with a record. */
+function archiveSchedules(ctx: OpContext, result: TopicOk): SchedulePart | null {
+  if (!result.changed) return null;
+  const [record] = result.records;
+  const paused = schedules.pauseForArchive(ctx.schedules, scheduleEnv(ctx), record.topic as string);
+  return paused === null ? null : { next: paused.store, records: paused.records };
 }
 
 function create(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usage {
@@ -178,7 +210,53 @@ function merge(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usa
   const reason = optionalReason(args);
   if (from === null || into === null) return { usage: "merge 需要兩個議題 id。" };
   if (reason === null) return { usage: "--reason 要是一行文字。" };
-  return topics.merge(ctx.topics, from, into, ctx.now, reason);
+  return mergeScheduled(ctx, from, into, () =>
+    topics.merge(ctx.topics, from, into, ctx.now, reason),
+  );
+}
+
+/**
+ * A merge under the one-schedule-per-topic rule: two scheduled topics are
+ * refused, and a single schedule follows its topic (followMerge).
+ */
+function mergeScheduled(
+  ctx: OpContext,
+  from: string,
+  into: string,
+  apply: () => TopicResult,
+): TopicResult {
+  const moving = schedules.scheduleOfTopic(ctx.schedules, ctx.topics, from);
+  const staying = schedules.scheduleOfTopic(ctx.schedules, ctx.topics, into);
+  if (moving !== null && staying !== null && moving.id !== staying.id)
+    return refusedTopic("兩個議題都有排程，一個議題最多一筆排程：先刪掉其中一筆排程。");
+  const result = apply();
+  if (moving === null || staying !== null || !result.ok || !result.changed) return result;
+  return followMerge(ctx, result, moving.series.title);
+}
+
+/**
+ * A schedule follows its topic into the one it was merged into, which goes to
+ * 待辦 so the schedule decides when it comes up. The schedule keeps the old
+ * topic id; every reader follows `merged` from it.
+ */
+function followMerge(ctx: OpContext, merged: topics.TopicChange, title: string): TopicResult {
+  const [record] = merged.records;
+  const into = record.topic as string;
+  const name = merged.state.doc.topics[into]?.name ?? into;
+  const follow = {
+    kind: "schedule.merged" as const,
+    topic: into,
+    text: `排程「${title}」跟著議題併到「${name}」，議題放在「待辦」`,
+  };
+  if (merged.state.doc.queues.later.includes(into))
+    return { ...merged, records: [...merged.records, follow] };
+  const moved = topics.move(merged.state, into, "later", { last: true }, ctx.now);
+  if (!moved.ok || !moved.changed) return moved;
+  return {
+    ...moved,
+    line: `${merged.line}，排程跟著過來，議題放進「待辦」`,
+    records: [...merged.records, ...moved.records, follow],
+  };
 }
 
 function move(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usage {
@@ -188,7 +266,13 @@ function move(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usag
   if (id === null || queue === null || queue === undefined || position === null) {
     return { usage: "move 需要議題 id 與佇列（high、normal、later）。" };
   }
+  if (queue !== "later" && scheduled(ctx, id))
+    return refusedTopic("這個議題有排程，位置由時間決定；要移出「待辦」，先刪掉排程。");
   return topics.move(ctx.topics, id, queue, position, ctx.now);
+}
+
+function refusedTopic(line: string): TopicResult {
+  return { ok: false, code: "refused", line };
 }
 
 /** What a split asks for, or why it is malformed. */
@@ -479,6 +563,7 @@ export const OPERATIONS = {
         ? { usage: "archive 需要議題 id。" }
         : topics.archive(ctx.topics, id, ctx.now);
     },
+    schedules: archiveSchedules,
   },
   keep: {
     channel: "page",
@@ -495,7 +580,11 @@ export const OPERATIONS = {
       const id = stringField(args, "id");
       const queue = optionalQueue(args);
       if (id === null || queue === null) return { usage: "reopen 需要議題 id。" };
-      return topics.reopen(ctx.topics, id, queue, ctx.now);
+      // A scheduled topic always comes back to 待辦: its schedule decides when it comes up.
+      if (!scheduled(ctx, id)) return topics.reopen(ctx.topics, id, queue, ctx.now);
+      const result = topics.reopen(ctx.topics, id, "later", ctx.now);
+      if (!result.ok || !result.changed) return result;
+      return { ...result, line: `${result.line}（有排程，排程議題放在「待辦」）` };
     },
   },
   "todo-add": {
@@ -538,6 +627,7 @@ export const OPERATIONS = {
     },
   },
   ...HASHTAG_OPERATIONS,
+  ...scheduleOperations,
 } satisfies Record<string, Operation>;
 
 export type OperationName = keyof typeof OPERATIONS;
@@ -665,7 +755,11 @@ function applyTopicOp(
   board: StoredBoard,
   request: OpRequest,
   actor: Actor,
-  run: { result: TopicResult; follow: (result: TopicOk) => Follow },
+  run: {
+    result: TopicResult;
+    follow: (result: TopicOk) => Follow;
+    schedules: (result: TopicOk) => SchedulePart | null;
+  },
 ): Applied {
   const { result } = run;
   if (!result.ok) return answer(board, refused(result.line));
@@ -696,6 +790,7 @@ function applyTopicOp(
             records: withSuffix(follow.follow.records, suffix),
           },
         }),
+    ...schedulePartOf(run.schedules(result)),
   };
   return {
     ...commit(target, board, change, actor, withFollowLine(stamped.line, follow)),
@@ -782,7 +877,38 @@ function runTopicOp(
   if ("usage" in result) return answer(board, { ok: false, code: "usage", line: result.usage });
   const follow = (ok: TopicOk): Follow =>
     operation.hashtags?.(ctx, request.args, ok) ?? { follow: null, line: "" };
-  return applyTopicOp(target, board, request, actor, { result, follow });
+  const part = (ok: TopicOk): SchedulePart | null => operation.schedules?.(ctx, ok) ?? null;
+  return applyTopicOp(target, board, request, actor, { result, follow, schedules: part });
+}
+
+/** A topic change's part in schedules.json as the change carries it. */
+function schedulePartOf(part: SchedulePart | null): { schedules?: SchedulePart } {
+  return part === null ? {} : { schedules: part };
+}
+
+function applyScheduleOp(
+  target: CommitTarget,
+  board: StoredBoard,
+  request: OpRequest,
+  actor: Actor,
+  result: ScheduleResult,
+): Applied {
+  if (!result.ok) return answer(board, { ok: false, code: result.code, line: result.line });
+  if (!result.changed) {
+    assertUnchanged(request.op, board.schedules, result.store);
+    return answer(board, { ok: true, line: result.line });
+  }
+  const change = { file: "schedules" as const, next: result.store, records: result.records };
+  return commit(target, board, change, actor, result.line);
+}
+
+/** Who asks and what the board knows besides its state. */
+export interface Who {
+  label: string;
+  agent: string;
+  now: string;
+  records: readonly HashtagRecord[];
+  zone: string;
 }
 
 /**
@@ -794,7 +920,7 @@ export function applyOperation(
   target: CommitTarget,
   board: StoredBoard,
   request: OpRequest,
-  who: { label: string; agent: string; now: string; records: readonly HashtagRecord[] },
+  who: Who,
 ): Applied {
   const operation = operationOf(request.op);
   if (operation === undefined)
@@ -807,6 +933,7 @@ export function applyOperation(
     todos: board.todos,
     confirmations: board.confirmations,
     hashtags: board.hashtags,
+    schedules: board.schedules,
     by,
     ...who,
   };
@@ -817,5 +944,7 @@ export function applyOperation(
     return applyHashtagOp(target, board, request, actor, operation.run(ctx, request.args));
   if (operation.commitFile === "confirmations")
     return applyConfirmOp(target, board, request, actor, operation.run(ctx, request.args));
+  if (operation.commitFile === "schedules")
+    return applyScheduleOp(target, board, request, actor, operation.run(ctx, request.args));
   return applyTodoOp(target, board, request, actor, operation.run(ctx, request.args));
 }
