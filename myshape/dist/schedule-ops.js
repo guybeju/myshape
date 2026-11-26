@@ -33,7 +33,7 @@ function daysOf(args) {
     if (weekly === undefined)
         return undefined;
     const days = typeof weekly === "string" ? parseDays(weekly) : null;
-    return days ?? { problem: "--weekly 要是星期的縮寫，用逗號分開，例如 mon,thu" };
+    return days === null ? { problem: "--weekly 要是星期的縮寫，用逗號分開，例如 mon,thu" } : days;
 }
 /** The time of day a request names with --at; undefined when it names none. */
 function clockOf(args) {

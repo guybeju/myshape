@@ -1125,7 +1125,7 @@ export function revertChange(store, env, rid) {
         return unchanged(store, `ok ${rid} 本來就已撤回`);
     if ("problem" in found)
         return refused(found.problem);
-    const undo = undoOf(store, env, found.record);
+    const undo = undoOf(store, env, found.record, rid);
     if (typeof undo === "string")
         return refused(undo);
     const { before, after } = undo;
@@ -1148,18 +1148,25 @@ export function revertChange(store, env, rid) {
  * taken back now: the schedule is still as the change left it, a deleted one
  * is still kept, and it can go back on its topic.
  */
-function undoOf(store, env, source) {
-    const rid = source.rid ?? "";
-    const before = source.before === undefined ? null : readSnapshot(source.before);
-    const after = source.after === undefined ? null : readSnapshot(source.after);
+function undoOf(store, env, source, rid) {
+    const afterText = source.after ?? "";
+    const before = readSnapshot(source.before ?? "");
+    const after = readSnapshot(afterText);
     if (before === null || after === null)
         return `紀錄 ${rid} 的改前改後讀不懂，沒有撤回。`;
-    if (after.id !== before.id || snapshot(store, before.id) !== source.after)
+    const problem = changedSince(store, before, after, afterText);
+    if (problem !== null)
+        return problem;
+    const restore = before.series === null ? null : restoreProblem(store, env, before.id, before.series);
+    return restore ?? { before, after };
+}
+/** Why the schedule is no longer as the change left it, or null when it is. */
+function changedSince(store, before, after, afterText) {
+    if (after.id !== before.id || snapshot(store, before.id) !== afterText)
         return `排程 ${before.id} 在那之後又改過；先撤回較新的改動。`;
     if (after.series === null && store.removed[before.id] === undefined)
         return `排程 ${before.id} 刪掉已經超過 ${REVERT_DAYS} 天，不能撤回。`;
-    const problem = before.series === null ? null : restoreProblem(store, env, before.id, before.series);
-    return problem ?? { before, after };
+    return null;
 }
 /** Puts schedule `before.id` back as `before` says, with its advance skips. */
 function restoreSnapshot(next, before, current, env) {

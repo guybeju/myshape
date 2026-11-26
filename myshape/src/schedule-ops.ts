@@ -44,7 +44,7 @@ function daysOf(args: Record<string, unknown>): ScheduleInput["days"] | Problem 
     return weekly === undefined ? "daily" : { problem: "--daily 和 --weekly 只能選一個" };
   if (weekly === undefined) return undefined;
   const days = typeof weekly === "string" ? parseDays(weekly) : null;
-  return days ?? { problem: "--weekly 要是星期的縮寫，用逗號分開，例如 mon,thu" };
+  return days === null ? { problem: "--weekly 要是星期的縮寫，用逗號分開，例如 mon,thu" } : days;
 }
 
 /** The time of day a request names with --at; undefined when it names none. */
