@@ -10,6 +10,7 @@ import * as todos from "./todos.js";
 import * as hashtags from "./hashtags.js";
 import * as schedules from "./schedules.js";
 import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
+import { closedNotice } from "./schedule-notices.js";
 /** The schedule on `id`, if any. */
 function scheduled(ctx, id) {
     return schedules.scheduleOfTopic(ctx.schedules, ctx.topics, id) !== null;
@@ -554,6 +555,7 @@ function answer(board, response) {
         dispatchable: [],
         notices: [],
         decisions: [],
+        scheduleNotices: [],
     };
 }
 function refused(line) {
@@ -709,7 +711,21 @@ function applyScheduleOp(target, board, request, actor, result) {
         return answer(board, { ok: true, line: result.line });
     }
     const change = { file: "schedules", next: result.store, records: result.records };
-    return commit(target, board, change, actor, result.line);
+    const applied = commit(target, board, change, actor, result.line);
+    const closed = result.closed;
+    // Only the captain's close is news to the aggregator, and only once it was told of the occurrence.
+    if (applied.committed === null || !request.fromPage || closed === undefined)
+        return applied;
+    if (Object.keys(closed.occurrence.notices ?? {}).length === 0)
+        return applied;
+    const atMs = Date.parse(closed.occurrence.at);
+    const notice = closedNotice(board.schedules, board.topics, {
+        series: closed.occurrence.series,
+        key: closed.key,
+        atMs,
+        outcome: closed.outcome,
+    });
+    return { ...applied, scheduleNotices: [notice] };
 }
 /**
  * Runs one operation and saves what it changed. The page's requests are the

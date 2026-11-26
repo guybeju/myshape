@@ -15,11 +15,12 @@
 //     that read leaves are saved only through board-server.ts saveRecords,
 //     which commits them with commitChange;
 //   - no file but topics.ts, todos.ts, confirmations.ts, hashtags.ts,
-//     schedules.ts and store.ts assigns into, deletes from or pushes onto the
-//     board's state (doc, archive, items, marks, closed, outbox, queues,
-//     merged, history, confirmations, entries, hashtags, views, settings,
-//     series, occurrences, recent, removed), which a cast past the read-only
-//     types would otherwise allow.
+//     schedules.ts, schedule-clock.ts (the clock's pure step over the
+//     schedules, which the service commits) and store.ts assigns into,
+//     deletes from or pushes onto the board's state (doc, archive, items,
+//     marks, closed, outbox, queues, merged, history, confirmations, entries,
+//     hashtags, views, settings, series, occurrences, recent, removed), which
+//     a cast past the read-only types would otherwise allow.
 //
 // Usage: node state-writers.mjs <typescript-package-dir> <src-dir>
 import fs from "node:fs";
@@ -31,7 +32,8 @@ const { createScanner } = await import(path.join(typescript, "dist/ast/scanner.j
 
 const STATE_FIELDS = new Set(["doc", "archive", "items", "marks", "closed", "outbox", "queues", "merged", "history",
   "confirmations", "entries", "hashtags", "views", "settings", "series", "occurrences", "recent", "removed"]);
-const STATE_OWNERS = new Set(["topics.ts", "todos.ts", "confirmations.ts", "hashtags.ts", "schedules.ts", "store.ts"]);
+const STATE_OWNERS = new Set(["topics.ts", "todos.ts", "confirmations.ts", "hashtags.ts", "schedules.ts",
+  "schedule-clock.ts", "store.ts"]);
 const STATE_PATHS = new Set(["topics", "archive", "todos", "confirmations", "hashtags", "schedules"]);
 const STORE_EXPORTS = new Set(["readBoard", "loadBoard", "commitChange"]);
 const WRITERS = new Set(["writeTopics", "writeTodos", "writeOwnFile", "writeIfChanged"]);

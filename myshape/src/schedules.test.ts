@@ -35,6 +35,7 @@ import type {
   Series,
 } from "#board/schedules.js";
 import { emptyState } from "#board/topics.js";
+import { generator } from "#board/seeded-random.test-helper.js";
 import type { TopicState } from "#board/topics.js";
 
 const MINUTE = 60_000;
@@ -806,6 +807,58 @@ describe("undoing a change from its record", () => {
   });
 });
 
+describe("where the clock starts counting again", () => {
+  const LATER = NOW + 3 * 24 * 60 * MINUTE;
+  const checked = (store: ScheduleStore): string | undefined => seriesOf(store).checked_through;
+  const at = (ms: number) => env("captain", { nowMs: ms });
+
+  it("restarts at a resume, so nothing paused is reported missed", () => {
+    const paused = storeOf(setPaused(added(), env("captain"), "sync", true));
+    expect(checked(paused)).toBeUndefined();
+    expect(checked(storeOf(setPaused(paused, at(LATER), "sync", false)))).toBe(
+      "2026-11-29T06:00:00Z",
+    );
+  });
+
+  it("restarts when everything is switched back on, and not when it is switched off", () => {
+    const all = storeOf(setAllPaused(added(), env("captain"), true));
+    expect(checked(all)).toBeUndefined();
+    expect(checked(storeOf(setAllPaused(all, at(LATER), false)))).toBe("2026-11-29T06:00:00Z");
+  });
+
+  it("restarts at a retime but not at an edit that moves no ring", () => {
+    const store = added();
+    expect(
+      checked(storeOf(editSchedule(store, at(LATER), { topic: "sync", duration: 30 }))),
+    ).toBeUndefined();
+    expect(
+      checked(
+        storeOf(editSchedule(store, at(LATER), { topic: "sync", at: { hour: 9, minute: 0 } })),
+      ),
+    ).toBe("2026-11-29T06:00:00Z");
+  });
+
+  it("restarts the aggregator's schedules when the captain enables them", () => {
+    const store = added("aggregator");
+    store.settings.aggregator_needs_enable = true;
+    expect(checked(storeOf(markSeen(store, at(LATER))))).toBe("2026-11-29T06:00:00Z");
+    const lifted = storeOf(updateSettings(store, at(LATER), { aggregator_needs_enable: false }));
+    expect(checked(lifted)).toBe("2026-11-29T06:00:00Z");
+    expect(
+      checked(storeOf(updateSettings(store, at(LATER), { late_after_min: 9 }))),
+    ).toBeUndefined();
+  });
+
+  it("never moves it back", () => {
+    const store = added();
+    seriesOf(store).checked_through = "2026-12-31T00:00:00Z";
+    const paused = storeOf(setPaused(store, env("captain"), "sync", true));
+    expect(checked(storeOf(setPaused(paused, at(LATER), "sync", false)))).toBe(
+      "2026-12-31T00:00:00Z",
+    );
+  });
+});
+
 describe("the aggregator's hourly cap", () => {
   it("counts the aggregator's schedule changes in the last hour only", () => {
     const now = NOW / 1000;
@@ -953,18 +1006,6 @@ describe("reading schedules.json", () => {
     expect(() => parseSchedules({ v: 2 })).toThrow("v: 1");
   });
 });
-
-/** A seeded generator (mulberry32), so a failing case can be replayed from its seed. */
-function generator(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
 
 describe("properties", () => {
   const ZONES = [

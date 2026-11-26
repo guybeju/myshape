@@ -127,9 +127,18 @@ export type ScheduleResult =
       store: ScheduleStore;
       line: string;
       records: readonly [Draft, ...Draft[]];
+      /** An occurrence this change ended, as it was while open: the page's close tells the aggregator. */
+      closed?: ClosedOccurrence;
     }
   | { ok: true; changed: false; store: Frozen<ScheduleStore>; line: string }
   | { ok: false; code: "refused" | "usage"; line: string };
+
+/** An occurrence a close ended, with its key and how it ended. */
+export interface ClosedOccurrence {
+  key: string;
+  occurrence: Frozen<Occurrence>;
+  outcome: CloseOutcome;
+}
 
 /** A saved record as the schedule rails read it (oversight.ts), with the schedule on each side. */
 export type ScheduleRecord = WatchedRecord & { before?: string; after?: string };
@@ -483,7 +492,8 @@ export function hasEnded(occurrence: Frozen<Occurrence>, nowMs: number): boolean
   return Date.parse(occurrence.closes_by) <= nowMs;
 }
 
-function instantOf(key: string): number {
+/** The instant an occurrence key names; keys that do not parse sort first. */
+export function instantOf(key: string): number {
   return parseOccurrenceKey(key)?.at ?? Number.NEGATIVE_INFINITY;
 }
 
@@ -546,8 +556,20 @@ function unchanged(store: Frozen<ScheduleStore>, line: string): ScheduleResult {
   return { ok: true, changed: false, store, line };
 }
 
-function changed(store: ScheduleStore, line: string, records: [Draft, ...Draft[]]): ScheduleResult {
-  return { ok: true, changed: true, store, line, records };
+function changed(
+  store: ScheduleStore,
+  line: string,
+  records: [Draft, ...Draft[]],
+  closed?: ClosedOccurrence,
+): ScheduleResult {
+  return {
+    ok: true,
+    changed: true,
+    store,
+    line,
+    records,
+    ...(closed === undefined ? {} : { closed }),
+  };
 }
 
 function clone(store: Frozen<ScheduleStore>): ScheduleStore {
@@ -621,7 +643,18 @@ function record(
   };
 }
 
-function pushRecent(store: ScheduleStore, id: string, entry: RecentEntry): void {
+/**
+ * Starts the clock's count for `series` at `nowMs`, never earlier than it
+ * was: a change that switches a schedule back on or moves when it rings
+ * leaves nothing before it for the clock to open or report missed.
+ */
+export function restartCount(series: Series, nowMs: number): void {
+  if (Date.parse(series.checked_through ?? "") > nowMs) return;
+  series.checked_through = isoSeconds(nowMs);
+}
+
+/** Adds an entry to a schedule's last ten. */
+export function pushRecent(store: ScheduleStore, id: string, entry: RecentEntry): void {
   store.recent[id] = [...(store.recent[id] ?? []), entry].slice(-RECENT_KEEP);
 }
 
@@ -956,10 +989,7 @@ export function editSchedule(
   const next = clone(store);
   next.series[id] = updated;
   dropStaleSkips(next, id);
-  const held =
-    isRetime(series, updated) && env.actor.by === "aggregator"
-      ? holdBackFirstRing(next, id, env)
-      : 0;
+  const held = isRetime(series, updated) ? retimed(next, id, env) : 0;
   const what = `${describeRule(rule)}（${updated.tz}）`;
   const tail = earliestLine(next, id, env, held);
   const topic = topicOf(env, series);
@@ -990,6 +1020,15 @@ function edited(series: Frozen<Series>, rule: Rule, input: ScheduleInput): Serie
   };
 }
 
+/**
+ * After a retime the clock counts from now, and the aggregator's retime is
+ * held to the first-ring rule; returns how many occurrences that skipped.
+ */
+function retimed(next: ScheduleStore, id: string, env: ScheduleEnv): number {
+  restartCount(next.series[id] as Series, env.nowMs);
+  return env.actor.by === "aggregator" ? holdBackFirstRing(next, id, env) : 0;
+}
+
 /** Whether an edit moves when the schedule rings: its rule, zone or lead. */
 function isRetime(before: Frozen<Series>, after: Frozen<Series>): boolean {
   return before.rule !== after.rule || before.tz !== after.tz || before.lead_min !== after.lead_min;
@@ -1014,6 +1053,7 @@ export function setPaused(
   if (blocked !== null) return refused(blocked);
   const next = clone(store);
   (next.series[id] as Series).state = state;
+  if (!paused) restartCount(next.series[id] as Series, env.nowMs);
   return capped(
     store,
     env,
@@ -1320,14 +1360,20 @@ export function closeOccurrence(
   pushRecent(next, occurrence.series, endedEntry(key, occurrence, outcome, note, env));
   const words = outcome === "done" ? "結束" : "跳過";
   const said = note === undefined ? "" : `：${note}`;
-  return changed(next, `ok ${key} 已${words}`, [
-    {
-      kind: "occurrence.closed",
-      topic: topicOf(env, series),
-      outcome,
-      text: `排程「${series.title}」${when(series, Date.parse(occurrence.at))} 那一場${words}${said}${suffix(env)}`,
-    },
-  ]);
+  const text = `排程「${series.title}」${when(series, Date.parse(occurrence.at))} 那一場${words}${said}`;
+  return changed(
+    next,
+    `ok ${key} 已${words}`,
+    [
+      {
+        kind: "occurrence.closed",
+        topic: topicOf(env, series),
+        outcome,
+        text: `${text}${suffix(env)}`,
+      },
+    ],
+    { key, occurrence, outcome },
+  );
 }
 
 // ---------------------------------------------------------------- the captain's page only
@@ -1416,6 +1462,9 @@ export function updateSettings(
   }
   const next = clone(store);
   next.settings = settings;
+  if (store.settings.aggregator_needs_enable && !settings.aggregator_needs_enable)
+    for (const series of Object.values(next.series))
+      if (isNew(series)) restartCount(series, env.nowMs);
   const said = changedNames
     .map(
       (name) =>
@@ -1443,6 +1492,7 @@ export function setAllPaused(
     return unchanged(store, `ok 排程本來就${paused ? "全部暫停了" : "沒有全部暫停"}`);
   const next = clone(store);
   next.settings.all_paused = paused;
+  if (!paused) for (const series of Object.values(next.series)) restartCount(series, env.nowMs);
   const text = paused ? "所有排程暫停：不開新時段、不送排程通知" : "所有排程恢復";
   return changed(next, `ok ${text}`, [
     { kind: "schedule.all_paused", topic: null, text: `${text}${suffix(env)}` },
@@ -1489,7 +1539,10 @@ export function markSeen(store: Frozen<ScheduleStore>, env: ScheduleEnv): Schedu
   const fresh = Object.keys(store.series).filter((id) => isNew(store.series[id] as Frozen<Series>));
   if (unseen === 0 && fresh.length === 0) return unchanged(store, "ok 沒有還沒看過的排程改動");
   const next = clone(store);
-  for (const id of fresh) (next.series[id] as Series).seen = true;
+  for (const id of fresh) {
+    (next.series[id] as Series).seen = true;
+    restartCount(next.series[id] as Series, env.nowMs);
+  }
   const text = `看過 ${env.actor.label} 最近的排程改動（${unseen} 筆，新的排程 ${fresh.length} 筆）`;
   return changed(next, `ok ${text}`, [
     { kind: "schedule.seen", topic: null, text: `${text}${suffix(env)}` },
@@ -1618,16 +1671,11 @@ function restoreSnapshot(
       };
     return;
   }
-  const kept =
-    current === undefined
-      ? {}
-      : {
-          ...(current.seen === undefined ? {} : { seen: current.seen }),
-          ...(current.checked_through === undefined
-            ? {}
-            : { checked_through: current.checked_through }),
-        };
-  next.series[id] = { ...(structuredClone(before.series) as Series), ...kept };
+  const kept = current === undefined || current.seen === undefined ? {} : { seen: current.seen };
+  const restored: Series = { ...(structuredClone(before.series) as Series), ...kept };
+  if (current?.checked_through !== undefined) restored.checked_through = current.checked_through;
+  restartCount(restored, env.nowMs);
+  next.series[id] = restored;
   delete next.removed[id];
 }
 

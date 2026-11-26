@@ -19,6 +19,8 @@ import type { Carried, HashtagRecord, HashtagResult, HashtagStore } from "./hash
 import * as schedules from "./schedules.js";
 import type { ScheduleResult, ScheduleStore } from "./schedules.js";
 import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
+import { closedNotice } from "./schedule-notices.js";
+import type { ScheduleNotice } from "./schedule-notices.js";
 
 /** What an operation reads: the board as it is, who the agent side is, and the time. */
 export interface OpContext {
@@ -680,6 +682,8 @@ export interface Applied {
   /** For the aggregator: the hands-on notices, and what the captain decided on the page. */
   notices: TodoNotice[];
   decisions: PageNotice[];
+  /** For the aggregator: the captain ended an occurrence on the page after its notices went out. */
+  scheduleNotices: ScheduleNotice[];
 }
 
 function answer(board: StoredBoard, response: BoardResponse): Applied {
@@ -692,6 +696,7 @@ function answer(board: StoredBoard, response: BoardResponse): Applied {
     dispatchable: [],
     notices: [],
     decisions: [],
+    scheduleNotices: [],
   };
 }
 
@@ -899,7 +904,19 @@ function applyScheduleOp(
     return answer(board, { ok: true, line: result.line });
   }
   const change = { file: "schedules" as const, next: result.store, records: result.records };
-  return commit(target, board, change, actor, result.line);
+  const applied = commit(target, board, change, actor, result.line);
+  const closed = result.closed;
+  // Only the captain's close is news to the aggregator, and only once it was told of the occurrence.
+  if (applied.committed === null || !request.fromPage || closed === undefined) return applied;
+  if (Object.keys(closed.occurrence.notices ?? {}).length === 0) return applied;
+  const atMs = Date.parse(closed.occurrence.at);
+  const notice = closedNotice(board.schedules, board.topics, {
+    series: closed.occurrence.series,
+    key: closed.key,
+    atMs,
+    outcome: closed.outcome,
+  });
+  return { ...applied, scheduleNotices: [notice] };
 }
 
 /** Who asks and what the board knows besides its state. */

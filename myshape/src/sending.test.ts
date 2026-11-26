@@ -50,6 +50,8 @@ interface Harness {
   tags: Map<string, string | null>;
   /** Every write that ended delivered or handled elsewhere, in the order it did. */
   finished: WriteRecord[];
+  /** Every write that expired unsent, in the order it did. */
+  expired: WriteRecord[];
   changes: () => number;
   audit: () => Record<string, unknown>[];
   /** The ids of every release the engine recorded, in order. */
@@ -158,6 +160,7 @@ function harness(
   const calls: Record<string, unknown>[] = [];
   const tags = new Map<string, string | null>();
   const finished: WriteRecord[] = [];
+  const expired: WriteRecord[] = [];
   let changes = 0;
   const engine = new WriteEngine(
     auditFile,
@@ -178,6 +181,7 @@ function harness(
         changes += 1;
       },
       onFinished: (record) => finished.push(record),
+      onExpired: (record) => expired.push(record),
     },
     { retryDelaysMs: [5, 5], resumeWindowMs: 60_000, commandTimeoutMs: 1000, ...timings },
   );
@@ -189,6 +193,7 @@ function harness(
     next: (...results) => queue.push(...results),
     tags,
     finished,
+    expired,
     changes: () => changes,
     audit: () =>
       fs
@@ -878,6 +883,7 @@ describe("serialization", () => {
         readTags: async () => "",
         onChange: () => undefined,
         onFinished: () => undefined,
+        onExpired: () => undefined,
       },
       { retryDelaysMs: [80], resumeWindowMs: 1000, commandTimeoutMs: 1000 },
     );

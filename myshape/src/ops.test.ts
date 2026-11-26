@@ -535,6 +535,53 @@ describe("the queue rules of scheduled topics", () => {
   });
 });
 
+describe("closing an occurrence on the page", () => {
+  const KEY = "d:20261121T0010Z";
+  function withNotices(board: StoredBoard): StoredBoard {
+    const schedules = structuredClone(board.schedules) as ScheduleStore;
+    (schedules.occurrences[KEY] as { notices?: Record<string, string> }).notices = {
+      pre: "w-s-d-20261121T0010Z-pre",
+    };
+    return { ...board, schedules };
+  }
+  function close(board: StoredBoard, fromPage: boolean) {
+    return applyOperation(
+      target,
+      board,
+      { op: "schedule-close", args: { key: KEY, outcome: "skipped" }, fromPage },
+      WHO,
+    );
+  }
+
+  it("tells the aggregator with a fixed sentence once its notices went out", () => {
+    const applied = close(withNotices(readBoard(paths).board), true);
+    expect(applied.response).toMatchObject({ ok: true });
+    expect(applied.scheduleNotices).toEqual([
+      {
+        topic: "d",
+        action: {
+          kind: "notice",
+          event: "schedule.closed",
+          text: "排程「D」11-21（六）08:10 那一場，使用者在看板上跳過了，不用準備了（議題 d，這一場 d:20261121T0010Z）",
+          topic: { id: "d", name: "D" },
+          occurrence: {
+            key: KEY,
+            at: "2026-11-21T00:10:00Z",
+            local: "2026-11-21T08:10+08:00",
+            phase: "closed",
+            rt: "none",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("sends nothing for the aggregator's own close, or before any notice went out", () => {
+    expect(close(withNotices(readBoard(paths).board), false).scheduleNotices).toEqual([]);
+    expect(close(readBoard(paths).board, true).scheduleNotices).toEqual([]);
+  });
+});
+
 describe("a result that says it changed nothing", () => {
   it("must hand back the state it was given", () => {
     expect(() => assertUnchanged("op", { a: 1 }, { a: 1 })).not.toThrow();

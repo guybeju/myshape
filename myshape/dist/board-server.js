@@ -26,7 +26,8 @@ import { DispatchNotifier, fileStore } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import { DecisionStore, decisionStep } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
-import { machineTimeZone } from "./schedule-time.js";
+import { localLabel, machineTimeZone } from "./schedule-time.js";
+import { TICK_MS, endedNotices, tick } from "./schedule-clock.js";
 import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
 import { buildView, placeTask } from "./view.js";
@@ -35,6 +36,7 @@ import { checkName, hashtagView, nameOfKey, topicsWith } from "./hashtags.js";
 import { beforeDeadline, findTasks, freshTags, knowHomes, lookupDeadline, reminderPrefix, } from "./lookup.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 import { deliveryRecord } from "./writes.js";
+import { expiresAt } from "./writes.js";
 const PRIVATE_FILE = 0o600;
 const HEALTH_PROBE_MS = 3000;
 const NOTIFY_DELAY_MS = 30_000;
@@ -256,7 +258,7 @@ function writeView(record) {
 }
 /** Writes worth showing: everything from the last day, plus anything still unsettled. */
 function visibleWrites(service) {
-    const settled = ["delivered", "handled_elsewhere", "ignored"];
+    const settled = ["delivered", "handled_elsewhere", "ignored", "expired"];
     const cutoff = Date.now() - WRITE_HISTORY_MS;
     return [...service.writes.records.values()]
         .filter((record) => record.createdAt >= cutoff || !settled.includes(record.state))
@@ -439,6 +441,7 @@ const SERVICE_HANDLERS = {
     retract,
     which,
     find,
+    "schedule-tick": async (service) => runClock(service),
     ...(TEST_MODE
         ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore }
         : {}),
@@ -475,6 +478,8 @@ function parseRequest(line) {
 }
 function shutdown(service) {
     log("stopping");
+    if (service.clock !== undefined && service.clock !== null)
+        clearInterval(service.clock);
     service.poller?.stop();
     service.writes?.stop();
     service.notifier?.stop();
@@ -554,16 +559,76 @@ function notifyDelay() {
     const configured = Number(process.env["MYSHAPE_NOTIFY_MS"]);
     return TEST_MODE && Number.isFinite(configured) && configured > 0 ? configured : NOTIFY_DELAY_MS;
 }
-/** Hands the aggregator one notice about something that happened on the board. */
-function submitNotice(service, notice, topic) {
-    service.writes.submit({
-        channel: "auto",
-        home: MAIN_HOME,
-        task: null,
-        topic,
-        text: notice.text,
-        action: notice,
+/**
+ * Hands the aggregator one notice about something that happened on the
+ * board; under a fixed id, handing it in again does nothing.
+ */
+function submitNotice(service, notice, topic, fixed) {
+    service.writes.submit({ channel: "auto", home: MAIN_HOME, task: null, topic, text: notice.text, action: notice }, fixed);
+}
+function submitScheduleNotice(service, notice) {
+    submitNotice(service, notice.action, notice.topic, notice.fixed);
+}
+/** Gives up on the not yet handed over notices of occurrences that have ended. */
+function voidEndedNotices(service) {
+    for (const id of endedNotices(service.board.schedules))
+        service.writes.expire(id, "沒送：這一場已經結束");
+}
+/**
+ * One check of the schedule clock (schedule-clock.ts): saves what it changed
+ * with records by the board, then hands over its notices. When the change
+ * cannot be saved nothing is handed over, and the next check tries again.
+ * It never reads a home.
+ */
+function runClock(service) {
+    const result = tick(service.board.schedules, {
+        topics: service.board.topics,
+        nowMs: Date.now(),
     });
+    if (result.change !== null) {
+        const change = {
+            file: "schedules",
+            next: result.change.store,
+            records: result.change.records,
+        };
+        const saved = commitChange(commitTarget(service), service.board, change, {
+            by: "board",
+            label: labelOf(service),
+        });
+        if (!saved.ok) {
+            log(`schedule clock could not save: ${saved.line}`);
+            return refused(saved.line);
+        }
+        service.board = saved.board;
+        service.version += 1;
+        if (saved.appendError !== null)
+            log(`records wait in the outbox: ${saved.appendError}`);
+    }
+    voidEndedNotices(service);
+    service.writes.expireOverdue();
+    for (const notice of result.notices)
+        submitScheduleNotice(service, notice);
+    return { ok: true, line: result.line };
+}
+/** Runs the clock every 30 seconds; a failed check is logged and the next one runs as usual. */
+function startClock(service) {
+    const check = () => {
+        try {
+            runClock(service);
+        }
+        catch (error) {
+            log(`schedule clock failed: ${error.stack ?? String(error)}`);
+        }
+    };
+    check();
+    service.clock = setInterval(check, TICK_MS);
+}
+/** Records that a notice expired unsent, under its topic. */
+function recordExpired(service, record) {
+    const at = expiresAt(record.action);
+    const until = at === null ? "" : `（期限 ${localLabel(machineTimeZone(), at)}）`;
+    const text = `${record.error ?? "沒送"}${until}：${record.text}`;
+    saveRecords(service, [{ kind: "writes.expired", topic: record.topic, text }], "board");
 }
 function topicRef(service, id) {
     const name = service.board.topics.doc.topics[id]?.name ?? service.board.topics.archive.topics[id]?.name;
@@ -754,6 +819,7 @@ function loadService(boot) {
         timings,
         version: 1,
         ipc: null,
+        clock: null,
         aggregator,
         poller: new Poller(run, journal, new Offsets(paths), timings, {
             onChange: bump,
@@ -777,6 +843,7 @@ function loadService(boot) {
             readTags: (home, task) => readTags(service, home, task),
             onChange: bump,
             onFinished: (record) => recordFinished(service, record),
+            onExpired: (record) => recordExpired(service, record),
         }, writeTimings()),
     };
     const reasons = blockedReasons(service);
@@ -785,6 +852,7 @@ function loadService(boot) {
     service.writes.resumeUnfinished();
     announceConfirmed(service, loaded.confirmed);
     service.notifier.start(service.board.topics);
+    startClock(service);
     return service;
 }
 /**
@@ -843,6 +911,10 @@ function topicOp(service, op, args, fromPage = false) {
     notifyDecision(service, applied.decisions);
     for (const notice of applied.notices)
         submitTodoNotice(service, notice);
+    for (const notice of applied.scheduleNotices)
+        submitScheduleNotice(service, notice);
+    if (applied.committed !== null)
+        voidEndedNotices(service);
     return applied.response;
 }
 /** Starts answering browser requests on the port this process already holds. */

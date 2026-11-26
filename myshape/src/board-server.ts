@@ -48,7 +48,9 @@ import type { PageAnswer } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
 import type { PageNotice } from "./ops.js";
 import type { Draft } from "./records.js";
-import { machineTimeZone } from "./schedule-time.js";
+import { localLabel, machineTimeZone } from "./schedule-time.js";
+import { TICK_MS, endedNotices, tick } from "./schedule-clock.js";
+import type { ScheduleNotice } from "./schedule-notices.js";
 import { commitChange, loadBoard } from "./store.js";
 import type { CommitTarget, LeftoverProposal, StoredBoard } from "./store.js";
 import * as topics from "./topics.js";
@@ -69,7 +71,8 @@ import {
 import type { LookupHost } from "./lookup.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 import { deliveryRecord } from "./writes.js";
-import type { Action, TopicRef, WriteRecord, WriteState, WriteTimings } from "./writes.js";
+import { expiresAt } from "./writes.js";
+import type { Action, FixedId, TopicRef, WriteRecord, WriteState, WriteTimings } from "./writes.js";
 
 const PRIVATE_FILE = 0o600;
 const HEALTH_PROBE_MS = 3000;
@@ -112,6 +115,8 @@ interface Service extends Boot {
   aggregator: Aggregator | null;
   /** What the last read of each home showed of its decisions (data/myshape/decisions.json). */
   decisions: DecisionStore;
+  /** The schedule clock's 30-second timer (schedule-clock.ts). */
+  clock: NodeJS.Timeout | null;
 }
 
 function log(message: string): void {
@@ -347,7 +352,7 @@ function writeView(record: WriteRecord): Record<string, unknown> {
 
 /** Writes worth showing: everything from the last day, plus anything still unsettled. */
 function visibleWrites(service: Service): Record<string, unknown>[] {
-  const settled = ["delivered", "handled_elsewhere", "ignored"];
+  const settled = ["delivered", "handled_elsewhere", "ignored", "expired"];
   const cutoff = Date.now() - WRITE_HISTORY_MS;
   return [...service.writes.records.values()]
     .filter((record) => record.createdAt >= cutoff || !settled.includes(record.state))
@@ -563,6 +568,7 @@ const SERVICE_HANDLERS: Record<string, AsyncHandler> = {
   retract,
   which,
   find,
+  "schedule-tick": async (service) => runClock(service),
   ...(TEST_MODE
     ? { dump, "test-write": testWrite, "test-resend": testResend, "test-ignore": testIgnore }
     : {}),
@@ -597,9 +603,10 @@ function parseRequest(line: string): BoardRequest | null {
 }
 
 function shutdown(
-  service: Boot & Partial<Pick<Service, "ipc" | "poller" | "writes" | "notifier">>,
+  service: Boot & Partial<Pick<Service, "ipc" | "poller" | "writes" | "notifier" | "clock">>,
 ): void {
   log("stopping");
+  if (service.clock !== undefined && service.clock !== null) clearInterval(service.clock);
   service.poller?.stop();
   service.writes?.stop();
   service.notifier?.stop();
@@ -680,20 +687,86 @@ function notifyDelay(): number {
   return TEST_MODE && Number.isFinite(configured) && configured > 0 ? configured : NOTIFY_DELAY_MS;
 }
 
-/** Hands the aggregator one notice about something that happened on the board. */
+/**
+ * Hands the aggregator one notice about something that happened on the
+ * board; under a fixed id, handing it in again does nothing.
+ */
 function submitNotice(
   service: Service,
   notice: Extract<Action, { kind: "notice" }>,
   topic: string | null,
+  fixed?: FixedId,
 ): void {
-  service.writes.submit({
-    channel: "auto",
-    home: MAIN_HOME,
-    task: null,
-    topic,
-    text: notice.text,
-    action: notice,
+  service.writes.submit(
+    { channel: "auto", home: MAIN_HOME, task: null, topic, text: notice.text, action: notice },
+    fixed,
+  );
+}
+
+function submitScheduleNotice(service: Service, notice: ScheduleNotice): void {
+  submitNotice(service, notice.action, notice.topic, notice.fixed);
+}
+
+/** Gives up on the not yet handed over notices of occurrences that have ended. */
+function voidEndedNotices(service: Service): void {
+  for (const id of endedNotices(service.board.schedules))
+    service.writes.expire(id, "沒送：這一場已經結束");
+}
+
+/**
+ * One check of the schedule clock (schedule-clock.ts): saves what it changed
+ * with records by the board, then hands over its notices. When the change
+ * cannot be saved nothing is handed over, and the next check tries again.
+ * It never reads a home.
+ */
+function runClock(service: Service): BoardResponse {
+  const result = tick(service.board.schedules, {
+    topics: service.board.topics,
+    nowMs: Date.now(),
   });
+  if (result.change !== null) {
+    const change = {
+      file: "schedules" as const,
+      next: result.change.store,
+      records: result.change.records,
+    };
+    const saved = commitChange(commitTarget(service), service.board, change, {
+      by: "board",
+      label: labelOf(service),
+    });
+    if (!saved.ok) {
+      log(`schedule clock could not save: ${saved.line}`);
+      return refused(saved.line);
+    }
+    service.board = saved.board;
+    service.version += 1;
+    if (saved.appendError !== null) log(`records wait in the outbox: ${saved.appendError}`);
+  }
+  voidEndedNotices(service);
+  service.writes.expireOverdue();
+  for (const notice of result.notices) submitScheduleNotice(service, notice);
+  return { ok: true, line: result.line };
+}
+
+/** Runs the clock every 30 seconds; a failed check is logged and the next one runs as usual. */
+function startClock(service: Service): void {
+  const check = (): void => {
+    try {
+      runClock(service);
+    } catch (error) {
+      log(`schedule clock failed: ${(error as Error).stack ?? String(error)}`);
+    }
+  };
+  check();
+  service.clock = setInterval(check, TICK_MS);
+}
+
+/** Records that a notice expired unsent, under its topic. */
+function recordExpired(service: Service, record: WriteRecord): void {
+  const at = expiresAt(record.action);
+  const until = at === null ? "" : `（期限 ${localLabel(machineTimeZone(), at)}）`;
+  const text = `${record.error ?? "沒送"}${until}：${record.text}`;
+  saveRecords(service, [{ kind: "writes.expired", topic: record.topic, text }], "board");
 }
 
 function topicRef(service: Service, id: string): TopicRef {
@@ -903,6 +976,7 @@ function loadService(boot: Boot): Service {
     timings,
     version: 1,
     ipc: null,
+    clock: null,
     aggregator,
     poller: new Poller(
       run,
@@ -936,6 +1010,7 @@ function loadService(boot: Boot): Service {
         readTags: (home, task) => readTags(service, home, task),
         onChange: bump,
         onFinished: (record) => recordFinished(service, record),
+        onExpired: (record) => recordExpired(service, record),
       },
       writeTimings(),
     ),
@@ -945,6 +1020,7 @@ function loadService(boot: Boot): Service {
   service.writes.resumeUnfinished();
   announceConfirmed(service, loaded.confirmed);
   service.notifier.start(service.board.topics);
+  startClock(service);
   return service;
 }
 
@@ -1015,6 +1091,8 @@ function topicOp(
   }
   notifyDecision(service, applied.decisions);
   for (const notice of applied.notices) submitTodoNotice(service, notice);
+  for (const notice of applied.scheduleNotices) submitScheduleNotice(service, notice);
+  if (applied.committed !== null) voidEndedNotices(service);
   return applied.response;
 }
 

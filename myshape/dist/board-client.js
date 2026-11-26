@@ -320,6 +320,7 @@ const TOPIC_COMMANDS = {
     "schedule-delete": { positional: ["topic"] },
     "schedule-take": { positional: ["key"], valued: ["note"] },
     "schedule-close": { positional: ["key", "outcome"], valued: ["note"] },
+    "schedule-tick": { positional: [] },
 };
 function buildTopicRequest(sub, shape, args) {
     const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? [], shape.repeated ?? {});
