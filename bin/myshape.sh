@@ -21,6 +21,15 @@
 #   myshape.sh todo done <task-id>
 #   myshape.sh todo failed <task-id> --reason <one line>
 #   myshape.sh todo obsolete <task-id> --reason <one line>
+#   myshape.sh schedule add <topic-id> --daily|--weekly <days> --at HH:MM [--tz <zone>] [--duration <min>] [--lead <min>] [--rt soft-rt|hard-rt|none]
+#   myshape.sh schedule edit <topic-id> [--daily|--weekly <days>] [--at HH:MM] [--tz <zone>] [--duration <min>] [--lead <min>]
+#   myshape.sh schedule pause <topic-id>
+#   myshape.sh schedule resume <topic-id>
+#   myshape.sh schedule skip <topic-id>
+#   myshape.sh schedule rt <topic-id> soft-rt|hard-rt|none
+#   myshape.sh schedule delete <topic-id>
+#   myshape.sh schedule take <key> [--note <one line>]
+#   myshape.sh schedule close <key> done|skipped [--note <one line>]
 #   myshape.sh open | status | stop | restart | reset-token
 #
 # Every subcommand except open runs only in a home where the board has run:
@@ -129,6 +138,46 @@
 # Repeating add, failed, or obsolete unchanged is safe; done on an item that
 # is already closed changes nothing and says so.
 #
+# schedule keeps a topic coming up on a timetable, stored in
+# data/myshape/schedules.json. A schedule is a daily or weekly HH:MM rule in
+# an IANA time zone (--tz, else the captain's default, else this machine's),
+# on one topic in 待辦: add refuses any other (move it there first, or create
+# it with --queue later), and a topic has at most one schedule. --weekly takes
+# weekdays as mon,tue,wed,thu,fri,sat,sun, comma-separated. Each occurrence
+# has a key, <schedule-id>:<UTC time> such as weekly-sync:20261130T0200Z.
+# --lead is how many minutes before it the first notice goes (0 sends none)
+# and --duration how long an occurrence nobody takes stays open; left out,
+# the captain's settings decide. --rt soft-rt|hard-rt orders the topics that
+# are up at the same time and appears in their notices; it never changes
+# when anything is sent. The board's clock that opens occurrences and sends
+# their notices is not built yet.
+#
+# While a topic has a schedule it stays in 待辦: move refuses taking it out,
+# reopen puts it back there, a merge of two scheduled topics is refused, and
+# a single schedule follows its topic into the one it was merged into, which
+# goes to 待辦. Archiving the topic pauses its schedule. Delete the schedule
+# to make it an ordinary topic again.
+#
+# The aggregator may change only schedules that are not locked (the
+# captain's are locked by default) and delete only those it made; rt has its
+# own lock. It may make at most the captain's limit of active schedules and
+# of changes an hour, and the occurrences of a schedule it makes or retimes
+# do not ring within the captain's first-ring minutes (60 by default): the
+# reply names the earliest one. take reports that the aggregator took an
+# open occurrence; close reports that it ended, done or skipped. Both are
+# allowed on a locked schedule. The settings, the locks, pausing everything,
+# undoing a change and marking a schedule seen are only on the page. These
+# are guard rails against a careless or misled aggregator, not a boundary:
+# the socket does not check who is calling.
+#
+# list puts the topics with an open occurrence first, one line each:
+# <topic-id>, now, the occurrence's state (upcoming, due or taken), its key,
+# and the name, with its rt in brackets. An occurrence past its closes_by has
+# ended, whatever the file still says. list --json keeps one row per topic
+# and adds two fields to each: schedule (null, or its id, rule, tz, state,
+# rt and locked) and occurrence (null, or the open one's key, at, state,
+# closes_by, taken_at and note).
+#
 # retract takes the task's latest summary of that kind off the board when it
 # turned out to be wrong; stdin is the reason. The line stays in the file.
 #
@@ -168,6 +217,7 @@ EXIT_UNAVAILABLE=69
 TOPICS_FILE="$DATA/topics.json"
 ARCHIVE_FILE="$DATA/topics-archive.json"
 HASHTAGS_FILE="$DATA/myshape/hashtags.json"
+SCHEDULES_FILE="$DATA/myshape/schedules.json"
 
 # shellcheck source=bin/myshape-lib.sh
 . "$SCRIPT_DIR/myshape-lib.sh"
@@ -208,7 +258,7 @@ require_jq() {
 }
 
 cmd_list() {
-  local all=0 json=0 archive hashtag='' tags=/dev/null filtered=false
+  local all=0 json=0 archive hashtag='' tags=/dev/null filtered=false schedules
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --all) all=1 ;;
@@ -232,11 +282,34 @@ cmd_list() {
     archive=/dev/null
   fi
   [ ! -f "$HASHTAGS_FILE" ] || tags=$HASHTAGS_FILE
+  schedules=$SCHEDULES_FILE
+  [ -f "$schedules" ] || schedules=/dev/null
   jq -r -n --argjson json "$json" --slurpfile live "$TOPICS_FILE" --slurpfile gone "$archive" \
-    --slurpfile tags "$tags" --arg hashtag "$hashtag" --argjson filtered "$filtered" "$(tb_hashtag_fold_jq)
+    --slurpfile tags "$tags" --arg hashtag "$hashtag" --argjson filtered "$filtered" \
+    --slurpfile kept "$schedules" "$(tb_hashtag_fold_jq)
 $(tb_hashtag_topics_jq)"'
+    # A topic id with merges followed, as every reader of a schedule does.
+    def follow($merged; $hops):
+      if $hops > 64 or $merged[.] == null then . else $merged[.] | follow($merged; $hops + 1) end;
+    def ended($now): (try (.closes_by | fromdateiso8601) catch 0) <= $now;
+    def rank: {"hard-rt": 0, "soft-rt": 1} [.] // 2;
     $live[0] as $doc
-    | [ ("high", "normal", "later") as $queue
+    | ($kept[0] // {}) as $store
+    | [ ($store.series // {}) | to_entries[]
+        | {id: .key, topic: (.value.topic | follow($doc.merged // {}; 0)), rule: .value.rule,
+           tz: .value.tz, state: .value.state, rt: .value.rt, locked: .value.locked} ] as $series
+    | [ ($store.occurrences // {}) | to_entries[] | select(.value | ended(now) | not)
+        | {key: .key, series: .value.series, at: .value.at, state: .value.state,
+           closes_by: .value.closes_by, taken_at: (.value.taken_at // null),
+           note: (.value.note // null)} ] as $open
+    | def scheduled:
+        . as $row
+        | (first($series[] | select(.topic == $row.id)) // null) as $schedule
+        | $row + {schedule: ($schedule | if . == null then null else del(.topic) end),
+                  occurrence: (if $schedule == null then null
+                               else first($open[] | select(.series == $schedule.id)) // null end
+                               | if . == null then null else del(.series) end)};
+      [ ("high", "normal", "later") as $queue
         | ($doc.queues[$queue] // []) | to_entries[]
         | {id: .value, status: "confirmed", queue: $queue, position: (.key + 1),
            name: ($doc.topics[.value].name // "")} ] as $queued
@@ -245,15 +318,21 @@ $(tb_hashtag_topics_jq)"'
         | {id: .key, status: "confirmed", queue: null, position: null, name: .value.name} ] as $loose
     | [ ($gone[0].topics // {}) | to_entries[]
         | {id: .key, status: "archived", queue: null, position: null, name: .value.name} ] as $archived
-    | ($queued + $loose + $archived) as $all
+    | [ ($queued + $loose + $archived)[] | scheduled ] as $all
     | (if $filtered then hashtag_topics($tags[0] // {}; $doc; $hashtag) else null end) as $tagged
     | (if $tagged == null then $all else [ $all[] | select(.id as $id | any($tagged[]; . == $id)) ] end) as $rows
+    | [ $rows[] | select(.occurrence != null) ]
+        | sort_by((.schedule.rt | rank), .occurrence.at) as $now_rows
     | if $json == 1 then $rows
       elif ($rows | length) == 0 and $filtered then "沒有議題貼著 #\($hashtag | ltrimstr("#"))。"
       elif ($rows | length) == 0 then "還沒有議題。"
-      else $rows[] | "\(.id)\t\(.status)\t\(.queue // "-")\t\(.position // "-")\t\(.name)"
+      else
+        ($now_rows[]
+          | "\(.id)\tnow\t\(.occurrence.state)\t\(.occurrence.key)\t\(.name)"
+            + (if .schedule.rt == "none" then "" else "（\(.schedule.rt)）" end)),
+        ($rows[] | "\(.id)\t\(.status)\t\(.queue // "-")\t\(.position // "-")\t\(.name)")
       end
-  ' 2>/dev/null || tb_die 1 "讀不懂 ${TOPICS_FILE}、${ARCHIVE_FILE} 或 ${HASHTAGS_FILE}。"
+  ' 2>/dev/null || tb_die 1 "讀不懂 ${TOPICS_FILE}、${ARCHIVE_FILE}、${HASHTAGS_FILE} 或 ${SCHEDULES_FILE}。"
 }
 
 # todo_part <flag> <value>: <value> with carriage returns and trailing newlines
@@ -330,6 +409,18 @@ cmd_todo() {
       ;;
     done | failed | obsolete) cmd_service "todo-$sub" "$@" ;;
     *) usage_error "todo 不認得 ${sub}；可用的是 add、done、failed、obsolete" ;;
+  esac
+}
+
+SCHEDULE_SUBS="add、edit、pause、resume、skip、rt、delete、take、close"
+
+cmd_schedule() {
+  local sub=${1:-}
+  [ "$#" -gt 0 ] || usage_error "schedule 的用法是 ${SCHEDULE_SUBS} 其中之一"
+  shift
+  case "$sub" in
+    add | edit | pause | resume | skip | rt | delete | take | close) cmd_service "schedule-$sub" "$@" ;;
+    *) usage_error "schedule 不認得 ${sub}；可用的是 ${SCHEDULE_SUBS}" ;;
   esac
 }
 
@@ -440,7 +531,7 @@ main() {
       usage
       return 0
       ;;
-    open | list | todo | split | create | merge | close-propose | move | rename | hashtag | \
+    open | list | todo | schedule | split | create | merge | close-propose | move | rename | hashtag | \
       goal | archive | reopen | summary | retract | which | find | status | stop | restart | reset-token) ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
@@ -451,6 +542,7 @@ main() {
   case "$sub" in
     list) cmd_list "$@" ;;
     todo) cmd_todo "$@" ;;
+    schedule) cmd_schedule "$@" ;;
     *) cmd_service "$sub" "$@" ;;
   esac
 }

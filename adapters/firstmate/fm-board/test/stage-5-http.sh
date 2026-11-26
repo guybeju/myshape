@@ -332,7 +332,10 @@ test_every_change_leaves_a_record() {
   local covered_ops covered_routes ops routes id
   ops=$(node --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.entries(m.OPERATIONS).filter(([, op]) => op.channel !== 'page').map(([name]) => name).sort().join(' ')))")
   routes=$(node --input-type=module -e "import('$ROOT/myshape/dist/api.js').then((m) => console.log(Object.keys(m.ROUTES).sort().join('|')))")
-  covered_ops="archive close-propose create goal hashtag-add hashtag-remove merge move rename reopen split todo-add todo-done todo-failed todo-obsolete"
+  covered_ops="archive close-propose create goal hashtag-add hashtag-remove merge move rename reopen"
+  covered_ops="$covered_ops schedule-add schedule-close schedule-delete schedule-edit schedule-pause"
+  covered_ops="$covered_ops schedule-resume schedule-rt schedule-skip schedule-take split"
+  covered_ops="$covered_ops todo-add todo-done todo-failed todo-obsolete"
   covered_routes="GET state|POST agents/tag|POST direct|POST hashtags/add|POST hashtags/color|POST hashtags/delete|POST hashtags/lock|POST hashtags/merge|POST hashtags/remove|POST hashtags/rename|POST hashtags/revert|POST hashtags/seen|POST hashtags/settings|POST holds/answer|POST messages|POST programs/confirm|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST views/delete|POST views/save|POST writes/ignore|POST writes/resend"
   assert_equals "$covered_ops" "$ops" "every socket operation needs a case here"
   assert_equals "$covered_routes" "$routes" "every page route needs a case here"
@@ -354,6 +357,23 @@ test_every_change_leaves_a_record() {
   records_after todo.done "todo done" t todo "done" it1
   records_after todo.opened "todo add" t todo add it2 "Item two" --topic rec --do "do it"
   records_after todo.taken_down "todo obsolete" t todo obsolete it2 --reason "not needed"
+  records_after topic.created "create" t create "Sched" --goal "g" --id sched --queue later
+  records_after schedule.created "schedule add" t schedule add sched --weekly mon --at 10:00
+  records_after schedule.edited "schedule edit" t schedule edit sched --at 11:00
+  records_after schedule.rt_changed "schedule rt" t schedule rt sched hard-rt
+  records_after schedule.paused "schedule pause" t schedule pause sched
+  records_after schedule.resumed "schedule resume" t schedule resume sched
+  records_after schedule.skipped "schedule skip" t schedule skip sched
+  # Nothing opens an occurrence yet: write one in while the board is stopped, as the clock will.
+  t stop >/dev/null
+  jq '.occurrences["sched:20991130T0300Z"] = {series: "sched", at: "2099-11-30T03:00:00Z", state: "due",
+      opened_at: "2099-11-30T02:45:00Z", closes_by: "2099-11-30T04:00:00Z"}' \
+    "$MAIN/data/myshape/schedules.json" > "$TMP_ROOT/schedules.json"
+  cp "$TMP_ROOT/schedules.json" "$MAIN/data/myshape/schedules.json"
+  t open >/dev/null
+  records_after occurrence.taken "schedule take" t schedule take sched:20991130T0300Z
+  records_after occurrence.closed "schedule close" t schedule close sched:20991130T0300Z "done"
+  records_after schedule.deleted "schedule delete" t schedule delete sched
 
   records_after topic.moved "topics/move" api topics/move '{"id":"rec","queue":"normal"}'
   records_after topic.renamed "topics/rename" api topics/rename '{"id":"rec","value":"Rec three"}'

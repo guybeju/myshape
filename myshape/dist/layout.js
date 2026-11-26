@@ -28,6 +28,7 @@ export function boardPaths(config) {
         binding: path.join(config.config, BINDING_NAME),
         confirmations: path.join(boardDataDir, "confirmations.json"),
         hashtags: path.join(boardDataDir, "hashtags.json"),
+        schedules: path.join(boardDataDir, "schedules.json"),
     };
 }
 const CONFIG_FLAGS = [

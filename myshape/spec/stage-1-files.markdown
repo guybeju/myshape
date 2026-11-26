@@ -46,7 +46,7 @@
 
 ### `list`
 
-`list [--all] [--json] [--hashtag <名稱>]`：讀 `data/topics.json`（`--all` 加讀封存檔），每行印 id、狀態、佇列、位置、名稱。`--hashtag` 只列貼著那個 hashtag 的議題，用 jq 讀 `data/myshape/hashtags.json`（[contracts](contracts.markdown) 第 3.8 節），比對的方式和 `fm-dispatch-plan.sh order --hashtag` 相同；沒有一個議題貼著時印「沒有議題貼著 #<名稱>。」並回 0。唯讀，不經服務。沒有議題檔時印「還沒有議題」並回 0。在 secondmate home 印「議題檔只在主 home」，exit 1。沒有 `jq` 時印原因與安裝方式（文字比照上游 `bin/fm-bootstrap.sh:872`），exit 1。
+`list [--all] [--json] [--hashtag <名稱>]`：讀 `data/topics.json`（`--all` 加讀封存檔）與 `data/myshape/schedules.json`，每行印 id、狀態、佇列、位置、名稱。`--hashtag` 只列貼著那個 hashtag 的議題，用 jq 讀 `data/myshape/hashtags.json`（[contracts](contracts.markdown) 第 3.8 節），比對的方式和 `fm-dispatch-plan.sh order --hashtag` 相同；沒有一個議題貼著時印「沒有議題貼著 #<名稱>。」並回 0。有開著的場次時，最前面先為每一場印一行 id、`now`、那一場的狀態、它的鍵、名稱（rt 不是 `none` 時名稱後加「（hard-rt）」），先 `hard-rt`、再 `soft-rt`、再沒有 rt，同一級照時刻；超過 `closes_by` 的不算開著。`--json` 仍是一個議題一列的陣列，每列多 `schedule`（沒有排程時是 `null`，有的話是 `id`、`rule`、`tz`、`state`、`rt`、`locked`）與 `occurrence`（沒有開著的場次時是 `null`，有的話是 `key`、`at`、`state`、`closes_by`、`taken_at`、`note`）（[contracts](contracts.markdown) 第 3.9 節）。唯讀，不經服務。沒有議題檔時印「還沒有議題」並回 0。在 secondmate home 印「議題檔只在主 home」，exit 1。沒有 `jq` 時印原因與安裝方式（文字比照上游 `bin/fm-bootstrap.sh:872`），exit 1。
 
 ### `order`
 

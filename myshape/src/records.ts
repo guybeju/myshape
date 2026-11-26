@@ -44,6 +44,21 @@ export const RECORD_KINDS = [
   "hashtag.seen",
   "hashtag.view_saved",
   "hashtag.view_deleted",
+  "schedule.created",
+  "schedule.edited",
+  "schedule.paused",
+  "schedule.resumed",
+  "schedule.skipped",
+  "schedule.rt_changed",
+  "schedule.deleted",
+  "schedule.merged",
+  "schedule.locked",
+  "schedule.seen",
+  "schedule.reverted",
+  "schedule.settings_changed",
+  "schedule.all_paused",
+  "occurrence.taken",
+  "occurrence.closed",
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 

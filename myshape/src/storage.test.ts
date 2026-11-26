@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { emptySchedules } from "./schedules.js";
 import { emptyConfirmations } from "./confirmations.js";
 import * as files from "./files.js";
 import { Journal, Offsets, Summaries } from "./journal.js";
@@ -54,7 +55,8 @@ function boardOf(state: TopicState): StoredBoard {
     todos: emptyTodos(),
     confirmations: emptyConfirmations(),
     hashtags: emptyHashtags(),
-    outbox: { topics: [], todos: [], confirmations: [], hashtags: [] },
+    schedules: emptySchedules(),
+    outbox: { topics: [], todos: [], confirmations: [], hashtags: [], schedules: [] },
   };
 }
 
@@ -173,6 +175,7 @@ describe("layout", () => {
       binding: "/c/myshape-aggregator.json",
       confirmations: "/d/myshape/confirmations.json",
       hashtags: "/d/myshape/hashtags.json",
+      schedules: "/d/myshape/schedules.json",
     });
   });
 

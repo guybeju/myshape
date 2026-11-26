@@ -8,6 +8,12 @@ import { commitChange } from "./store.js";
 import * as topics from "./topics.js";
 import * as todos from "./todos.js";
 import * as hashtags from "./hashtags.js";
+import * as schedules from "./schedules.js";
+import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
+/** The schedule on `id`, if any. */
+function scheduled(ctx, id) {
+    return schedules.scheduleOfTopic(ctx.schedules, ctx.topics, id) !== null;
+}
 function optionalQueue(args) {
     const value = args["queue"];
     if (value === undefined)
@@ -37,6 +43,14 @@ function optionalId(args) {
     if (id === undefined)
         return {};
     return typeof id === "string" ? { id } : null;
+}
+/** Archiving a scheduled topic pauses its schedule and ends an open occurrence, each with a record. */
+function archiveSchedules(ctx, result) {
+    if (!result.changed)
+        return null;
+    const [record] = result.records;
+    const paused = schedules.pauseForArchive(ctx.schedules, scheduleEnv(ctx), record.topic);
+    return paused === null ? null : { next: paused.store, records: paused.records };
 }
 function create(ctx, args) {
     const name = stringField(args, "name");
@@ -119,7 +133,46 @@ function merge(ctx, args) {
         return { usage: "merge 需要兩個議題 id。" };
     if (reason === null)
         return { usage: "--reason 要是一行文字。" };
-    return topics.merge(ctx.topics, from, into, ctx.now, reason);
+    return mergeScheduled(ctx, from, into, () => topics.merge(ctx.topics, from, into, ctx.now, reason));
+}
+/**
+ * A merge under the one-schedule-per-topic rule: two scheduled topics are
+ * refused, and a single schedule follows its topic (followMerge).
+ */
+function mergeScheduled(ctx, from, into, apply) {
+    const moving = schedules.scheduleOfTopic(ctx.schedules, ctx.topics, from);
+    const staying = schedules.scheduleOfTopic(ctx.schedules, ctx.topics, into);
+    if (moving !== null && staying !== null && moving.id !== staying.id)
+        return refusedTopic("兩個議題都有排程，一個議題最多一筆排程：先刪掉其中一筆排程。");
+    const result = apply();
+    if (moving === null || staying !== null || !result.ok || !result.changed)
+        return result;
+    return followMerge(ctx, result, moving.series.title);
+}
+/**
+ * A schedule follows its topic into the one it was merged into, which goes to
+ * 待辦 so the schedule decides when it comes up. The schedule keeps the old
+ * topic id; every reader follows `merged` from it.
+ */
+function followMerge(ctx, merged, title) {
+    const [record] = merged.records;
+    const into = record.topic;
+    const name = merged.state.doc.topics[into]?.name ?? into;
+    const follow = {
+        kind: "schedule.merged",
+        topic: into,
+        text: `排程「${title}」跟著議題併到「${name}」，議題放在「待辦」`,
+    };
+    if (merged.state.doc.queues.later.includes(into))
+        return { ...merged, records: [...merged.records, follow] };
+    const moved = topics.move(merged.state, into, "later", { last: true }, ctx.now);
+    if (!moved.ok || !moved.changed)
+        return moved;
+    return {
+        ...moved,
+        line: `${merged.line}，排程跟著過來，議題放進「待辦」`,
+        records: [...merged.records, ...moved.records, follow],
+    };
 }
 function move(ctx, args) {
     const id = stringField(args, "id");
@@ -128,7 +181,12 @@ function move(ctx, args) {
     if (id === null || queue === null || queue === undefined || position === null) {
         return { usage: "move 需要議題 id 與佇列（high、normal、later）。" };
     }
+    if (queue !== "later" && scheduled(ctx, id))
+        return refusedTopic("這個議題有排程，位置由時間決定；要移出「待辦」，先刪掉排程。");
     return topics.move(ctx.topics, id, queue, position, ctx.now);
+}
+function refusedTopic(line) {
+    return { ok: false, code: "refused", line };
 }
 /** What a split asks for, or why it is malformed. */
 function splitInput(args) {
@@ -396,6 +454,7 @@ export const OPERATIONS = {
                 ? { usage: "archive 需要議題 id。" }
                 : topics.archive(ctx.topics, id, ctx.now);
         },
+        schedules: archiveSchedules,
     },
     keep: {
         channel: "page",
@@ -413,7 +472,13 @@ export const OPERATIONS = {
             const queue = optionalQueue(args);
             if (id === null || queue === null)
                 return { usage: "reopen 需要議題 id。" };
-            return topics.reopen(ctx.topics, id, queue, ctx.now);
+            // A scheduled topic always comes back to 待辦: its schedule decides when it comes up.
+            if (!scheduled(ctx, id))
+                return topics.reopen(ctx.topics, id, queue, ctx.now);
+            const result = topics.reopen(ctx.topics, id, "later", ctx.now);
+            if (!result.ok || !result.changed)
+                return result;
+            return { ...result, line: `${result.line}（有排程，排程議題放在「待辦」）` };
         },
     },
     "todo-add": {
@@ -457,6 +522,7 @@ export const OPERATIONS = {
         },
     },
     ...HASHTAG_OPERATIONS,
+    ...scheduleOperations,
 };
 /** The operation called `name`, or undefined for anything else. */
 export function operationOf(name) {
@@ -566,6 +632,7 @@ function applyTopicOp(target, board, request, actor, run) {
                     records: withSuffix(follow.follow.records, suffix),
                 },
             }),
+        ...schedulePartOf(run.schedules(result)),
     };
     return {
         ...commit(target, board, change, actor, withFollowLine(stamped.line, follow)),
@@ -627,7 +694,22 @@ function runTopicOp(target, board, request, actor, run) {
     if ("usage" in result)
         return answer(board, { ok: false, code: "usage", line: result.usage });
     const follow = (ok) => operation.hashtags?.(ctx, request.args, ok) ?? { follow: null, line: "" };
-    return applyTopicOp(target, board, request, actor, { result, follow });
+    const part = (ok) => operation.schedules?.(ctx, ok) ?? null;
+    return applyTopicOp(target, board, request, actor, { result, follow, schedules: part });
+}
+/** A topic change's part in schedules.json as the change carries it. */
+function schedulePartOf(part) {
+    return part === null ? {} : { schedules: part };
+}
+function applyScheduleOp(target, board, request, actor, result) {
+    if (!result.ok)
+        return answer(board, { ok: false, code: result.code, line: result.line });
+    if (!result.changed) {
+        assertUnchanged(request.op, board.schedules, result.store);
+        return answer(board, { ok: true, line: result.line });
+    }
+    const change = { file: "schedules", next: result.store, records: result.records };
+    return commit(target, board, change, actor, result.line);
 }
 /**
  * Runs one operation and saves what it changed. The page's requests are the
@@ -647,6 +729,7 @@ export function applyOperation(target, board, request, who) {
         todos: board.todos,
         confirmations: board.confirmations,
         hashtags: board.hashtags,
+        schedules: board.schedules,
         by,
         ...who,
     };
@@ -657,5 +740,7 @@ export function applyOperation(target, board, request, who) {
         return applyHashtagOp(target, board, request, actor, operation.run(ctx, request.args));
     if (operation.commitFile === "confirmations")
         return applyConfirmOp(target, board, request, actor, operation.run(ctx, request.args));
+    if (operation.commitFile === "schedules")
+        return applyScheduleOp(target, board, request, actor, operation.run(ctx, request.args));
     return applyTodoOp(target, board, request, actor, operation.run(ctx, request.args));
 }

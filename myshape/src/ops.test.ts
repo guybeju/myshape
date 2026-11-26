@@ -15,6 +15,8 @@ import { RECORD_KINDS } from "./records.js";
 import type { StoredRecord } from "./records.js";
 import { readBoard } from "./store.js";
 import type { CommitTarget, StoredBoard } from "./store.js";
+import { emptySchedules, setPaused } from "./schedules.js";
+import type { ScheduleStore, Series } from "./schedules.js";
 import { emptyTodos } from "./todos.js";
 import type { TodoItem, TodoStore } from "./todos.js";
 import { emptyState } from "./topics.js";
@@ -22,7 +24,10 @@ import { emptyHashtags } from "./hashtags.js";
 import type { HashtagRecord, HashtagStore } from "./hashtags.js";
 import type { TopicState } from "./topics.js";
 
-const WHO = { label: "plain", agent: "plain-agent", now: "2026-11-21T00:00:00Z", records: [] };
+const NOW = "2026-11-21T00:00:00Z";
+const WHO = { label: "plain", agent: "plain-agent", now: NOW, records: [], zone: "Asia/Taipei" };
+/** The record of the aggregator pausing schedule f, which schedule-revert takes back. */
+const PAUSED_F: HashtagRecord[] = [];
 
 interface Fixture {
   args: Record<string, unknown>;
@@ -84,6 +89,20 @@ const FIXTURES = {
   "hashtag-seen": { args: {}, fromPage: true, records: [AGGREGATOR_ADD] },
   "view-save": { args: { name: "工作", none: ["AI_INFRA"] }, fromPage: true },
   "view-delete": { args: { id: "old" }, fromPage: true },
+  "schedule-add": { args: { topic: "e", daily: true, at: "06:00" }, fromPage: false },
+  "schedule-edit": { args: { topic: "d", at: "11:00" }, fromPage: false },
+  "schedule-pause": { args: { topic: "d" }, fromPage: false },
+  "schedule-resume": { args: { topic: "g" }, fromPage: false },
+  "schedule-skip": { args: { topic: "d" }, fromPage: false },
+  "schedule-rt": { args: { topic: "d", rt: "hard-rt" }, fromPage: false },
+  "schedule-delete": { args: { topic: "g" }, fromPage: false },
+  "schedule-take": { args: { key: "d:20261121T0010Z", note: "有空位再開" }, fromPage: false },
+  "schedule-close": { args: { key: "d:20261121T0010Z", outcome: "done" }, fromPage: false },
+  "schedule-settings": { args: { lead_min: 20 }, fromPage: true },
+  "schedule-lock": { args: { topic: "d", lock: "schedule", locked: true }, fromPage: true },
+  "schedule-pause-all": { args: { paused: true }, fromPage: true },
+  "schedule-revert": { args: { rid: "r-paused-f" }, fromPage: true, records: PAUSED_F },
+  "schedule-seen": { args: {}, fromPage: true },
 } satisfies Record<OperationName, Fixture>;
 
 function hashtagsFixture(): HashtagStore {
@@ -114,8 +133,12 @@ function topicsFixture(): TopicState {
     a: topic("A"),
     b: { ...topic("B"), close_proposal: { at: "T", reason: "做完了" } },
     c: topic("C"),
+    d: topic("D"),
+    e: topic("E"),
+    f: topic("F"),
+    g: topic("G"),
   };
-  state.doc.queues = { high: ["a"], normal: ["b"], later: ["c"] };
+  state.doc.queues = { high: ["a"], normal: ["b"], later: ["c", "d", "e", "f", "g"] };
   state.archive.topics = { z: { ...topic("Z"), archived_at: "T" } };
   return state;
 }
@@ -149,6 +172,67 @@ function todosFixture(): TodoStore {
   };
 }
 
+function series(topic: string, extra: Partial<Series> = {}): Series {
+  return {
+    topic,
+    title: topic.toUpperCase(),
+    rule: "weekly mon 10:00",
+    tz: "Asia/Taipei",
+    duration_min: null,
+    lead_min: null,
+    rt: "none",
+    rt_locked: false,
+    state: "on",
+    locked: false,
+    by: "aggregator",
+    seen: true,
+    created_at: "2026-11-01T00:00:00Z",
+    ...extra,
+  };
+}
+
+/**
+ * d is the aggregator's open schedule with an occurrence coming up, f was on
+ * until the aggregator paused it (the record that schedule-revert undoes), and
+ * g is the aggregator's paused schedule the captain has not seen.
+ */
+function schedulesFixture(topics: TopicState): ScheduleStore {
+  const store = emptySchedules();
+  store.series = {
+    d: series("d"),
+    f: series("f"),
+    g: series("g", { state: "paused", seen: false }),
+  };
+  store.occurrences = {
+    "d:20261121T0010Z": {
+      series: "d",
+      at: "2026-11-21T00:10:00Z",
+      state: "upcoming",
+      opened_at: "2026-11-20T23:55:00Z",
+      closes_by: "2026-11-21T01:10:00Z",
+    },
+  };
+  const env = {
+    topics,
+    nowMs: Date.parse(NOW),
+    actor: { by: "aggregator" as const, label: "plain" },
+    records: [],
+    machineZone: "Asia/Taipei",
+  };
+  const paused = setPaused(store, env, "f", true);
+  if (!paused.ok || !paused.changed) throw new Error("the fixture's pause did not change f");
+  const [record] = paused.records;
+  PAUSED_F.splice(0, PAUSED_F.length, {
+    rid: "r-paused-f",
+    ts: 1_795_190_000,
+    kind: record.kind,
+    by: "aggregator",
+    ...(record.before === undefined ? {} : { before: record.before }),
+    ...(record.after === undefined ? {} : { after: record.after }),
+  });
+  return paused.store;
+}
+
 let dir: string;
 let paths: BoardPaths;
 let journal: Journal;
@@ -169,6 +253,7 @@ beforeEach(() => {
   write(paths.archive, topics.archive);
   write(paths.todos, todosFixture());
   write(paths.hashtags, hashtagsFixture());
+  write(paths.schedules, schedulesFixture(topics));
   journal = new Journal(paths.events);
   let n = 0;
   target = {
@@ -192,6 +277,7 @@ function files(): Record<string, string | null> {
     todos: read(paths.todos),
     confirmations: read(paths.confirmations),
     hashtags: read(paths.hashtags),
+    schedules: read(paths.schedules),
     events: read(paths.events),
   };
 }
@@ -205,6 +291,8 @@ function journalLines(): StoredRecord[] {
         .split("\n")
         .map((line) => JSON.parse(line) as StoredRecord);
 }
+
+const WHOLE_BOARD = new Set(["schedule.settings_changed", "schedule.all_paused", "schedule.seen"]);
 
 function run(board: StoredBoard, op: OperationName) {
   const fixture: Fixture = FIXTURES[op];
@@ -251,12 +339,14 @@ describe("every operation in the table", () => {
         expect(line.label).toBe("plain");
         expect(line.ts).toBe(1_795_200_000);
         expect(RECORD_KINDS).toContain(line.kind);
-        // A confirmation and a change to a hashtag itself are about the whole board, so they alone have no topic or item.
+        // A confirmation, a change to a hashtag itself and the schedule settings and
+        // marks are about the whole board, so they alone have no topic or item.
         expect(
           line.topic !== null ||
             line.item !== undefined ||
             commitFile === "confirmations" ||
-            commitFile === "hashtags",
+            commitFile === "hashtags" ||
+            WHOLE_BOARD.has(line.kind),
         ).toBe(true);
         expect(outbox.map((record) => record.rid)).toContain(line.rid);
       }
@@ -337,6 +427,110 @@ describe("every operation in the table", () => {
       expect(result.response).toMatchObject({ ok: false, code: "usage" });
       expect(result.committed).toBeNull();
     }
+    expect(journalLines()).toEqual([]);
+  });
+});
+
+describe("the queue rules of scheduled topics", () => {
+  function apply(board: StoredBoard, op: string, args: Record<string, unknown>, fromPage = false) {
+    return applyOperation(target, board, { op, args, fromPage }, WHO);
+  }
+
+  it("move refuses only taking a scheduled topic out of 待辦", () => {
+    const board = readBoard(paths).board;
+    expect(apply(board, "move", { id: "d", queue: "high" }, true).response).toEqual({
+      ok: false,
+      code: "refused",
+      line: "這個議題有排程，位置由時間決定；要移出「待辦」，先刪掉排程。",
+    });
+    const within = apply(board, "move", { id: "d", queue: "later", first: true }, true);
+    expect(within.board.topics.doc.queues.later[0]).toBe("d");
+    const deleted = apply(board, "schedule-delete", { topic: "g" });
+    expect(apply(deleted.board, "move", { id: "g", queue: "high" }).response).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("merge refuses two scheduled topics, and a single schedule follows into 待辦", () => {
+    const board = readBoard(paths).board;
+    expect(apply(board, "merge", { from: "d", into: "f" }).response).toMatchObject({
+      ok: false,
+      line: "兩個議題都有排程，一個議題最多一筆排程：先刪掉其中一筆排程。",
+    });
+    const merged = apply(board, "merge", { from: "d", into: "a" });
+    expect(merged.response.line).toBe("ok d 已併入 a，排程跟著過來，議題放進「待辦」");
+    expect(merged.board.topics.doc.queues.high).toEqual([]);
+    expect(merged.board.topics.doc.queues.later.at(-1)).toBe("a");
+    expect(merged.dispatchable).toEqual([]);
+    expect(merged.records.map((record) => record.kind)).toEqual([
+      "topic.merged",
+      "topic.moved",
+      "schedule.merged",
+    ]);
+    expect(merged.committed).toBe("topics");
+    expect(merged.board.schedules.series["d"]?.topic).toBe("d");
+    expect(apply(merged.board, "schedule-pause", { topic: "a" }).response).toMatchObject({
+      ok: true,
+      line: "ok a 排程已暫停",
+    });
+  });
+
+  it("archiving pauses the schedule and ends its open occurrence in schedules.json, with records", () => {
+    const archived = apply(readBoard(paths).board, "archive", { id: "d" });
+    expect(archived.committed).toBe("topics");
+    expect(archived.records.map((record) => record.kind)).toEqual([
+      "schedule.paused",
+      "occurrence.closed",
+      "topic.archived",
+    ]);
+    const saved = readBoard(paths).board;
+    expect(saved.schedules.series["d"]?.state).toBe("paused");
+    expect(saved.schedules.occurrences).toEqual({});
+    expect(saved.outbox.schedules.map((record) => record.kind)).toEqual([
+      "schedule.paused",
+      "occurrence.closed",
+    ]);
+    expect(saved.outbox.topics.map((record) => record.kind)).toEqual(["topic.archived"]);
+    expect(
+      journalLines()
+        .map((line) => line.kind)
+        .toSorted(),
+    ).toEqual(["occurrence.closed", "schedule.paused", "topic.archived"].toSorted());
+  });
+
+  it("reopening a scheduled topic always lands in 待辦 and makes nothing dispatchable", () => {
+    const archived = apply(readBoard(paths).board, "archive", { id: "d" });
+    const reopened = apply(archived.board, "reopen", { id: "d", queue: "high" });
+    expect(reopened.response.line).toBe(
+      "ok d 已重開，放進「待辦」（有排程，排程議題放在「待辦」）",
+    );
+    expect(reopened.board.topics.doc.queues.later).toContain("d");
+    expect(reopened.board.topics.doc.queues.high).not.toContain("d");
+    expect(reopened.dispatchable).toEqual([]);
+    expect(reopened.board.schedules.series["d"]?.state).toBe("paused");
+  });
+
+  it("refuses the captain's schedule presses over the socket, and take from the page", () => {
+    const board = readBoard(paths).board;
+    for (const op of [
+      "schedule-settings",
+      "schedule-lock",
+      "schedule-pause-all",
+      "schedule-revert",
+      "schedule-seen",
+    ] as const) {
+      const result = apply(board, op, FIXTURES[op].args, false);
+      expect(result.response).toEqual({
+        ok: false,
+        code: "refused",
+        line: `${op} 是使用者在頁面上按的，不能從指令送。`,
+      });
+    }
+    expect(apply(board, "schedule-take", FIXTURES["schedule-take"].args, true).response).toEqual({
+      ok: false,
+      code: "refused",
+      line: "schedule-take 只能從指令送。",
+    });
     expect(journalLines()).toEqual([]);
   });
 });
@@ -430,6 +624,49 @@ describe("each operation's arguments", () => {
       by: "plain-agent",
     });
     expect(added.records[0]).toMatchObject({ kind: "todo.opened", topic: "a", item: "x" });
+  });
+
+  it("schedule operations read their days, time, minutes, zone, rt and note", () => {
+    const later = { topic: "e" };
+    usage("schedule-add", { daily: true, at: "06:00" });
+    usage("schedule-add", { ...later, daily: true, weekly: "mon", at: "06:00" });
+    usage("schedule-add", { ...later, weekly: "someday", at: "06:00" });
+    usage("schedule-add", { ...later, weekly: 3, at: "06:00" });
+    usage("schedule-add", { ...later, daily: true, at: "6" });
+    usage("schedule-add", { ...later, daily: true, at: 600 });
+    usage("schedule-add", { ...later, daily: true, at: "06:00", duration: "1.5" });
+    usage("schedule-add", { ...later, daily: true, at: "06:00", lead: "-1" });
+    usage("schedule-add", { ...later, daily: true, at: "06:00", tz: 8 });
+    usage("schedule-add", { ...later, daily: true, at: "06:00", rt: "urgent" });
+    usage("schedule-edit", { at: "06:00" });
+    usage("schedule-rt", { topic: "d", rt: "urgent" });
+    usage("schedule-pause", {});
+    usage("schedule-take", {});
+    usage("schedule-take", { key: "d:20261121T0010Z", note: 5 });
+    usage("schedule-close", { key: "d:20261121T0010Z", outcome: "finished" });
+    usage("schedule-lock", { topic: "d", lock: "everything", locked: true }, true);
+    usage("schedule-lock", { topic: "d", lock: "rt", locked: "yes" }, true);
+    usage("schedule-pause-all", { paused: "yes" }, true);
+    usage("schedule-revert", {}, true);
+    const added = reply("schedule-add", {
+      topic: "e",
+      weekly: "mon,thu",
+      at: "09:30",
+      duration: "30",
+      lead: 0,
+      tz: "Europe/London",
+      rt: "soft-rt",
+    });
+    expect(added.board.schedules.series["e"]).toMatchObject({
+      rule: "weekly mon,thu 09:30",
+      duration_min: 30,
+      lead_min: 0,
+      tz: "Europe/London",
+      rt: "soft-rt",
+      by: "aggregator",
+    });
+    const rt = reply("schedule-rt", { topic: "d", rt: "none" });
+    expect(rt.response).toEqual({ ok: true, line: "ok d rt 本來就是 none" });
   });
 
   it("the verdicts and the presses name their item and reason", () => {

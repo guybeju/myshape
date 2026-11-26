@@ -36,6 +36,57 @@ test_list() {
   pass "list prints topics, --all adds archived ones, --json is structured"
 }
 
+# list reads schedules.json without the service: a schedule follows a merged
+# topic id, an open occurrence comes first ordered by rt, then its time, and
+# one past its closes_by has ended.
+test_list_schedules() {
+  local home out
+  home=$(tb_make_home list-schedules)
+  tb_board_has_run "$home"
+  tb_write_topics "$home"
+  mkdir -p "$home/data/myshape"
+  cat > "$home/data/myshape/schedules.json" <<'JSON'
+{ "v": 1, "settings": {},
+  "series": {
+    "bill": { "topic": "old-billing", "title": "帳務", "rule": "weekly mon 10:00", "tz": "Asia/Taipei",
+              "duration_min": null, "lead_min": null, "rt": "soft-rt", "rt_locked": false,
+              "state": "on", "locked": true, "by": "captain", "created_at": "2026-11-01T00:00:00Z" },
+    "park": { "topic": "parked", "title": "停著", "rule": "daily 06:00", "tz": "UTC",
+              "duration_min": 30, "lead_min": 5, "rt": "hard-rt", "rt_locked": false,
+              "state": "on", "locked": false, "by": "aggregator", "seen": false, "created_at": "2026-11-01T00:00:00Z" },
+    "late": { "topic": "t2", "title": "登入", "rule": "daily 07:00", "tz": "UTC",
+              "duration_min": null, "lead_min": null, "rt": "none", "rt_locked": false,
+              "state": "on", "locked": false, "by": "captain", "created_at": "2026-11-01T00:00:00Z" } },
+  "occurrences": {
+    "bill:20991130T0200Z": { "series": "bill", "at": "2099-11-30T02:00:00Z", "state": "taken",
+      "opened_at": "2099-11-30T01:45:00Z", "taken_at": "2099-11-30T02:01:00Z", "note": "晚點開",
+      "closes_by": "2099-11-30T05:00:00Z" },
+    "park:20991201T0600Z": { "series": "park", "at": "2099-12-01T06:00:00Z", "state": "upcoming",
+      "opened_at": "2099-12-01T05:55:00Z", "closes_by": "2099-12-01T06:30:00Z" },
+    "late:20200101T0700Z": { "series": "late", "at": "2020-01-01T07:00:00Z", "state": "due",
+      "opened_at": "2020-01-01T06:45:00Z", "closes_by": "2020-01-01T08:00:00Z" } },
+  "recent": {}, "removed": {} }
+JSON
+  out=$(tb_run "$home" "$TOPIC" list)
+  assert_equals "$(printf 'parked\tnow\tupcoming\tpark:20991201T0600Z\t之後再說（hard-rt）\nbilling\tnow\ttaken\tbill:20991130T0200Z\t帳務重構（soft-rt）')" \
+    "$(printf '%s\n' "$out" | head -n 2)" "list must put open occurrences first, hard-rt before soft-rt"
+  assert_not_contains "$out" "late:20200101T0700Z" "an occurrence past its closes_by has ended"
+  assert_contains "$out" "$(printf 'billing\tconfirmed\thigh\t1\t帳務重構')" "the topic keeps its own row"
+  out=$(tb_run "$home" "$TOPIC" list --json)
+  assert_equals 4 "$(printf '%s' "$out" | jq 'length')" "list --json must keep one row per topic"
+  assert_equals "bill|soft-rt|true|bill:20991130T0200Z|taken|晚點開" \
+    "$(printf '%s' "$out" | jq -r '.[] | select(.id == "billing")
+      | "\(.schedule.id)|\(.schedule.rt)|\(.schedule.locked)|\(.occurrence.key)|\(.occurrence.state)|\(.occurrence.note)"')" \
+    "list --json must put the schedule and its open occurrence on the topic's row"
+  assert_equals "late|null" "$(printf '%s' "$out" | jq -r '.[] | select(.id == "t2") | "\(.schedule.id)|\(.occurrence)"')" \
+    "an occurrence past its closes_by must not be listed as open"
+  assert_equals "null|null" "$(printf '%s' "$out" | jq -r '.[] | select(.id == "idea") | "\(.schedule)|\(.occurrence)"')" \
+    "a topic without a schedule must have null schedule and occurrence"
+  printf 'not json' > "$home/data/myshape/schedules.json"
+  expect_code 1 "$(tb_code "$home" "$TOPIC" list)" "list with an unreadable schedules.json"
+  pass "list shows the open occurrences first and puts schedules on their topics' rows"
+}
+
 test_list_without_jq() {
   local home fakebin tool
   home=$(tb_make_home list-nojq)
@@ -133,7 +184,7 @@ SH
   chmod +x "$fakebin/node"
   before=$(cd "$home/data" && find . -type f -exec cksum {} + | sort)
   subs=$(tb_run "$home" "$TOPIC" --help |
-    sed -nE 's/^[[:space:]]+myshape\.sh (todo [a-z-]+|[a-z][a-z-]*( \| [a-z][a-z-]*)*).*/\1/p' |
+    sed -nE 's/^[[:space:]]+myshape\.sh ((todo|schedule) [a-z-]+|[a-z][a-z-]*( \| [a-z][a-z-]*)*).*/\1/p' |
     tr '|' '\n' | sed 's/^ *//; s/ *$//' | sort -u)
   [ -n "$subs" ] || fail "--help names no subcommand"
   ops=$("$real_node" --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.keys(m.OPERATIONS).join('\\n')))") ||
@@ -159,6 +210,12 @@ SH
       'todo done') case_args='todo done item-1' ;;
       'todo failed') case_args='todo failed item-1 --reason r' ;;
       'todo obsolete') case_args='todo obsolete item-1 --reason r' ;;
+      'schedule add') case_args='schedule add parked --daily --at 06:00' ;;
+      'schedule edit') case_args='schedule edit parked --at 07:00' ;;
+      'schedule pause' | 'schedule resume' | 'schedule skip' | 'schedule delete') case_args="$sub parked" ;;
+      'schedule rt') case_args='schedule rt parked hard-rt' ;;
+      'schedule take') case_args='schedule take parked:20991130T0200Z' ;;
+      'schedule close') case_args='schedule close parked:20991130T0200Z done' ;;
       *) fail "myshape.sh $sub has no case here: add one, and an operation for it if it changes the board" ;;
     esac
     : > "$log"
@@ -166,6 +223,7 @@ SH
     out=$(printf 'text\n' | PATH="$fakebin:$PATH" tb_run "$home" "$TOPIC" $case_args 2>&1) ||
       fail "myshape.sh $sub failed before reaching the board: $out"
     op=${sub/todo /todo-}
+    op=${op/schedule /schedule-}
     assert_contains "$(cat "$log")" "-- $op" "myshape.sh $sub must hand $op to the board's client"
     # The client turns hashtag +NAME into the hashtag-add operation.
     [ "$op" != hashtag ] || op=hashtag-add
@@ -189,6 +247,6 @@ test_usage() {
   pass "unknown subcommands are usage errors and --help prints usage"
 }
 
-fm_test_run test_list test_list_without_jq test_refused_where_no_board_has_run \
+fm_test_run test_list test_list_schedules test_list_without_jq test_refused_where_no_board_has_run \
   test_old_forms_are_refused test_variables_are_braced_before_wide_characters test_usage \
   test_every_write_reaches_the_board

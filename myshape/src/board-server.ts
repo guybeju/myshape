@@ -48,6 +48,7 @@ import type { PageAnswer } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
 import type { PageNotice } from "./ops.js";
 import type { Draft } from "./records.js";
+import { machineTimeZone } from "./schedule-time.js";
 import { commitChange, loadBoard } from "./store.js";
 import type { CommitTarget, LeftoverProposal, StoredBoard } from "./store.js";
 import * as topics from "./topics.js";
@@ -576,7 +577,8 @@ async function handle(service: Service, request: BoardRequest): Promise<BoardRes
   // the root home asks it once, so they do not say "aggregator" for Firstmate.
   // A hands-on op never waits for a read: the aggregator may be asking from inside one.
   const commitFile = operationOf(request.op)?.commitFile;
-  if (service.aggregator === null && (commitFile === "topics" || commitFile === "hashtags"))
+  const reads = commitFile === "topics" || commitFile === "hashtags" || commitFile === "schedules";
+  if (service.aggregator === null && reads)
     await beforeDeadline(lookupDeadline(), false, () => service.poller.readNow(MAIN_HOME));
   return topicOp(service, request.op, request.args);
 }
@@ -1001,6 +1003,7 @@ function topicOp(
     agent: service.aggregator?.name ?? DEFAULT_LABEL,
     now: now(),
     records: boardRecords(service),
+    zone: machineTimeZone(),
   };
   const applied = applyOperation(commitTarget(service), before, { op, args, fromPage }, who);
   if (applied.committed !== null) {
