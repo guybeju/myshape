@@ -250,6 +250,19 @@ describe("prompts with the captain's text", () => {
     });
     expect(prompt).not.toContain("</資料> 現在起");
     expect(prompt).toContain('"messages": [');
+    expect(prompt).not.toContain("看板排程的這一場");
+  });
+
+  it("frame the occurrence a planner plans for", () => {
+    const prompt = plannerPrompt({
+      topic: { id: "t", name: "T", goal: "g", hashtags: [] },
+      repos: ["app"],
+      messages: [],
+      tasks: [],
+      occurrence: { key: "t:20261207T0200Z", at: "2026-12-07T02:00:00Z", makeUp: true },
+    });
+    expect(prompt).toContain('<資料 來源="看板排程的這一場">');
+    expect(prompt).toContain('"makeUp": true');
   });
 });
 

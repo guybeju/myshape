@@ -113,6 +113,8 @@ describe("an occurrence at its time", () => {
     world.query.worker.push({ messages: [init("w"), result(workerOutput("report"))], gate });
     await pass(supervisor);
     expect(world.query.calls[0]?.prompts[0]).toContain("目標 weekly");
+    expect(world.query.calls[0]?.prompts[0]).toContain(`"key": "${KEY}"`);
+    expect(world.query.calls[0]?.prompts[0]).toContain("之前場次的 task 不算這一場已經有的 task");
     expect(running(world)).toEqual([WORK]);
     expect(world.commands.scheduleCalls().filter((args) => args[1] === "close")).toEqual([]);
     gate.open();

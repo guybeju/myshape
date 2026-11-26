@@ -59,6 +59,7 @@ import {
   plannerPrompt,
   resumePrompt,
   workerPrompt,
+  type PlannerBrief,
   type ResumeInput,
 } from "./prompts.js";
 import { ScheduleStep, type MakeUp } from "./schedule-step.js";
@@ -155,6 +156,8 @@ function hasSchedule(board: Board, topic: string): boolean {
 /** What a planner plans for: an occurrence's work, a make-up, or the topic's ordinary work. */
 interface PlanFor {
   ref: WorkRef;
+  /** The occurrence's T, in UTC. */
+  at: string;
   /** The missed notice a make-up answers, retired once the planner has run. */
   makeUp: MakeUp | undefined;
 }
@@ -448,11 +451,7 @@ export class Supervisor {
     entries: ReadonlyMap<string, OrderEntry>,
   ): ReadonlyMap<string, OrderEntry> {
     const all = new Map(entries);
-    const topics = [...this.makeUps.keys(), ...[...this.live.values()].map((entry) => entry.topic)];
-    for (const id of [...this.tasks.keys(), ...this.queued.map((entry) => entry.id)]) {
-      if (workOf(id) !== undefined) topics.push(this.topicOfAny(id));
-    }
-    for (const topic of topics) {
+    for (const topic of this.scheduleWorkTopics()) {
       if (all.has(topic)) continue;
       const entry = topicEntry(board, topic, "schedule work outside the order");
       if (entry !== undefined) all.set(topic, entry);
@@ -462,18 +461,24 @@ export class Supervisor {
 
   // --- schedules -----------------------------------------------------------------
 
+  /** The topics of make-ups, running sessions, and the tasks and queued tasks of occurrences. */
+  private scheduleWorkTopics(): string[] {
+    const tags = this.store.readTags();
+    const tasks = [...this.tasks.keys()]
+      .filter((id) => workOf(id) !== undefined)
+      .map((id) => this.current(tags.get(id) ?? ""));
+    const queued = this.queued
+      .filter((entry) => workOf(entry.id) !== undefined)
+      .map((entry) => this.current(entry.topic_hint));
+    const live = [...this.live.values()].map((entry) => entry.topic);
+    return [...this.makeUps.keys(), ...live, ...tasks, ...queued];
+  }
+
   /** Whether `topic` (merges followed) is live on the board as the last pass read it. */
   private liveTopic(topic: string): boolean {
     const now = this.current(topic);
     const board = this.boardNow;
     return board !== undefined && board.topics.topics.has(now) && !board.archived.has(now);
-  }
-
-  /** A task's or queued task's topic now: its tag, else its queued topic, merges followed. */
-  private topicOfAny(id: string): string {
-    const tag = this.store.readTags().get(id);
-    if (tag !== undefined) return this.current(tag);
-    return this.current(this.queued.find((entry) => entry.id === id)?.topic_hint ?? "");
   }
 
   /**
@@ -526,7 +531,7 @@ export class Supervisor {
     this.store.writeQueued(this.queued);
   }
 
-  /** Whether an occurrence still needs its planner: it has no work, and none was planned this run. */
+  /** Whether an occurrence still needs its planner: no work of it exists or was planned this run. */
   private needsPlan(key: string): boolean {
     if (this.plannedFor.has(key)) return false;
     const ids = [...this.tasks.keys(), ...this.queued.map((entry) => entry.id)];
@@ -836,10 +841,14 @@ export class Supervisor {
 
   /** What a plan candidate plans for: its occurrence, the topic's make-up, or undefined. */
   private planFor(candidate: Candidate): PlanFor | undefined {
-    if (candidate.occurrence !== undefined)
-      return { ref: { key: candidate.occurrence, makeUp: false }, makeUp: undefined };
+    const key = candidate.occurrence;
+    if (key !== undefined) {
+      const at = this.schedules.occurrences.get(key)?.at ?? "";
+      return { ref: { key, makeUp: false }, at, makeUp: undefined };
+    }
     const makeUp = this.makeUps.get(candidate.topic);
-    return makeUp === undefined ? undefined : { ref: { key: makeUp.key, makeUp: true }, makeUp };
+    if (makeUp === undefined) return undefined;
+    return { ref: { key: makeUp.key, makeUp: true }, at: makeUp.item.schedule.at, makeUp };
   }
 
   // --- the planner -------------------------------------------------------------
@@ -890,14 +899,7 @@ export class Supervisor {
   ): Promise<void> {
     for (const item of messages) this.offered.add(item.file);
     const abort = new AbortController();
-    const prompt = new PromptStream(
-      plannerPrompt({
-        topic: { id: entry.topic, name: entry.name, goal: entry.goal, hashtags: entry.hashtags },
-        repos: Object.keys(this.settings.repos),
-        messages: messages.map((item) => item.text),
-        tasks: this.topicTasks(entry.topic),
-      }),
-    );
+    const prompt = new PromptStream(plannerPrompt(this.plannerBrief(entry, messages, purpose)));
     const options = plannerOptions(this.settings.worktreeRoot, this.sessionContext(null, abort));
     const run = this.deps.query({ prompt, options });
     const report = await followSession(run, prompt, abort, { mode: "dontAsk", onStart: () => {} });
@@ -908,6 +910,23 @@ export class Supervisor {
     }
     for (const item of messages) this.retireLogged(item.file);
     if (purpose?.makeUp !== undefined) this.retireLogged(purpose.makeUp.item.file);
+  }
+
+  private plannerBrief(
+    entry: OrderEntry,
+    messages: readonly (InboxItem & { kind: "message" })[],
+    purpose: PlanFor | undefined,
+  ): PlannerBrief {
+    const brief: PlannerBrief = {
+      topic: { id: entry.topic, name: entry.name, goal: entry.goal, hashtags: entry.hashtags },
+      repos: Object.keys(this.settings.repos),
+      messages: messages.map((item) => item.text),
+      tasks: this.topicTasks(entry.topic),
+    };
+    if (purpose !== undefined) {
+      brief.occurrence = { key: purpose.ref.key, at: purpose.at, makeUp: purpose.ref.makeUp };
+    }
+    return brief;
   }
 
   private takePlan(topic: string, report: SessionReport, ref: WorkRef | undefined): void {

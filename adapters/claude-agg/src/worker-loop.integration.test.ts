@@ -560,7 +560,7 @@ describe.skipIf(!IN_CI)(
     );
 
     it(
-      "takes a schedule the captain made on the page, starts its work at its time and closes it done",
+      "takes the captain's page schedule, starts its work at its time and closes it done",
       async () => {
         await openBoard();
         logs.length = 0;

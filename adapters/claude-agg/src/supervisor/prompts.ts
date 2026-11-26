@@ -113,7 +113,12 @@ export interface PlannerBrief {
   messages: readonly string[];
   /** The topic's tasks so far. */
   tasks: readonly { id: string; title: string; state: string; detail: string }[];
+  /** The occurrence of the topic's schedule this plan is for, or a missed one it makes up. */
+  occurrence?: { key: string; at: string; makeUp: boolean };
 }
+
+const OCCURRENCE_RULE =
+  "- 這次是為議題排程的一場規劃（補做錯過的一場時也一樣）：照議題的目標開這一場要做的 task。之前場次的 task 不算這一場已經有的 task。";
 
 /** The planner's prompt for one topic that has no task yet. */
 export function plannerPrompt(brief: PlannerBrief): string {
@@ -129,5 +134,8 @@ export function plannerPrompt(brief: PlannerBrief): string {
     frame({ source: "supervisor 的設定：可以用的 repo", data: { repos: brief.repos } }),
     frame({ source: "這個議題已經有的 task", data: { tasks: brief.tasks } }),
     frame({ source: "captain 在看板上寫給這個議題的話", data: { messages: brief.messages } }),
+    ...(brief.occurrence === undefined
+      ? []
+      : [OCCURRENCE_RULE, frame({ source: "看板排程的這一場", data: brief.occurrence })]),
   ].join("\n");
 }
