@@ -281,7 +281,100 @@ test_secondmate_home_cannot_create() {
   pass "create runs only in the main home"
 }
 
+sched() {  # <jq filter over schedules.json>
+  jq -r "$1" "$HOME_DIR/data/myshape/schedules.json"
+}
+
+# Every schedule command, the queue rules of a scheduled topic, and list's
+# open occurrences. Nothing opens an occurrence yet, so the open one is written
+# into schedules.json while the board is stopped, as the clock will.
+test_schedules() {
+  local out key
+  t create "Weekly sync" --goal "g" --id wsync --queue later >/dev/null
+  t create "Mail" --goal "g" --id mailcheck --queue later >/dev/null
+  t create "Loose" --goal "g" --id loose >/dev/null
+  out=$(t schedule add wsync --weekly mon --at 10:00 --tz Asia/Taipei)
+  assert_contains "$out" "ok wsync 已排程：每週一 10:00（Asia/Taipei）" "schedule add must say what it scheduled"
+  assert_contains "$out" "最快的一場是" "schedule add must name the earliest occurrence"
+  assert_equals "weekly mon 10:00|aggregator|false|false|on" \
+    "$(sched '.series.wsync | "\(.rule)|\(.by)|\(.locked)|\(.seen)|\(.state)"')" \
+    "an aggregator's schedule must be stored unlocked, unseen and on"
+  assert_contains "$(t schedule add wsync --weekly mon --at 10:00 --tz Asia/Taipei)" "本來就有這筆排程" \
+    "repeating schedule add must change nothing"
+  expect_code 1 "$(code schedule add loose --daily --at 06:00)" "a schedule on a topic outside 待辦"
+  assert_contains "$(t schedule add loose --daily --at 06:00 2>&1)" "先把議題移到待辦" \
+    "the refusal must say to move the topic to 待辦 first"
+  expect_code 2 "$(code schedule add mailcheck --daily)" "schedule add without --at"
+  expect_code 2 "$(code schedule add mailcheck --weekly funday --at 06:00)" "an unknown weekday"
+  expect_code 2 "$(code schedule add mailcheck --daily --at 06:00 --tz Mars/Base)" "an unknown zone"
+  expect_code 2 "$(code schedule add mailcheck --daily --at 06:00 --lead 500)" "a lead out of range"
+  expect_code 2 "$(code schedule settings)" "a page-only schedule press from the command line"
+
+  expect_code 1 "$(code move wsync high)" "moving a scheduled topic out of 待辦"
+  assert_contains "$(t move wsync high 2>&1)" "這個議題有排程，位置由時間決定" "move must say why"
+  expect_code 0 "$(code move wsync later --first)" "a move within 待辦"
+
+  assert_contains "$(t schedule edit wsync --at 11:00)" "ok wsync 排程已改：每週一 11:00" "schedule edit must retime"
+  assert_contains "$(t schedule rt wsync hard-rt)" "ok wsync rt 改為 hard-rt" "schedule rt must set rt"
+  expect_code 2 "$(code schedule rt wsync loud)" "an unknown rt"
+  assert_contains "$(t schedule pause wsync)" "ok wsync 排程已暫停" "schedule pause must pause"
+  assert_contains "$(t schedule resume wsync)" "ok wsync 排程已恢復" "schedule resume must resume"
+  assert_contains "$(t schedule skip wsync)" "ok wsync 跳過" "schedule skip must skip the next occurrence"
+  assert_contains "$(t schedule skip wsync)" "本來就已跳過" "repeating schedule skip must change nothing"
+  assert_equals "wsync|weekly mon 11:00|hard-rt|null" \
+    "$(t list --json | jq -r '.[] | select(.id == "wsync") | "\(.schedule.id)|\(.schedule.rule)|\(.schedule.rt)|\(.occurrence)"')" \
+    "list --json must carry the schedule on its topic's row"
+  assert_equals "null" "$(t list --json | jq -r '.[] | select(.id == "loose") | .schedule')" \
+    "a topic without a schedule must have a null schedule"
+
+  t stop >/dev/null
+  key="wsync:20991130T0300Z"
+  jq --arg key "$key" '.occurrences[$key] = {series: "wsync", at: "2099-11-30T03:00:00Z", state: "due",
+      opened_at: "2099-11-30T02:45:00Z", closes_by: "2099-11-30T04:00:00Z"}
+    | .occurrences["wsync:20200106T0300Z"] = {series: "wsync", at: "2020-01-06T03:00:00Z", state: "due",
+      opened_at: "2020-01-06T02:45:00Z", closes_by: "2020-01-06T04:00:00Z"}' \
+    "$HOME_DIR/data/myshape/schedules.json" > "$TMP_ROOT/schedules.json"
+  cp "$TMP_ROOT/schedules.json" "$HOME_DIR/data/myshape/schedules.json"
+  assert_equals "$(printf 'wsync\tnow\tdue\t%s\tWeekly sync（hard-rt）' "$key")" "$(t list | head -n 1)" \
+    "list must put an open occurrence first, and not one past its closes_by"
+  assert_equals "$key" "$(t list --json | jq -r '.[] | select(.id == "wsync") | .occurrence.key')" \
+    "list --json must carry the open occurrence on its topic's row"
+  assert_contains "$(t schedule take "$key" --note "有空位再開")" "ok $key 已接下" "schedule take must take an open occurrence"
+  assert_equals "taken|有空位再開" \
+    "$(jq -r --arg k "$key" '.occurrences[$k] | "\(.state)|\(.note)"' "$HOME_DIR/data/myshape/schedules.json")" \
+    "take must store the state and note"
+  expect_code 1 "$(code schedule take wsync:20991207T0300Z)" "taking an occurrence that is not open"
+  expect_code 2 "$(code schedule close "$key" finished)" "closing with an unknown outcome"
+  assert_contains "$(t schedule close "$key" "done" --note "紀錄已整理")" "ok $key 已結束" "schedule close must end it"
+  assert_contains "$(t schedule close "$key" "done")" "本來就已結束" "repeating schedule close must change nothing"
+  assert_equals "done" "$(jq -r '.recent.wsync[-1].outcome' "$HOME_DIR/data/myshape/schedules.json")" \
+    "a closed occurrence must go to the last ten"
+
+  assert_contains "$(t archive wsync)" "ok wsync 已封存" "archiving a scheduled topic"
+  assert_equals "paused" "$(sched '.series.wsync.state')" "archiving must pause the schedule"
+  assert_contains "$(t reopen wsync --queue high)" "（有排程，排程議題放在「待辦」）" "reopen must say where it landed"
+  assert_contains " $(queue later) " " wsync " "a reopened scheduled topic must land in 待辦"
+
+  t schedule add mailcheck --daily --at 06:00 >/dev/null
+  expect_code 1 "$(code merge mailcheck wsync)" "merging two scheduled topics"
+  assert_contains "$(t merge mailcheck wsync 2>&1)" "先刪掉其中一筆排程" "the merge refusal must say what to do"
+  out=$(t merge mailcheck loose)
+  assert_contains "$out" "排程跟著過來，議題放進「待辦」" "a single schedule must follow the merge"
+  assert_contains " $(queue later) " " loose " "the topic merged into must go to 待辦"
+  assert_equals "mailcheck" "$(t list --json | jq -r '.[] | select(.id == "loose") | .schedule.id')" \
+    "the schedule must follow its topic into the one it was merged into"
+
+  assert_contains "$(t schedule delete wsync)" "ok wsync 排程已刪除" "schedule delete must delete"
+  assert_contains "$(t schedule delete wsync)" "本來就已刪除" "repeating schedule delete must change nothing"
+  assert_equals "wsync" "$(sched '.removed | keys | join(",")')" "a deleted schedule must be kept for undoing"
+  assert_contains "$(t move wsync high)" "ok wsync 已移到「高」" "a topic without its schedule moves again"
+  # Nine schedule changes so far, under the aggregator's default cap of ten an hour.
+  assert_equals "aggregator" "$(jq -r 'select(.kind == "schedule.created") | .by' \
+    "$HOME_DIR/data/myshape/events.jsonl" | sort -u | tr -d '\n')" "every schedule change must write a record by its actor"
+  pass "schedule commands keep a topic coming up on a timetable, held in 待辦"
+}
+
 fm_test_run test_create test_move test_rename_goal_and_close_propose \
   test_archive_and_reopen test_merge test_hashtags test_reset_token test_confirms_leftover_proposals \
-  test_secondmate_home_cannot_create
+  test_secondmate_home_cannot_create test_schedules
 t stop >/dev/null
