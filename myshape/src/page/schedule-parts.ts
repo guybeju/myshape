@@ -4,18 +4,27 @@
 // The board orders the strip and gives every local time (schedule-view.ts).
 // None of these cards is a .topic in a .queue, so none can be dragged.
 import type { NowEntry, ScheduleCard } from "#board/schedule-view.js";
+import type { Weekday } from "#board/schedule-time.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { draftInput, recentCard, settingsTable, topicLink } from "./parts.js";
 import type { SettingRow } from "./parts.js";
 import {
+  FORM_DAYS,
   STATE_LABEL,
+  enableLabel,
+  flipDay,
+  formBody,
+  formDays,
+  formHints,
   lastMissed,
+  lockLabel,
   liveNow,
   nextLine,
   outcomeLabel,
   rtHint,
   scheduleOn,
+  settingWords,
   silentReason,
 } from "./schedules.js";
 import { agentName } from "./state.js";
@@ -138,23 +147,6 @@ export function scheduleColumn(
 
 // ---------------------------------------------------------------- the line on the home page
 
-const BOOLEAN_WORDS: Partial<Record<keyof Settings, [string, string]>> = {
-  aggregator_needs_enable: ["要", "不用"],
-  captain_locks_by_default: ["上鎖", "不鎖"],
-};
-const MISSED_WORDS: Record<string, string> = {
-  notice: "送一則「錯過」",
-  due: "補送晚了的「到了」",
-  record: "只記錄",
-};
-const MINUTE_SETTINGS = new Set<keyof Settings>([
-  "lead_min",
-  "duration_min",
-  "max_open_min",
-  "late_after_min",
-  "first_bell_min_ahead",
-]);
-
 const SETTING_LABEL: Record<Exclude<keyof Settings, "all_paused">, () => string> = {
   lead_min: () => "提前幾分鐘送第一則（0 表示不送「快到了」）",
   duration_min: () => "時段長度：沒人接的在 T 加這麼久結束",
@@ -173,16 +165,6 @@ const SETTING_LABEL: Record<Exclude<keyof Settings, "all_paused">, () => string>
 };
 type SettingName = keyof typeof SETTING_LABEL;
 
-function shownSetting(name: SettingName, value: Settings[SettingName]): string {
-  if (typeof value === "boolean") {
-    const [yes, no] = BOOLEAN_WORDS[name] ?? ["可以", "不可以"];
-    return value ? yes : no;
-  }
-  if (name === "missed") return MISSED_WORDS[String(value)] ?? String(value);
-  if (name === "default_tz") return value === null ? "這台機器的時區" : String(value);
-  return MINUTE_SETTINGS.has(name) ? `${String(value)} 分` : String(value);
-}
-
 function choiceControl(
   view: View,
   name: "missed" | "default_rt",
@@ -197,7 +179,7 @@ function choiceControl(
       h(
         "option",
         { value: choice, ...(choice === current ? { selected: true } : {}) },
-        name === "missed" ? (MISSED_WORDS[choice] ?? choice) : choice,
+        name === "missed" ? settingWords("missed", choice as Settings["missed"]) : choice,
       ),
     ),
   );
@@ -224,7 +206,7 @@ function settingControl(page: Page, view: View, actions: Actions, name: SettingN
   const current = view.schedules.settings[name];
   const apply = (value: unknown): void => actions.send("schedules/settings", { [name]: value });
   if (typeof current === "boolean")
-    return h("button", { onclick: () => apply(!current) }, `改成${shownSetting(name, !current)}`);
+    return h("button", { onclick: () => apply(!current) }, `改成${settingWords(name, !current)}`);
   if (name === "missed" || name === "default_rt") return choiceControl(view, name, apply);
   if (name === "default_tz")
     return [
@@ -240,8 +222,8 @@ function settingsPanel(page: Page, view: View, actions: Actions): Child {
   const names = Object.keys(SETTING_LABEL) as SettingName[];
   const rows: SettingRow[] = names.map((name) => ({
     label: SETTING_LABEL[name](),
-    current: shownSetting(name, settings[name]),
-    fallback: shownSetting(name, defaults[name]),
+    current: settingWords(name, settings[name]),
+    fallback: settingWords(name, defaults[name]),
     control: settingControl(page, view, actions, name),
   }));
   return h(
@@ -262,78 +244,66 @@ function settingsPanel(page: Page, view: View, actions: Actions): Child {
   );
 }
 
+function recentButton(page: Page, view: View, actions: Actions): Child {
+  const count = view.schedules.recent.length;
+  if (count === 0) return null;
+  const toggle = (): void =>
+    actions.setSchedulePanel(page.schedulePanel === "recent" ? null : "recent");
+  return h("button", { class: "link", onclick: toggle }, `${agentName()} 最近改了 ${count} 筆排程`);
+}
+
+function pauseAll(view: View, actions: Actions): Child {
+  const paused = view.schedules.settings.all_paused;
+  return [
+    paused ? h("span", { class: "pill warn" }, "所有排程暫停中：不開新時段、不送排程通知") : null,
+    h(
+      "button",
+      { onclick: () => actions.send("schedules/pause-all", { paused: !paused }) },
+      paused ? "全部恢復" : "全部暫停",
+    ),
+  ];
+}
+
+function barPanel(page: Page, view: View, actions: Actions): Child {
+  if (page.schedulePanel === "settings") return settingsPanel(page, view, actions);
+  if (page.schedulePanel !== "recent") return null;
+  return recentCard(view, actions, {
+    title: `${agentName()} 最近的排程改動`,
+    changes: view.schedules.recent,
+    revert: "schedules/revert",
+    seen: "schedules/seen",
+  });
+}
+
 /** The line under the filter bar: the agent's recent schedule changes, the settings, pausing everything. */
 export function scheduleBar(page: Page, view: View, actions: Actions): Child {
-  const { recent, settings } = view.schedules;
-  const toggle = (panel: "settings" | "recent"): void =>
-    actions.setSchedulePanel(page.schedulePanel === panel ? null : panel);
+  const settings = (): void =>
+    actions.setSchedulePanel(page.schedulePanel === "settings" ? null : "settings");
   return h(
     "section",
     { class: "filterbar", "data-bar": "schedules" },
     h(
       "div",
       { class: "btns" },
-      settings.all_paused
-        ? h("span", { class: "pill warn" }, "所有排程暫停中：不開新時段、不送排程通知")
-        : null,
-      recent.length > 0
-        ? h(
-            "button",
-            { class: "link", onclick: () => toggle("recent") },
-            `${agentName()} 最近改了 ${recent.length} 筆排程`,
-          )
-        : null,
-      h("button", { class: "link", onclick: () => toggle("settings") }, "排程設定"),
-      h(
-        "button",
-        { onclick: () => actions.send("schedules/pause-all", { paused: !settings.all_paused }) },
-        settings.all_paused ? "全部恢復" : "全部暫停",
-      ),
+      recentButton(page, view, actions),
+      h("button", { class: "link", onclick: settings }, "排程設定"),
+      pauseAll(view, actions),
     ),
-    page.schedulePanel === "recent"
-      ? recentCard(view, actions, {
-          title: `${agentName()} 最近的排程改動`,
-          changes: recent,
-          revert: "schedules/revert",
-          seen: "schedules/seen",
-        })
-      : null,
-    page.schedulePanel === "settings" ? settingsPanel(page, view, actions) : null,
+    barPanel(page, view, actions),
   );
 }
 
 // ---------------------------------------------------------------- a topic's page
 
-const DAYS = [
-  ["mon", "一"],
-  ["tue", "二"],
-  ["wed", "三"],
-  ["thu", "四"],
-  ["fri", "五"],
-  ["sat", "六"],
-  ["sun", "日"],
-] as const;
-
-/** The days the form has ticked: what was typed, or the schedule's own; none means every day. */
-function formDays(page: Page, id: string, card: ScheduleCard | undefined): string[] {
-  const typed = page.drafts.get(`schedule-days:${id}`);
-  if (typed !== undefined) return typed === "" ? [] : typed.split(",");
-  return card === undefined || card.days === "daily" ? [] : card.days;
-}
-
 function dayBoxes(page: Page, actions: Actions, id: string, card: ScheduleCard | undefined): Child {
-  const ticked = formDays(page, id, card);
-  const flip = (day: string): void => {
-    const now = formDays(page, id, card);
-    const next = now.includes(day) ? now.filter((entry) => entry !== day) : [...now, day];
-    const ordered = DAYS.map(([name]) => name).filter((name) => next.includes(name));
-    actions.draft(`schedule-days:${id}`, ordered.join(","));
-  };
+  const ticked = formDays(page.drafts, id, card);
+  const flip = (day: Weekday): void =>
+    actions.draft(`schedule-days:${id}`, flipDay(formDays(page.drafts, id, card), day).join(","));
   return h(
     "span",
     {},
     "星期（都不勾就是每天）：",
-    DAYS.map(([day, word]) =>
+    FORM_DAYS.map(([day, word]) =>
       h(
         "label",
         {},
@@ -346,23 +316,6 @@ function dayBoxes(page: Page, actions: Actions, id: string, card: ScheduleCard |
       ),
     ),
   );
-}
-
-/** What the add or edit form sends: the rule always, the rest only when typed. */
-function formBody(page: Page, id: string, card: ScheduleCard | undefined): Record<string, unknown> {
-  const typed = (field: string): string =>
-    (page.drafts.get(`schedule-${field}:${id}`) ?? "").trim();
-  const days = formDays(page, id, card);
-  const body: Record<string, unknown> = {
-    topic: id,
-    at: typed("at") === "" ? (card?.at ?? "") : typed("at"),
-    ...(days.length === 0 ? { daily: true } : { weekly: days.join(",") }),
-  };
-  if (typed("tz") !== "") body["tz"] = typed("tz");
-  if (typed("lead") !== "") body["lead"] = Number(typed("lead"));
-  if (typed("duration") !== "") body["duration"] = Number(typed("duration"));
-  if (card === undefined && typed("rt") !== "") body["rt"] = typed("rt");
-  return body;
 }
 
 function clearForm(page: Page, actions: Actions, id: string): void {
@@ -387,45 +340,44 @@ function rtChoice(
   );
 }
 
+/** The rt a new schedule starts with; an existing one has its own control. */
+function newRt(view: View, actions: Actions, id: string): Child {
+  return rtChoice(
+    view.schedules.rt_values,
+    null,
+    (rt) => actions.draft(`schedule-rt:${id}`, rt),
+    `rt（${view.schedules.settings.default_rt}）`,
+  );
+}
+
 function scheduleForm(page: Page, view: View, actions: Actions, id: string): Child {
   const card = scheduleOn(view.schedules, id);
-  const { settings } = view.schedules;
-  const input = (field: string, hint: string): HTMLElement =>
-    draftInput(page, actions, `schedule-${field}:${id}`, hint);
+  const hints = formHints(card, view.schedules.settings);
+  const input = (field: "at" | "tz" | "lead" | "duration"): HTMLElement =>
+    draftInput(page, actions, `schedule-${field}:${id}`, hints[field]);
   const save = (): void => {
-    actions.send(card === undefined ? "schedules/add" : "schedules/edit", formBody(page, id, card));
+    actions.send(
+      `schedules/${card === undefined ? "add" : "edit"}`,
+      formBody(page.drafts, id, card),
+    );
     clearForm(page, actions, id);
   };
-  const lead = card?.lead ?? settings.lead_min;
-  const duration = card?.duration ?? settings.duration_min;
   return h(
     "div",
     { class: "card" },
     h("div", { class: "btns" }, dayBoxes(page, actions, id, card)),
+    h("div", { class: "btns" }, input("at"), input("tz")),
     h(
       "div",
       { class: "btns" },
-      input("at", card === undefined ? "時間 HH:MM，例如 10:00" : `時間（現在 ${card.at}）`),
-      input("tz", `時區（${card?.tz ?? settings.default_tz ?? "這台機器的時區"}）`),
+      input("lead"),
+      input("duration"),
+      card === undefined ? newRt(view, actions, id) : null,
     ),
     h(
       "div",
       { class: "btns" },
-      input("lead", `提前幾分鐘（${lead}）`),
-      input("duration", `時段長度（${duration} 分）`),
-      card === undefined
-        ? rtChoice(
-            view.schedules.rt_values,
-            null,
-            (rt) => actions.draft(`schedule-rt:${id}`, rt),
-            `rt（${settings.default_rt}）`,
-          )
-        : null,
-    ),
-    h(
-      "div",
-      { class: "btns" },
-      h("button", { class: "primary", onclick: save }, card === undefined ? "建立排程" : "儲存"),
+      h("button", { class: "primary", onclick: save }, hints.save),
       h("button", { onclick: () => clearForm(page, actions, id) }, "取消"),
     ),
   );
@@ -433,31 +385,19 @@ function scheduleForm(page: Page, view: View, actions: Actions, id: string): Chi
 
 function lockButton(actions: Actions, card: ScheduleCard, lock: "schedule" | "rt"): Child {
   const locked = lock === "schedule" ? card.locked : card.rt_locked;
-  const what = lock === "schedule" ? "排程" : "rt";
-  const label = locked
-    ? `解鎖${what}（現在 ${agentName()} 不能改）`
-    : `鎖上${what}（${agentName()} 就不能改）`;
-  return h(
-    "button",
-    {
-      onclick: () => actions.send("schedules/lock", { topic: card.topic, lock, locked: !locked }),
-    },
-    label,
-  );
+  const toggle = (): void =>
+    actions.send("schedules/lock", { topic: card.topic, lock, locked: !locked });
+  return h("button", { onclick: toggle }, lockLabel(lock, locked, agentName()));
 }
 
-/** 啟用 is the seen mark (schedule-seen): it enables every waiting schedule at once, so it says so. */
+/** 啟用 is the seen mark (schedule-seen), so its words say it enables every waiting schedule. */
 function enableButton(view: View, actions: Actions, card: ScheduleCard): Child {
   if (!card.awaiting_enable) return null;
   const waiting = view.schedules.series.filter((entry) => entry.awaiting_enable).length;
-  const label =
-    waiting > 1
-      ? `啟用（${agentName()} 建的 ${waiting} 筆新排程會一起啟用，並標成看過）`
-      : "啟用（並把它標成看過）";
   return h(
     "button",
     { class: "primary", onclick: () => actions.send("schedules/seen", {}) },
-    label,
+    enableLabel(waiting, agentName()),
   );
 }
 

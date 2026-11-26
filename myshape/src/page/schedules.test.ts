@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { NowEntry, ScheduleCard } from "#board/schedule-view.js";
+import { DEFAULT_SETTINGS } from "#board/schedules.js";
 import {
+  enableLabel,
+  flipDay,
+  formBody,
+  formDays,
+  formHints,
   lastMissed,
+  lockLabel,
   liveNow,
   nextLine,
   outcomeLabel,
   rtHint,
   scheduleOn,
   scheduledTopics,
+  settingWords,
   silentReason,
 } from "./schedules.js";
 
@@ -129,5 +137,113 @@ describe("the words", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("the add and edit form", () => {
+  it("ticks what was typed, else the schedule's own days, and none for every day", () => {
+    const drafts = new Map<string, string>();
+    expect(formDays(drafts, "sync", undefined)).toEqual([]);
+    expect(formDays(drafts, "sync", card({ days: ["mon", "thu"] }))).toEqual(["mon", "thu"]);
+    expect(formDays(drafts, "sync", card({ days: "daily" }))).toEqual([]);
+    drafts.set("schedule-days:sync", "tue,nope");
+    expect(formDays(drafts, "sync", card())).toEqual(["tue"]);
+    drafts.set("schedule-days:sync", "");
+    expect(formDays(drafts, "sync", card())).toEqual([]);
+    expect(formDays(drafts, "other", card())).toEqual(["mon"]);
+  });
+
+  it("flips one day, keeping Monday-first order", () => {
+    expect(flipDay(["thu"], "mon")).toEqual(["mon", "thu"]);
+    expect(flipDay(["mon", "thu"], "mon")).toEqual(["thu"]);
+    expect(flipDay(["sat"], "sun")).toEqual(["sat", "sun"]);
+    expect(flipDay([], "wed")).toEqual(["wed"]);
+  });
+
+  it("sends the rule always, and the rest only when typed", () => {
+    const drafts = new Map<string, string>([["schedule-at:mail", " 06:00 "]]);
+    expect(formBody(drafts, "mail", undefined)).toEqual({
+      topic: "mail",
+      at: "06:00",
+      daily: true,
+    });
+    drafts.set("schedule-days:mail", "mon,thu");
+    drafts.set("schedule-tz:mail", "Asia/Taipei");
+    drafts.set("schedule-lead:mail", "20");
+    drafts.set("schedule-duration:mail", "30");
+    drafts.set("schedule-rt:mail", "hard-rt");
+    expect(formBody(drafts, "mail", undefined)).toEqual({
+      topic: "mail",
+      at: "06:00",
+      weekly: "mon,thu",
+      tz: "Asia/Taipei",
+      lead: 20,
+      duration: 30,
+      rt: "hard-rt",
+    });
+    // Editing: the time stays unless typed, and rt has its own control.
+    const editing = new Map<string, string>([
+      ["schedule-rt:sync", "hard-rt"],
+      ["schedule-tz:sync", "  "],
+    ]);
+    expect(formBody(editing, "sync", card())).toEqual({
+      topic: "sync",
+      at: "10:00",
+      weekly: "mon",
+    });
+    expect(formBody(new Map(), "x", undefined)).toEqual({ topic: "x", at: "", daily: true });
+  });
+
+  it("says what each field is now, or what a new schedule takes", () => {
+    expect(formHints(undefined, DEFAULT_SETTINGS)).toEqual({
+      at: "時間 HH:MM，例如 10:00",
+      tz: "時區（這台機器的時區）",
+      lead: "提前幾分鐘（15）",
+      duration: "時段長度（60 分）",
+      save: "建立排程",
+    });
+    expect(
+      formHints(undefined, { ...DEFAULT_SETTINGS, default_tz: "UTC", lead_min: 5 }),
+    ).toMatchObject({
+      tz: "時區（UTC）",
+      lead: "提前幾分鐘（5）",
+    });
+    expect(formHints(card({ lead: 7, duration: 30 }), DEFAULT_SETTINGS)).toEqual({
+      at: "時間（現在 10:00）",
+      tz: "時區（Asia/Taipei）",
+      lead: "提前幾分鐘（7）",
+      duration: "時段長度（30 分）",
+      save: "儲存",
+    });
+  });
+});
+
+describe("the settings panel and the buttons", () => {
+  it("puts each setting in the panel's words", () => {
+    expect(settingWords("lead_min", 15)).toBe("15 分");
+    expect(settingWords("first_bell_min_ahead", 0)).toBe("0 分");
+    expect(settingWords("max_active", 20)).toBe("20");
+    expect(settingWords("aggregator_may_create", true)).toBe("可以");
+    expect(settingWords("aggregator_may_set_rt", false)).toBe("不可以");
+    expect(settingWords("aggregator_needs_enable", true)).toBe("要");
+    expect(settingWords("aggregator_needs_enable", false)).toBe("不用");
+    expect(settingWords("captain_locks_by_default", true)).toBe("上鎖");
+    expect(settingWords("captain_locks_by_default", false)).toBe("不鎖");
+    expect(settingWords("missed", "notice")).toBe("送一則「錯過」");
+    expect(settingWords("missed", "due")).toBe("補送晚了的「到了」");
+    expect(settingWords("missed", "record")).toBe("只記錄");
+    expect(settingWords("default_tz", null)).toBe("這台機器的時區");
+    expect(settingWords("default_tz", "UTC")).toBe("UTC");
+    expect(settingWords("default_rt", "soft-rt")).toBe("soft-rt");
+  });
+
+  it("names what a lock press does", () => {
+    expect(lockLabel("schedule", true, "plain")).toBe("解鎖排程（現在 plain 不能改）");
+    expect(lockLabel("rt", false, "plain")).toBe("鎖上rt（plain 就不能改）");
+  });
+
+  it("says 啟用 enables every waiting schedule when there is more than one", () => {
+    expect(enableLabel(1, "plain")).toBe("啟用（並把它標成看過）");
+    expect(enableLabel(3, "plain")).toBe("啟用（plain 建的 3 筆新排程會一起啟用，並標成看過）");
   });
 });
