@@ -217,6 +217,10 @@ function taggedBy(service, query) {
     const name = nameOfKey(service.board.hashtags, checked.key);
     return name === undefined ? null : { name, topics: topicsWith(service.board.hashtags, name) };
 }
+/** The topics that carry the hashtag `name`; none when the board has no such hashtag. */
+function hashtagTopics(service, name) {
+    return taggedBy(service, name)?.topics ?? [];
+}
 /**
  * Where a topic, hashtag or task is now and how it got there. The main home is
  * read afresh first, like `which`; other homes answer from their last read. A
@@ -862,7 +866,7 @@ function serveBrowser(service) {
                 return found ?? roleReason(roleCheck(service, role)) ?? "這支程式不需要確認。";
             },
             programConfirmed: () => programConfirmed(service),
-            hashtagTopics: (name) => taggedBy(service, name)?.topics ?? [],
+            hashtagTopics: (name) => hashtagTopics(service, name),
         }),
         // Only the path is recorded: a query string could carry a token someone pasted into the URL.
         onRejected: (reason, request) => {

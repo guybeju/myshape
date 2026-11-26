@@ -107,6 +107,8 @@ function hashtagButtons(page: Page, view: View, actions: Actions): Child {
 
 function keywordRow(page: Page, actions: Actions): Child {
   const filter = page.filter;
+  const keyword = (event: Event): void =>
+    actions.setFilter({ ...filter, text: (event.target as HTMLInputElement).value, view: null });
   const save = (): void => {
     const name = (page.drafts.get("view-name") ?? "").trim();
     if (name === "") return;
@@ -127,12 +129,11 @@ function keywordRow(page: Page, actions: Actions): Child {
       "data-key": "filter-text",
       placeholder: "關鍵字（比對頁面上的所有文字）",
       value: filter.text,
-      oninput: (event) =>
-        actions.setFilter({
-          ...filter,
-          text: (event.target as HTMLInputElement).value,
-          view: null,
-        }),
+      // A redraw in the middle of an input method's composition (Chinese, Japanese) would cut it off.
+      oninput: (event) => {
+        if (!(event as InputEvent).isComposing) keyword(event);
+      },
+      oncompositionend: keyword,
     }),
     isActive(filter)
       ? [
@@ -314,74 +315,81 @@ function wholeConfirm(page: Page, view: View, actions: Actions, key: string, wha
   );
 }
 
-function hashtagRow(page: Page, view: View, actions: Actions, entry: Hashtag): Child {
+/** One hashtag's line in the settings panel: how many topics, who opened it, its lock and colour. */
+function hashtagMeta(view: View, actions: Actions, entry: Hashtag): Child {
   const name = entry.name;
-  const renameKey = `tag-rename:${name}`;
-  const rename = (): void => {
-    const to = (page.drafts.get(`tag-to:${name}`) ?? "").trim();
-    if (to !== "") actions.ask(renameKey, "hashtags/rename", { name, to });
-  };
-  const others = view.hashtags.hashtags.filter((other) => other.name !== name);
+  const recolor = (event: Event): void =>
+    actions.send("hashtags/color", { name, color: (event.target as HTMLSelectElement).value });
   return h(
     "div",
-    { class: "card" },
+    { class: "meta" },
+    chip(view, name),
+    h("span", {}, `${entry.topics.length} 個議題`),
+    entry.created_by === "aggregator" ? h("span", { class: "note" }, `${agentName()} 開的`) : null,
     h(
-      "div",
-      { class: "meta" },
-      chip(view, name),
-      h("span", {}, `${entry.topics.length} 個議題`),
-      entry.created_by === "aggregator"
-        ? h("span", { class: "note" }, `${agentName()} 開的`)
-        : null,
-      h(
-        "button",
-        { onclick: () => actions.send("hashtags/lock", { name, locked: !entry.locked }) },
-        entry.locked ? "解鎖（現在只有你能貼撕）" : "鎖上",
-      ),
-      h(
-        "select",
-        {
-          class: "auto",
-          onchange: (event) =>
-            actions.send("hashtags/color", {
-              name,
-              color: (event.target as HTMLSelectElement).value,
-            }),
-        },
-        COLORS.map((color, index) =>
-          h(
-            "option",
-            { value: color, ...(color === entry.color ? { selected: true } : {}) },
-            `顏色 ${index + 1}`,
-          ),
+      "button",
+      { onclick: () => actions.send("hashtags/lock", { name, locked: !entry.locked }) },
+      entry.locked ? "解鎖（現在只有你能貼撕）" : "鎖上",
+    ),
+    h(
+      "select",
+      { class: "auto", onchange: recolor },
+      COLORS.map((color, index) =>
+        h(
+          "option",
+          { value: color, ...(color === entry.color ? { selected: true } : {}) },
+          `顏色 ${index + 1}`,
         ),
       ),
     ),
+  );
+}
+
+/** The menu that starts merging `name` into another hashtag; none when there is no other. */
+function mergeInto(view: View, actions: Actions, name: string): Child {
+  const others = view.hashtags.hashtags.filter((other) => other.name !== name);
+  if (others.length === 0) return null;
+  const choose = (event: Event): void => {
+    const into = (event.target as HTMLSelectElement).value;
+    if (into !== "") actions.ask(`tag-merge:${name}`, "hashtags/merge", { name, into });
+  };
+  return h(
+    "select",
+    { class: "auto", onchange: choose },
+    h("option", { value: "" }, "併入…"),
+    others.map((other) => h("option", { value: other.name }, `#${other.name}`)),
+  );
+}
+
+/** The other side of a pending whole-hashtag change, for its confirmation line. */
+function pendingArg(page: Page, key: string, field: string): string {
+  return String(page.pending.get(key)?.body[field] ?? "");
+}
+
+function hashtagRow(page: Page, view: View, actions: Actions, entry: Hashtag): Child {
+  const name = entry.name;
+  const keys = {
+    rename: `tag-rename:${name}`,
+    merge: `tag-merge:${name}`,
+    remove: `tag-delete:${name}`,
+  };
+  const rename = (): void => {
+    const to = (page.drafts.get(`tag-to:${name}`) ?? "").trim();
+    if (to !== "") actions.ask(keys.rename, "hashtags/rename", { name, to });
+  };
+  return h(
+    "div",
+    { class: "card" },
+    hashtagMeta(view, actions, entry),
     h(
       "div",
       { class: "btns" },
       draftInput(page, actions, `tag-to:${name}`, "新名稱", rename),
       h("button", { onclick: rename }, "改名…"),
-      others.length === 0
-        ? null
-        : h(
-            "select",
-            {
-              class: "auto",
-              onchange: (event) => {
-                const into = (event.target as HTMLSelectElement).value;
-                if (into !== "") actions.ask(`tag-merge:${name}`, "hashtags/merge", { name, into });
-              },
-            },
-            h("option", { value: "" }, "併入…"),
-            others.map((other) => h("option", { value: other.name }, `#${other.name}`)),
-          ),
+      mergeInto(view, actions, name),
       h(
         "button",
-        {
-          class: "danger",
-          onclick: () => actions.ask(`tag-delete:${name}`, "hashtags/delete", { name }),
-        },
+        { class: "danger", onclick: () => actions.ask(keys.remove, "hashtags/delete", { name }) },
         "刪掉…",
       ),
     ),
@@ -389,17 +397,17 @@ function hashtagRow(page: Page, view: View, actions: Actions, entry: Hashtag): C
       page,
       view,
       actions,
-      renameKey,
-      `把 #${name} 改名為 #${String(page.pending.get(renameKey)?.body["to"] ?? "")}，`,
+      keys.rename,
+      `把 #${name} 改名為 #${pendingArg(page, keys.rename, "to")}，`,
     ),
     wholeConfirm(
       page,
       view,
       actions,
-      `tag-merge:${name}`,
-      `把 #${name} 併入 #${String(page.pending.get(`tag-merge:${name}`)?.body["into"] ?? "")}，`,
+      keys.merge,
+      `把 #${name} 併入 #${pendingArg(page, keys.merge, "into")}，`,
     ),
-    wholeConfirm(page, view, actions, `tag-delete:${name}`, `刪掉 #${name}，`),
+    wholeConfirm(page, view, actions, keys.remove, `刪掉 #${name}，`),
   );
 }
 

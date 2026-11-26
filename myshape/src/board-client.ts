@@ -265,6 +265,35 @@ interface ParsedArgs {
   flags: Map<string, string | true | string[]>;
 }
 
+/** Which flags a command takes, and how. */
+interface FlagShape {
+  valued: string[];
+  bare: string[];
+  repeated: Record<string, string>;
+}
+
+/** Records the flag at `args[index]` and returns the index of the last argument it took. */
+function takeFlag(parsed: ParsedArgs, args: string[], index: number, shape: FlagShape): number {
+  const arg = args[index] as string;
+  const name = arg.slice(2);
+  const value = args[index + 1];
+  if (Object.hasOwn(shape.repeated, name) && value !== undefined) {
+    const list = shape.repeated[name] as string;
+    const values = parsed.flags.get(list);
+    parsed.flags.set(list, [...(Array.isArray(values) ? values : []), value]);
+    return index + 1;
+  }
+  if (shape.bare.includes(name)) {
+    parsed.flags.set(name, true);
+    return index;
+  }
+  if (shape.valued.includes(name) && value !== undefined) {
+    parsed.flags.set(name, value);
+    return index + 1;
+  }
+  throw new Exit(EXIT_USAGE, `不認得或缺值的參數：${arg}（myshape.sh --help 看用法）`);
+}
+
 /**
  * Splits arguments into positionals and the named flags; `valued` flags take
  * the next argument, and `repeated` ones (flag name to argument name) collect
@@ -279,24 +308,8 @@ function parseArgs(
   const parsed: ParsedArgs = { positional: [], flags: new Map() };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
-    if (!arg.startsWith("--")) {
-      parsed.positional.push(arg);
-      continue;
-    }
-    const name = arg.slice(2);
-    const list = Object.hasOwn(repeated, name) ? (repeated[name] as string) : null;
-    if (list !== null && index + 1 < args.length) {
-      index += 1;
-      const values = parsed.flags.get(list);
-      parsed.flags.set(list, [...(Array.isArray(values) ? values : []), args[index] as string]);
-    } else if (bare.includes(name)) {
-      parsed.flags.set(name, true);
-    } else if (valued.includes(name) && index + 1 < args.length) {
-      index += 1;
-      parsed.flags.set(name, args[index] as string);
-    } else {
-      throw new Exit(EXIT_USAGE, `不認得或缺值的參數：${arg}（myshape.sh --help 看用法）`);
-    }
+    if (arg.startsWith("--")) index = takeFlag(parsed, args, index, { valued, bare, repeated });
+    else parsed.positional.push(arg);
   }
   return parsed;
 }
@@ -531,17 +544,20 @@ async function todoAdd(config: BoardConfig, paths: BoardPaths, args: string[]): 
 const HASHTAG_USAGE =
   "hashtag 的用法：myshape.sh hashtag <議題 id> +<名稱>，或 myshape.sh hashtag <議題 id> --remove <名稱>（myshape.sh --help 看用法）";
 
+/** The name in a `+NAME` argument, or null when the argument is not one. */
+function addedName(change: string | undefined): string | null {
+  return change !== undefined && /^\+./u.test(change) ? change.slice(1) : null;
+}
+
 /** `hashtag <topic> +NAME` puts a hashtag on, `hashtag <topic> --remove NAME` takes it off. */
 function hashtagRequest(args: string[]): BoardRequest {
   const parsed = parseArgs(args, ["remove"]);
   const [id, change, ...rest] = parsed.positional;
   const remove = parsed.flags.get("remove");
-  if (id === undefined || rest.length > 0) throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
-  if (typeof remove === "string" && change === undefined)
-    return request("hashtag-remove", { id, name: remove });
-  if (remove === undefined && change !== undefined && change.startsWith("+") && change.length > 1)
-    return request("hashtag-add", { id, name: change.slice(1) });
-  throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+  const name = remove === undefined ? addedName(change) : change === undefined ? remove : null;
+  if (id === undefined || rest.length > 0 || typeof name !== "string")
+    throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+  return request(remove === undefined ? "hashtag-add" : "hashtag-remove", { id, name });
 }
 
 async function topicCommand(

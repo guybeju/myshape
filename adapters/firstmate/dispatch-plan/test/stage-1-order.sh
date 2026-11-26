@@ -340,7 +340,8 @@ test_lists_only_a_hashtag_when_asked() {
   assert_equals "l1 " "$(section "$out" "該 hold：")" "a parked topic with the hashtag must still be listed to hold"
   assert_equals "l2 " "$(section "$out" "停著：")" "a held item of a topic with the hashtag must be listed as parked"
   assert_equals "o1 b1 c1 " "$(section "$out" "先不派：")" "the items not dispatched must be filtered too"
-  assert_not_contains "$out" "n1" "an item of a topic without the hashtag must not be listed"
+  assert_equals "" "$(printf '%s\n' "$out" | grep -E '^  (n1|u1|p1|d1|a1)	' || true)" \
+    "an item of a topic without the hashtag must not be listed"
   assert_equals "只列議題貼著 #ＡＩ_infra 的項目。 可派： 該 hold： 該解除： 停著： 先不派： " \
     "$(printf '%s\n' "$out" | grep -v '^  ' | tr '\n' ' ')" "every heading must stay"
   out=$(tb_run "$home" "$PLAN" order --hashtag NONE) || fail "order --hashtag with an unknown name failed"

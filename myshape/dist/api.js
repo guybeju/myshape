@@ -49,10 +49,10 @@ const move = (host, body) => fromTopicOp(host.topicOp("move", body["before"] ===
  * code, gets one bound to `binding`; the second must return it for the same
  * binding.
  */
-function twoStep(host, body, binding, act, shown = {}) {
+function twoStep(host, body, binding, act) {
     const code = body["confirm"];
     if (code === undefined)
-        return ok({ ...shown, ...host.confirm.issue(binding) });
+        return ok({ ...host.confirm.issue(binding) });
     if (typeof code !== "string" || !host.confirm.redeem(code, binding)) {
         return fail(409, "confirm", "確認已失效或對象變了，請重新操作一次。");
     }
@@ -132,7 +132,10 @@ function wholeHashtag(op, second) {
         const into = op === "hashtag-merge" ? host.hashtagTopics(other) : [];
         const binding = bindingOf(op, name, other, topics.join(","), into.join(","));
         const args = second === null ? { name } : { name, [second]: other };
-        return twoStep(host, body, binding, () => fromTopicOp(host.topicOp(op, args)), { topics });
+        // The first step also names the topics, for the captain to see before confirming.
+        if (body["confirm"] === undefined)
+            return ok({ topics, ...host.confirm.issue(binding) });
+        return twoStep(host, body, binding, () => fromTopicOp(host.topicOp(op, args)));
     };
 }
 /** Every browser API route, as "<method> <path>". */

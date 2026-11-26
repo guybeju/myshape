@@ -51,6 +51,7 @@ function hashtagButtons(page, view, actions) {
 }
 function keywordRow(page, actions) {
     const filter = page.filter;
+    const keyword = (event) => actions.setFilter({ ...filter, text: event.target.value, view: null });
     const save = () => {
         const name = (page.drafts.get("view-name") ?? "").trim();
         if (name === "")
@@ -69,11 +70,12 @@ function keywordRow(page, actions) {
         "data-key": "filter-text",
         placeholder: "關鍵字（比對頁面上的所有文字）",
         value: filter.text,
-        oninput: (event) => actions.setFilter({
-            ...filter,
-            text: event.target.value,
-            view: null,
-        }),
+        // A redraw in the middle of an input method's composition (Chinese, Japanese) would cut it off.
+        oninput: (event) => {
+            if (!event.isComposing)
+                keyword(event);
+        },
+        oncompositionend: keyword,
     }), isActive(filter)
         ? [
             draftInput(page, actions, "view-name", "存成視圖的名稱", save),
@@ -154,36 +156,41 @@ function wholeConfirm(page, view, actions, key, what) {
     const topics = Array.isArray(pending.data["topics"]) ? pending.data["topics"] : [];
     return h("div", { class: "confirm" }, `${what}會動到 ${topics.length} 個議題${topics.length === 0 ? "" : "："}`, topics.map((id) => topicName(view, id)).join("、"), h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, "確定"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
+/** One hashtag's line in the settings panel: how many topics, who opened it, its lock and colour. */
+function hashtagMeta(view, actions, entry) {
+    const name = entry.name;
+    const recolor = (event) => actions.send("hashtags/color", { name, color: event.target.value });
+    return h("div", { class: "meta" }, chip(view, name), h("span", {}, `${entry.topics.length} 個議題`), entry.created_by === "aggregator" ? h("span", { class: "note" }, `${agentName()} 開的`) : null, h("button", { onclick: () => actions.send("hashtags/lock", { name, locked: !entry.locked }) }, entry.locked ? "解鎖（現在只有你能貼撕）" : "鎖上"), h("select", { class: "auto", onchange: recolor }, COLORS.map((color, index) => h("option", { value: color, ...(color === entry.color ? { selected: true } : {}) }, `顏色 ${index + 1}`))));
+}
+/** The menu that starts merging `name` into another hashtag; none when there is no other. */
+function mergeInto(view, actions, name) {
+    const others = view.hashtags.hashtags.filter((other) => other.name !== name);
+    if (others.length === 0)
+        return null;
+    const choose = (event) => {
+        const into = event.target.value;
+        if (into !== "")
+            actions.ask(`tag-merge:${name}`, "hashtags/merge", { name, into });
+    };
+    return h("select", { class: "auto", onchange: choose }, h("option", { value: "" }, "併入…"), others.map((other) => h("option", { value: other.name }, `#${other.name}`)));
+}
+/** The other side of a pending whole-hashtag change, for its confirmation line. */
+function pendingArg(page, key, field) {
+    return String(page.pending.get(key)?.body[field] ?? "");
+}
 function hashtagRow(page, view, actions, entry) {
     const name = entry.name;
-    const renameKey = `tag-rename:${name}`;
+    const keys = {
+        rename: `tag-rename:${name}`,
+        merge: `tag-merge:${name}`,
+        remove: `tag-delete:${name}`,
+    };
     const rename = () => {
         const to = (page.drafts.get(`tag-to:${name}`) ?? "").trim();
         if (to !== "")
-            actions.ask(renameKey, "hashtags/rename", { name, to });
+            actions.ask(keys.rename, "hashtags/rename", { name, to });
     };
-    const others = view.hashtags.hashtags.filter((other) => other.name !== name);
-    return h("div", { class: "card" }, h("div", { class: "meta" }, chip(view, name), h("span", {}, `${entry.topics.length} 個議題`), entry.created_by === "aggregator"
-        ? h("span", { class: "note" }, `${agentName()} 開的`)
-        : null, h("button", { onclick: () => actions.send("hashtags/lock", { name, locked: !entry.locked }) }, entry.locked ? "解鎖（現在只有你能貼撕）" : "鎖上"), h("select", {
-        class: "auto",
-        onchange: (event) => actions.send("hashtags/color", {
-            name,
-            color: event.target.value,
-        }),
-    }, COLORS.map((color, index) => h("option", { value: color, ...(color === entry.color ? { selected: true } : {}) }, `顏色 ${index + 1}`)))), h("div", { class: "btns" }, draftInput(page, actions, `tag-to:${name}`, "新名稱", rename), h("button", { onclick: rename }, "改名…"), others.length === 0
-        ? null
-        : h("select", {
-            class: "auto",
-            onchange: (event) => {
-                const into = event.target.value;
-                if (into !== "")
-                    actions.ask(`tag-merge:${name}`, "hashtags/merge", { name, into });
-            },
-        }, h("option", { value: "" }, "併入…"), others.map((other) => h("option", { value: other.name }, `#${other.name}`))), h("button", {
-        class: "danger",
-        onclick: () => actions.ask(`tag-delete:${name}`, "hashtags/delete", { name }),
-    }, "刪掉…")), wholeConfirm(page, view, actions, renameKey, `把 #${name} 改名為 #${String(page.pending.get(renameKey)?.body["to"] ?? "")}，`), wholeConfirm(page, view, actions, `tag-merge:${name}`, `把 #${name} 併入 #${String(page.pending.get(`tag-merge:${name}`)?.body["into"] ?? "")}，`), wholeConfirm(page, view, actions, `tag-delete:${name}`, `刪掉 #${name}，`));
+    return h("div", { class: "card" }, hashtagMeta(view, actions, entry), h("div", { class: "btns" }, draftInput(page, actions, `tag-to:${name}`, "新名稱", rename), h("button", { onclick: rename }, "改名…"), mergeInto(view, actions, name), h("button", { class: "danger", onclick: () => actions.ask(keys.remove, "hashtags/delete", { name }) }, "刪掉…")), wholeConfirm(page, view, actions, keys.rename, `把 #${name} 改名為 #${pendingArg(page, keys.rename, "to")}，`), wholeConfirm(page, view, actions, keys.merge, `把 #${name} 併入 #${pendingArg(page, keys.merge, "into")}，`), wholeConfirm(page, view, actions, keys.remove, `刪掉 #${name}，`));
 }
 function settingsPanel(page, view, actions) {
     return h("div", { class: "card" }, h("h3", {}, "hashtag 設定"), h("p", { class: "note" }, `hashtag 只描述議題的內容，不改佇列、順序或派工。這裡的設定管 ${agentName()} 能做什麼；你在頁面上不受這些限制，只受「一個議題最多幾個」管。`), settingsTable(page, view, actions), h("h3", {}, "hashtag"), view.hashtags.hashtags.length === 0 ? h("p", { class: "note" }, "還沒有 hashtag。") : null, view.hashtags.hashtags.map((entry) => hashtagRow(page, view, actions, entry)), h("h3", {}, "存下來的視圖"), view.hashtags.views.length === 0
