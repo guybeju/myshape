@@ -1,5 +1,6 @@
 import { getJson, postJson, takeToken } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
+import { dropAnchor } from "./drop.js";
 import { frame } from "./frame.js";
 import { NO_FILTER, filterHash, parseFilterHash, viewFilter } from "./filter.js";
 import { QUEUES, agentName, setAgentLabel } from "./state.js";
@@ -29,6 +30,7 @@ let filterChosen = parseFilterHash(location.hash) !== null;
 let failures = 0;
 /** The code the board ran when this page first heard from it. */
 let loadedCommit = null;
+/** The card being dragged, and where it was when the drag started. */
 let dragged = null;
 let toastTimer;
 /** What a redraw would otherwise lose: which input has focus, its caret, and the opened <details>. */
@@ -219,9 +221,10 @@ const actions = {
                 moveFeedback("later", "normal");
         });
     },
-    move: (topic, queue, before) => {
+    move: (topic, queue, anchor) => {
         const from = queueOf(topic);
-        void post("topics/move", { id: topic, queue, ...(before === null ? {} : { before }) }).then((data) => {
+        const where = "last" in anchor ? {} : anchor;
+        void post("topics/move", { id: topic, queue, ...where }).then((data) => {
             if (data !== null)
                 moveFeedback(from, queue);
         });
@@ -288,6 +291,21 @@ const actions = {
 function topicCardAt(event) {
     return event.target.closest(".topic[data-topic]");
 }
+/** The topic of a card in a queue's list; null for the drop hint or no card at all. */
+function topicOf(element) {
+    return element === null ? null : element.getAttribute("data-topic");
+}
+/** Where a card sits in its queue's list as the page shows it. */
+function slotOf(card) {
+    const queue = card.closest(".queue")?.dataset["queue"];
+    if (queue === undefined)
+        return null;
+    return {
+        queue,
+        above: topicOf(card.previousElementSibling),
+        below: topicOf(card.nextElementSibling),
+    };
+}
 /** While dragging, the card itself is moved in the DOM so the order updates under the pointer. */
 function dragOver(event) {
     if (dragged === null)
@@ -306,21 +324,26 @@ function dragOver(event) {
         over.parentElement?.insertBefore(card, event.clientY < box.top + box.height / 2 ? over : over.nextSibling);
     }
 }
+/** Under a filter the drop is placed among the cards shown (spec/drag-under-filter.markdown). */
 function drop(event) {
     const card = app.querySelector(".topic.dragging");
-    const queue = card?.closest(".queue")?.dataset["queue"];
-    if (dragged === null || card == null || queue === undefined)
+    if (dragged === null || card === null)
+        return;
+    const slot = slotOf(card);
+    if (slot === null)
         return;
     event.preventDefault();
-    dragged.dropped = true;
-    const next = card.nextElementSibling;
-    actions.move(dragged.id, queue, next?.dataset["topic"] ?? null);
+    const filtered = card.closest(".queue")?.dataset["filtered"] === "true";
+    const anchor = dropAnchor(dragged.start, slot, filtered);
+    if (anchor !== null)
+        actions.move(dragged.id, slot.queue, anchor);
 }
 app.addEventListener("dragstart", (event) => {
     const card = topicCardAt(event);
-    if (card === null || event.dataTransfer === null)
+    const start = card === null ? null : slotOf(card);
+    if (card === null || start === null || event.dataTransfer === null)
         return;
-    dragged = { id: card.dataset["topic"] ?? "", dropped: false };
+    dragged = { id: card.dataset["topic"] ?? "", start };
     event.dataTransfer.setData("text/plain", dragged.id);
     event.dataTransfer.effectAllowed = "move";
     card.classList.add("dragging");
