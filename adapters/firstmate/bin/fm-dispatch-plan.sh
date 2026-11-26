@@ -74,7 +74,7 @@
 #
 # Every subcommand needs jq. order also reads this home's data/<task-id>/topic
 # tag files and the backlog through fm-fleet-snapshot.sh (--board-input when
-# that script offers it, else --json).
+# that script's argument parser offers it, else --json).
 #
 # Exit codes: 0 success (including the fall-open answers and an older copy
 # ignored), 1 refused (and queues-push without --check when a transfer

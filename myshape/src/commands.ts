@@ -99,6 +99,25 @@ export function invocationFor(command: AllowedCommand): Invocation {
   return { args: ["deliver"], stdin: `${command.record}\n` };
 }
 
+/**
+ * The binding role whose program runs `command`: "topics" runs the feed's.
+ * Every kind is listed, so a new kind fails to compile until it is mapped, and
+ * a kind not listed is refused (throws CommandRefused).
+ */
+export function roleFor(command: AllowedCommand): Role {
+  switch (command.kind) {
+    case "feed":
+    case "topics":
+      return "feed";
+    case "deliver":
+      return "deliver";
+    default: {
+      const unlisted: never = command;
+      return refuse(`unknown command kind: ${String((unlisted as { kind?: unknown }).kind)}`);
+    }
+  }
+}
+
 /** PATH without its empty and relative entries, which would search the working directory. */
 export function absolutePath(value: string): string {
   return value
@@ -131,14 +150,16 @@ export type CommandRunner = (command: AllowedCommand, timeoutMs: number) => Prom
 export function commandRunner(config: BoardConfig, gate: ProgramGate): CommandRunner {
   return (command, timeoutMs) =>
     new Promise((resolve) => {
+      let role: Role;
       let invocation: Invocation;
       try {
+        role = roleFor(command);
         invocation = invocationFor(command);
       } catch (error) {
         resolve({ code: null, stdout: "", stderr: (error as Error).message });
         return;
       }
-      const allowed = gate(command.kind === "deliver" ? "deliver" : "feed");
+      const allowed = gate(role);
       if ("blocked" in allowed) {
         resolve({ code: null, stdout: "", stderr: "", blocked: allowed.blocked });
         return;

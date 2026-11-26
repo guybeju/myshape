@@ -70,10 +70,14 @@ tb_capability_gap() {
 
 # tb_snapshot_mode <bin-dir>: print the fm-fleet-snapshot.sh option that gives
 # the board's readers what they use: --board-input when the script in <bin-dir>
-# offers it (its text names the option), --json otherwise. Like
-# tb_capability_gap it reads the script's text and runs nothing.
+# offers it, --json otherwise. The script offers it when one of its lines
+# starts with a case label naming the option, alone or among other patterns
+# ("  --board-input)" or "  --json|--board-input)"); the word in a comment or
+# a usage line does not count. Like tb_capability_gap it reads the script's text
+# and runs nothing.
 tb_snapshot_mode() {
-  if grep -qF -e --board-input "$1/fm-fleet-snapshot.sh" 2>/dev/null; then
+  if grep -qE -e '^[[:space:]]*([^#)|[:space:]]+[|])*--board-input([|][^)|[:space:]]+)*[)]' \
+    "$1/fm-fleet-snapshot.sh" 2>/dev/null; then
     printf '%s\n' --board-input
   else
     printf '%s\n' --json

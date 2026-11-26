@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AllowedCommand, CommandResult } from "./commands.js";
 import { Journal, Offsets } from "./journal.js";
 import { boardPaths } from "./layout.js";
@@ -264,5 +264,21 @@ describe("a page write's re-read of a tag", () => {
     s.answers.set("main", () => ({ code: 1, stdout: "", stderr: "broken" }));
     expect(await freshTags(s.poller, "main", "t1")).toBeNull();
     expect(await freshTags(s.poller, "nobody", "t1")).toBeNull();
+  });
+
+  it("starts no full read once the deadline passed during a failed topics call", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const s = setup();
+      s.answers.set("main", (command) => {
+        if (command.kind !== "topics") return ok(reportOf({ t1: LOGIN }));
+        vi.advanceTimersByTime(100);
+        return { code: 1, stdout: "", stderr: "broken" };
+      });
+      expect(await freshTags(s.poller, "main", "t1", Date.now() + 100)).toBeNull();
+      expect(s.runs).toEqual(["topics main"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

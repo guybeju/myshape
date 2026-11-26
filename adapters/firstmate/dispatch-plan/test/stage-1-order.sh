@@ -265,7 +265,7 @@ test_falls_open_when_the_snapshot_fails() {
   home=$(tb_make_home order-nosnap)
   tb_write_topics "$home"
   root="$TMP_ROOT/order-root"
-  order_root "$root" 0
+  order_root "$root" none
   printf '#!/usr/bin/env bash\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||
     fail "order must exit 0 when the snapshot fails"
@@ -275,17 +275,20 @@ test_falls_open_when_the_snapshot_fails() {
 
 # order_root <dir> <offers>: a code root of order's own files whose
 # fm-fleet-snapshot.sh logs its arguments to <dir>/snapshot.log and passes the
-# real snapshot's --json report through. Its text names --board-input only
-# when <offers> is 1, which is all order's check of the snapshot reads.
+# real snapshot's --json report through. With <offers> label its argument
+# parser has a --board-input case label; with comment it names --board-input
+# only in a comment; with none it names it nowhere. That is all order's check
+# of the snapshot reads.
 order_root() {
-  local root=$1 note="Offers the full report only."
+  local root=$1 note="Offers the full report only." parser=""
   mkdir -p "$root/bin"
   cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
     "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-queue-source-lib.sh "$ROOT"/bin/fm-board-lib.sh \
     "$root/bin/"
-  [ "$2" = 0 ] || note="Offers --board-input, the board's cheaper read."
-  printf '#!/usr/bin/env bash\n# %s\nprintf "%%s\\n" "$*" >> %q\nexec env -u FM_ROOT_OVERRIDE %q --json\n' \
-    "$note" "$root/snapshot.log" "$ROOT/bin/fm-fleet-snapshot.sh" > "$root/bin/fm-fleet-snapshot.sh"
+  [ "$2" != comment ] || note="Offers --board-input, the board's cheaper read."
+  [ "$2" != label ] || parser=$'case "$1" in\n  --board-input) ;;\nesac\n'
+  printf '#!/usr/bin/env bash\n# %s\n%sprintf "%%s\\n" "$*" >> %q\nexec env -u FM_ROOT_OVERRIDE %q --json\n' \
+    "$note" "$parser" "$root/snapshot.log" "$ROOT/bin/fm-fleet-snapshot.sh" > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
 }
 
@@ -300,7 +303,7 @@ test_asks_for_board_input_when_the_snapshot_offers_it() {
   tb_write_topics "$home"
   write_backlog "$home"
   write_tags "$home"
-  for offers in 1 0; do
+  for offers in label comment none; do
     root="$TMP_ROOT/order-mode-$offers"
     order_root "$root" "$offers"
     out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||
@@ -308,11 +311,13 @@ test_asks_for_board_input_when_the_snapshot_offers_it() {
     assert_equals "h1 h2 r1 n1 u1 p1 d1 " "$(section "$out" "可派：")" \
       "order must rank the same either way (offers board input: $offers)"
   done
-  assert_equals "1 0" "$(asks "$TMP_ROOT/order-mode-1/snapshot.log")" \
-    "order must ask a snapshot that offers --board-input for it, and not for --json"
-  assert_equals "0 1" "$(asks "$TMP_ROOT/order-mode-0/snapshot.log")" \
+  assert_equals "1 0" "$(asks "$TMP_ROOT/order-mode-label/snapshot.log")" \
+    "order must ask a snapshot whose parser offers --board-input for it, and not for --json"
+  assert_equals "0 1" "$(asks "$TMP_ROOT/order-mode-comment/snapshot.log")" \
+    "order must ask a snapshot that names --board-input only in a comment for --json"
+  assert_equals "0 1" "$(asks "$TMP_ROOT/order-mode-none/snapshot.log")" \
     "order must ask a snapshot without --board-input for --json"
-  pass "order reads the backlog through --board-input when the snapshot offers it, else --json"
+  pass "order reads the backlog through --board-input when the snapshot's parser offers it, else --json"
 }
 
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
