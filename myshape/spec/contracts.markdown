@@ -382,7 +382,7 @@ first mate 這一側怎麼產生這份回報（`fm-topic-board-read.sh` 讀 back
 `op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`hashtag-add`、`hashtag-remove`、`schedule-add`、`schedule-edit`、`schedule-pause`、`schedule-resume`、`schedule-skip`、`schedule-rt`、`schedule-delete`、`schedule-take`、`schedule-close`、`schedule-tick`、`reset-token`。`create` 另收 `hashtags`（名稱的清單）。`schedule-tick` 不在操作表裡：它跑一次排程的時鐘（第 3.9 節），改動記成 `board` 的，不先等讀取，回「ok schedule tick：…」寫這次做了什麼。
 改動看板的操作全部列在一張表裡（`myshape/src/ops.ts` 的 `OPERATIONS`）：哪條通道可以用、經哪個檔存（第 3.3 節）。socket 與頁面都只經這張表改看板，每一個改動都至少寫一筆系統紀錄，沒有紀錄的改動編譯不過。
 `keep`（頁面的「先不關」）、`todo-claim`（「做完了」）、`todo-drop`（「不做了」）與 `todo-takedown`（「好，撤下」）是使用者自己按的，socket 收到就拒絕，什麼都不改；它們只在頁面的 API 上。hashtag 的 `hashtag-rename`、`hashtag-merge`、`hashtag-delete`、`hashtag-settings`、`hashtag-lock`、`hashtag-color`、`hashtag-revert`、`hashtag-seen`、`view-save`、`view-delete` 也是（第 3.8 節）。
-`schedule-settings`、`schedule-lock`、`schedule-pause-all`、`schedule-revert`、`schedule-seen` 也是使用者自己按的，socket 收到就拒絕，什麼都不改；`schedule-take` 是 aggregator 的回報，只從 socket 收。頁面的路由這一版還沒有。
+`schedule-settings`、`schedule-lock`、`schedule-pause-all`、`schedule-revert`、`schedule-seen` 也是使用者自己按的，socket 收到就拒絕，什麼都不改；它們和使用者在頁面上的建立、修改、暫停、恢復、跳過、rt、刪除與結束一場，都在頁面的 API 上（`/api/schedules/…`，[第五段](stage-5-browser.markdown)）。`schedule-take` 是 aggregator 的回報，只從 socket 收，頁面沒有它的路由；`schedule-tick` 也沒有。
 aggregator 經 socket 改排程時：上了鎖的排程（rt 另有自己的鎖）不能改、暫停、恢復、跳過或刪除，只能刪自己建的；`aggregator_may_create`、`max_active`（啟用中的筆數，恢復也算）、`aggregator_may_set_rt` 與 `aggregator_changes_per_hour`（`events.jsonl` 裡一小時內 aggregator 的 `schedule.created`、`edited`、`paused`、`resumed`、`skipped`、`rt_changed`、`deleted` 紀錄）擋得住就拒絕；建立或改規則、時間、時區、提前分鐘數之後，`first_bell_min_ahead` 分鐘內會響第一則的場次事先跳過，回話寫「最快的一場是 …」。接下與結束一場是回報，上鎖的排程也可以。這些是擋 aggregator 一時不小心或被誤導的護欄，不是界線：socket 不驗證身分，擋不住同一個帳號下存心的程式。頁面上的撤回只撤 aggregator 的改動，而且只在那筆排程還是那次改動留下的樣子時；刪掉的排程只在 `removed` 還留著它時（30 天內）撤得回來；撤回過的再撤一次什麼都不改。每小時上限、撤回與「看過」都由 `myshape/src/oversight.ts` 從系統紀錄算，和 hashtag 用的是同一份。
 `todo-*` 的操作不等讀取：aggregator 可能正是在看板讀它的時候送來的。`schedule-*` 和議題的操作一樣，看板還沒讀過根 home 時先等一次讀取，期限和 `summary` 的補讀相同（第 10 節）。
 socket 上改議題的操作寫進議題更新的紀錄都註明「<aggregator 的名稱> 用指令」，頁面做的註明「你在頁面上」；`move`、`rename`、`goal` 也寫紀錄，`move` 與 `goal` 另記進來歷（第 3.1 節）。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `MYSHAPE_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
@@ -405,7 +405,7 @@ token 是 32 位元組亂數的十六進位，第一次啟動時產生，之後�
 
 API 的路徑與 body 由第五段定；這裡只定兩件事：
 
-- **輪詢**：`GET /api/state?v=<boot_id>:<版本>`。版本沒變回 `{"changed":false}`；`boot_id` 不同一律回全量。版本是一個字串：一個只在「看得到的東西真的變了」時才加一的計數，加上每個 home 是否過期的旗標。輪詢讀到一模一樣的結果不算變；某個 home 跨過過期線算變（那一刻沒有任何讀取會回報它）。
+- **輪詢**：`GET /api/state?v=<boot_id>:<版本>`。版本沒變回 `{"changed":false}`；`boot_id` 不同一律回全量。版本是一個字串：一個只在「看得到的東西真的變了」時才加一的計數，加上每個 home 是否過期的旗標，與一段雜湊（含現在開著的排程場次）。輪詢讀到一模一樣的結果不算變；某個 home 跨過過期線算變（那一刻沒有任何讀取會回報它）；一場排程過了 `closes_by` 也算變，就算時鐘還沒存檔（第 3.9 節：超過 `closes_by` 的當成已結束）。
 - **兩步確認**：第一個請求回 `{"confirm":"<碼>","expires_at":…}`，碼約 2 分鐘有效、只能用一次、只存在記憶體；第二個請求帶碼才執行。碼綁定當時的對象，對象變了就拒絕。哪些動作要兩步，見第 8 節。
 
 生命週期的操作（`status`、`stop`、`restart`）與 `summary`、`which`、`find` 只在 socket 提供。`reset-token` 也只在 socket 提供。
@@ -536,6 +536,7 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 重送一筆「結果不明」的寫入 | write id |
 | 要你動手的「不做了」「好，撤下」 | (動作, 項目 id) |
 | 改名、合併、刪掉整個 hashtag（第 3.8 節） | (動作, 名稱, 另一個名稱, 會動到的議題 id；合併另加併進去的那個 hashtag 的議題 id)，議題清單由服務當下讀出，第一步回給頁面顯示 |
+| 使用者在頁面上刪掉一筆排程（第 3.9 節；頁面上撤不回來，撤回只撤 aggregator 的改動） | (動作, 議題 id, 那個議題現在的排程 id)，排程 id 由服務當下讀出；兩步之間排程刪了又建就拒絕 |
 | 讓看板執行一支要確認的程式（第 7 節） | (程式的完整路徑, 程式內容的 SHA-256, 設定檔內容的 SHA-256)，兩步都由服務當下讀檔算出，請求只說是 feed 還是 deliver |
 
 作答一律兩步（採建議 C12）：答案送出就會關掉或解除那個 hold，不能收回。
