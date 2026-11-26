@@ -1,5 +1,6 @@
 // The commands the supervisor runs, each through one injected runner: the
-// board's command (bin/myshape.sh: summary, status, open), git (worktrees) and
+// board's command (bin/myshape.sh: summary, todo, close-propose, hashtag,
+// status, open), git (worktrees) and
 // gh (a pull request's state). Each command gets an environment built here
 // from a few names; none of them ever gets the subscription token.
 
@@ -57,6 +58,18 @@ export interface PlainEnv {
 
 export type SummaryKind = "ready" | "report" | "failed" | "landed";
 
+/** A 要你動手 item as `todo add` takes it, already within the board's limits. */
+export interface BoardTodo {
+  /** The item id: the task id, a dash, and the worker's own id for it. */
+  id: string;
+  title: string;
+  topic: string;
+  do: string;
+  cmds: string[];
+  /** Handed back in the board's notices about the item: the task id. */
+  ref: string;
+}
+
 /** `text` cut to at most `max` Unicode code points, ending in … when cut. */
 export function clip(text: string, max = SUMMARY_MAX): string {
   const points = [...text.trim()];
@@ -94,6 +107,65 @@ export class BoardCommand {
     let result = await this.call(args, clip(text));
     if (result.status === 3) result = await this.call(args, clip(text));
     return result.status === 0 ? undefined : failure("summary", result);
+  }
+
+  /**
+   * Runs one board write. Exit 3 (sent, no answer) is repeated once: every
+   * write here is safe to repeat unchanged.
+   *
+   * Returns:
+   *   undefined when the board took it, else its one-line reason.
+   */
+  private async write(args: string[]): Promise<string | undefined> {
+    let result = await this.call(args);
+    if (result.status === 3) result = await this.call(args);
+    return result.status === 0
+      ? undefined
+      : failure(args[0] === "todo" ? `todo ${args[1]}` : `${args[0]}`, result);
+  }
+
+  /** Puts a 要你動手 item on the board, or rewrites it (`myshape.sh todo add`). */
+  todoAdd(item: BoardTodo): Promise<string | undefined> {
+    const cmds = item.cmds.flatMap((cmd) => ["--cmd", cmd]);
+    return this.write([
+      "todo",
+      "add",
+      item.id,
+      item.title,
+      "--topic",
+      item.topic,
+      "--do",
+      item.do,
+      ...cmds,
+      "--ref",
+      item.ref,
+    ]);
+  }
+
+  /** Closes an item the captain did and the worker found done (`myshape.sh todo done`). */
+  todoDone(id: string): Promise<string | undefined> {
+    return this.write(["todo", "done", id]);
+  }
+
+  /** Puts a claimed item back in front of the captain with the reason (`myshape.sh todo failed`). */
+  todoFailed(id: string, reason: string): Promise<string | undefined> {
+    return this.write(["todo", "failed", id, "--reason", reason]);
+  }
+
+  /** Takes an item no longer needed off the board (`myshape.sh todo obsolete`). */
+  todoObsolete(id: string, reason: string): Promise<string | undefined> {
+    return this.write(["todo", "obsolete", id, "--reason", reason]);
+  }
+
+  /** Proposes closing a topic whose tasks have all landed (`myshape.sh close-propose`). */
+  closePropose(topic: string, reason: string): Promise<string | undefined> {
+    return this.write(["close-propose", topic, "--reason", reason]);
+  }
+
+  /** Puts one hashtag on a topic or takes it off (`myshape.sh hashtag`). */
+  hashtag(topic: string, change: "add" | "remove", name: string): Promise<string | undefined> {
+    const args = change === "add" ? [`+${name}`] : ["--remove", name];
+    return this.write(["hashtag", topic, ...args]);
   }
 
   /** Starts the board service when `myshape.sh status` does not say it runs. */

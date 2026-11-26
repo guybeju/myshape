@@ -2,14 +2,18 @@
 // two sessions at once (one per topic), runs each worker in its own git
 // worktree outside the board home, writes the agent's state files and the
 // ledger, writes summaries through the board's command, cleans worktrees up,
-// and stops dispatching while the quota or rate limit says so. It is the only
-// writer of the agent's state; workers never write the board.
+// and stops dispatching while the quota or rate limit says so. It takes the
+// captain's actions from inbox/ (messages, directs, answers, 要你動手 notices),
+// opens holds for workers' questions, keeps workers' 要你動手 items on the
+// board, and proposes closing a topic whose tasks have all landed. It is the
+// only writer of the agent's state and the only one that runs the board's
+// command; workers never write the board.
 
 import { join } from "node:path";
 
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
 
-import { readBoard, type Board } from "./board-files.js";
+import { readBoard, readTodos, type Board, type TodoItem } from "./board-files.js";
 import {
   BoardCommand,
   Git,
@@ -19,15 +23,31 @@ import {
   type SummaryKind,
 } from "./commands.js";
 import { dispatchOrder, followMerges, type OrderEntry } from "./dispatch-order.js";
-import { endingOf, TEXT, type Ending } from "./ending.js";
+import {
+  endingOf,
+  TEXT,
+  TEXT_PREFIX,
+  type EndTodos,
+  type Ending,
+  type HoldRequest,
+} from "./ending.js";
+import { parseInboxFile, sortInbox, type InboxItem, type Sorted } from "./inbox.js";
+import { closeReason } from "./landing.js";
 import { parsePlannerOutput, type PlannedWork } from "./outputs.js";
-import { plannerPrompt, RESUME_PROMPT, workerPrompt } from "./prompts.js";
+import {
+  livePrompt,
+  plannerPrompt,
+  resumePrompt,
+  workerPrompt,
+  type ResumeInput,
+} from "./prompts.js";
 import { schedule, type Candidate, type Slot, type TopicStatus } from "./scheduler.js";
 import type { QueryFn } from "./sdk.js";
 import { followSession, PromptStream, type SessionReport } from "./session.js";
 import { plannerOptions, workerOptions, type SessionContext } from "./session-options.js";
 import { checkSettings, takeLock, type RepoSetting, type Settings } from "./settings.js";
 import { StateStore, type PlannedTask } from "./state-store.js";
+import { boardTodos, todoOps, type TodoOp } from "./todos.js";
 import { redactor } from "./token.js";
 
 export interface Deps {
@@ -54,6 +74,9 @@ export const DETAIL = {
   noSession: "沒有可以接回的 session",
   merged: "已合併",
   closed: "PR 關掉了，沒有合併",
+  answered: (label: string) => `接著做：captain 回答了「${label}」`,
+  directed: "接著做：captain 直送了話",
+  verifying: "回來確認 captain 做完的要你動手的事",
 } as const;
 
 export const QUOTA_HOLD = {
@@ -71,6 +94,23 @@ export const QUOTA_HOLD = {
 export const QUOTA_WAIT_MS = 30 * 60 * 1000;
 
 const PLAN_PREFIX = "plan:";
+
+const NOTHING_SORTED: Sorted = {
+  retire: [],
+  close: [],
+  push: [],
+  messages: new Map(),
+  inputs: new Map(),
+};
+
+/** A resume: what the captain did, and the inbox files it consumes. */
+interface Resume {
+  input: ResumeInput;
+  detail: string;
+  files: InboxItem[];
+  /** The write id of the answer to the task's hold, when an answer resumes it. */
+  answerId: string | undefined;
+}
 
 export function isoTime(ms: number): string {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -96,6 +136,16 @@ export class Supervisor {
   private readonly live = new Map<string, { topic: string; done: Promise<void> }>();
   private readonly planned = new Set<string>();
   private quota: Quota | null = null;
+  /** The inbox as this pass sorted it. */
+  private sorted: Sorted = NOTHING_SORTED;
+  /** The streaming input of each running worker session. */
+  private readonly streams = new Map<string, PromptStream>();
+  /** Inbox files pushed into a running session and not taken yet, with the task. */
+  private readonly pushed = new Map<string, string>();
+  /** The board's 要你動手 items as this pass read them. */
+  private todoItems: ReadonlyMap<string, TodoItem> = new Map();
+  /** The board's merges as the last pass read them. */
+  private merged: ReadonlyMap<string, string> = new Map();
 
   private constructor(settings: Settings, deps: Deps, release: () => void) {
     this.settings = settings;
@@ -232,7 +282,10 @@ export class Supervisor {
 
   // --- each pass -------------------------------------------------------------
 
-  /** One pass: clears the quota stop when it is over, then starts what may start. */
+  /**
+   * One pass: clears the quota stop when it is over, takes the captain's
+   * actions from the inbox, then starts what may start.
+   */
   tick(): void {
     this.clearQuota();
     let board: Board;
@@ -242,6 +295,8 @@ export class Supervisor {
       this.log(`cannot read the board's files: ${(error as Error).message}`);
       return;
     }
+    this.merged = board.topics.merged;
+    this.takeInbox();
     const order = dispatchOrder(board, this.deps.nowMs());
     const entries = new Map(order.order.map((entry) => [entry.topic, entry]));
     const later = new Set(
@@ -263,12 +318,156 @@ export class Supervisor {
     this.writeWaiting(decision.waiting);
   }
 
+  // --- the captain's actions ---------------------------------------------------
+
+  private current(topic: string): string {
+    return followMerges(this.merged, topic);
+  }
+
+  /** The topic a task is under now: its last tag, merges followed. */
+  private topicOf(id: string): string {
+    return this.current(this.store.readTags().get(id) ?? "");
+  }
+
+  private readInboxItems(): InboxItem[] {
+    const items: InboxItem[] = [];
+    for (const { file, text } of this.store.readInbox()) {
+      const item = parseInboxFile(file, text);
+      if (item !== undefined) items.push(item);
+      else {
+        this.log(`inbox/${file} is not an action deliver landed; moved to inbox/handled/`);
+        this.store.retireInbox(file);
+      }
+    }
+    return items;
+  }
+
+  private readTodoItems(): ReadonlyMap<string, TodoItem> {
+    try {
+      return readTodos(this.settings.home);
+    } catch (error) {
+      this.log(`cannot read the board's todos: ${(error as Error).message}`);
+      return new Map();
+    }
+  }
+
+  /** The running worker on `topic` whose session takes input now. */
+  private liveWorkerOn(topic: string): string | undefined {
+    for (const [id, entry] of this.live) {
+      if (entry.topic === topic && this.streams.get(id)?.open === true) return id;
+    }
+    return undefined;
+  }
+
+  /** Sorts the inbox, and does now what needs no session: retire, close holds, push input. */
+  private takeInbox(): void {
+    this.todoItems = this.readTodoItems();
+    const items = this.readInboxItems().filter((item) => !this.pushed.has(item.file));
+    this.sorted = sortInbox(items, {
+      tasks: this.tasks,
+      holds: this.holds,
+      current: (topic) => this.current(topic),
+      liveWorkerOn: (topic) => this.liveWorkerOn(topic),
+      takesInput: (task) => this.streams.get(task)?.open === true,
+      quotaTitle: QUOTA_HOLD.title,
+    });
+    for (const { item, log } of this.sorted.retire) {
+      if (log !== undefined) this.log(log);
+      this.store.retireInbox(item.file);
+    }
+    for (const item of this.sorted.close) this.closeAnswered(item);
+    for (const { task, item } of this.sorted.push) this.pushInput(task, item);
+  }
+
+  /** The captain answered a hold that was a question only: it closes, and nothing resumes. */
+  private closeAnswered(item: InboxItem & { kind: "answer" }): void {
+    const answer = this.store.readAnswer(item.task);
+    if (answer !== undefined) {
+      this.closeHold(item.task, answer.id);
+      this.log(`task ${item.task}: the captain answered ${answer.label || answer.answer}`);
+    }
+    this.store.retireInbox(item.file);
+    void this.proposeClose(item.task);
+  }
+
+  /** Hands a message or direct to the running session; the inbox file goes once it is taken. */
+  private pushInput(task: string, item: InboxItem & { kind: "message" | "direct" }): void {
+    const stream = this.streams.get(task);
+    const taken = () => {
+      this.pushed.delete(item.file);
+      this.store.retireInbox(item.file);
+      this.log(`task ${task}: passed the captain's ${item.kind} on to its running session`);
+    };
+    this.pushed.set(item.file, task);
+    if (stream?.push(livePrompt(item.kind, item.text), taken) !== true)
+      this.pushed.delete(item.file);
+  }
+
+  /** Forgets what was pushed into `task`'s session and not taken: it waits in the inbox. */
+  private releasePushed(task: string): void {
+    for (const [file, owner] of this.pushed) if (owner === task) this.pushed.delete(file);
+  }
+
+  /** What the captain did that resumes `id`'s session now, or undefined. */
+  private resumeOf(id: string): Resume | undefined {
+    const task = this.tasks.get(id);
+    if (
+      task === undefined ||
+      this.live.has(id) ||
+      task.state === "done" ||
+      task.state === "failed"
+    ) {
+      return undefined;
+    }
+    const files = this.sorted.inputs.get(id) ?? [];
+    const answerItem = files.find((item) => item.kind === "answer");
+    const answer = answerItem === undefined ? undefined : this.store.readAnswer(id);
+    const directs = files.flatMap((item) => (item.kind === "direct" ? [item.text] : []));
+    const todos = this.todoInput(id, task, files);
+    const quota = this.resumable(id);
+    if (!quota && answer === undefined && directs.length === 0 && todos === undefined) {
+      return undefined;
+    }
+    const input: ResumeInput = { quota, directs };
+    const hold = this.holds.get(id);
+    if (answer !== undefined && hold !== undefined) {
+      input.answer = {
+        title: hold.title,
+        question: hold.question,
+        answer: answer.answer,
+        label: answer.label,
+      };
+    }
+    if (todos !== undefined) input.todos = todos;
+    return { input, detail: resumeDetail(input), files, answerId: answer?.id };
+  }
+
+  /**
+   * The 要你動手 items that resume a task waiting on them: once the captain
+   * claimed or dropped one and none of its items is still to do.
+   */
+  private todoInput(id: string, task: TaskEntry, files: readonly InboxItem[]) {
+    const notices = files.flatMap((item) => (item.kind === "notice" ? [item] : []));
+    if (notices.length === 0 || !(task.detail ?? "").startsWith(TEXT_PREFIX.todos))
+      return undefined;
+    const mine = [...this.todoItems].filter(([, item]) => item.ref === id);
+    if (mine.some(([, item]) => item.state === "open" || item.state === "rejected"))
+      return undefined;
+    const claimed = mine
+      .filter(([, item]) => item.state === "claimed")
+      .map(([itemId, item]) => ({ id: itemId, title: item.title }));
+    const dropped = notices
+      .filter((notice) => notice.event === "todo.closed" && notice.item !== null)
+      .map((notice) => ({ id: notice.item?.id ?? "", title: notice.item?.title ?? "" }));
+    return { claimed, dropped };
+  }
+
   /** Paused tasks to resume, then planned tasks by topic order, then topics to plan. */
   private candidates(order: readonly OrderEntry[], current: (id: string) => string): Candidate[] {
     const tags = this.store.readTags();
     const rank = new Map(order.map((entry, index) => [entry.topic, index]));
     const resume = [...this.tasks]
-      .filter(([id]) => this.resumable(id))
+      .filter(([id]) => this.resumeOf(id) !== undefined)
       .map(([id]) => ({ id, topic: current(tags.get(id) ?? "") }));
     const planned = this.queued
       .filter((entry) => !this.tasks.has(entry.id))
@@ -281,8 +480,10 @@ export class Supervisor {
       ...planned.map((entry) => entry.topic),
       ...this.planned,
     ]);
+    const asked = (topic: string) => this.sorted.messages.has(topic);
     const toPlan = order
-      .filter((entry) => !busy.has(entry.topic))
+      .filter((entry) => !busy.has(entry.topic) || asked(entry.topic))
+      .filter((entry) => !this.live.has(`${PLAN_PREFIX}${entry.topic}`))
       .map((entry) => ({ id: `${PLAN_PREFIX}${entry.topic}`, topic: entry.topic }));
     return [...resume, ...planned, ...toPlan];
   }
@@ -318,11 +519,12 @@ export class Supervisor {
       return;
     }
     let done: Promise<void>;
+    const resume = this.resumeOf(candidate.id);
     if (candidate.id.startsWith(PLAN_PREFIX)) {
       this.planned.add(candidate.topic);
-      done = this.plan(entry);
-    } else if (this.resumable(candidate.id)) {
-      done = this.resume(candidate.id);
+      done = this.plan(entry, this.sorted.messages.get(candidate.topic) ?? []);
+    } else if (resume !== undefined) {
+      done = this.resume(candidate.id, resume);
     } else if (this.tasks.has(candidate.id)) {
       this.log(`${candidate.id} is already a task; not started again`);
       return;
@@ -359,18 +561,48 @@ export class Supervisor {
     };
   }
 
-  private async plan(entry: OrderEntry): Promise<void> {
+  /** The topic's tasks and queued tasks, as the planner sees them. */
+  private topicTasks(
+    topic: string,
+  ): { id: string; title: string; state: string; detail: string }[] {
+    const tasks = [...this.tasks]
+      .filter(([id]) => this.topicOf(id) === topic)
+      .map(([id, task]) => ({
+        id,
+        title: task.title ?? "",
+        state: task.state,
+        detail: task.detail ?? "",
+      }));
+    const queued = this.queued
+      .filter((entry) => this.current(entry.topic_hint) === topic)
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        state: "queued",
+        detail: entry.hold ?? "",
+      }));
+    return [...tasks, ...queued];
+  }
+
+  private async plan(
+    entry: OrderEntry,
+    messages: readonly (InboxItem & { kind: "message" })[],
+  ): Promise<void> {
     const abort = new AbortController();
     const prompt = new PromptStream(
       plannerPrompt({
         topic: { id: entry.topic, name: entry.name, goal: entry.goal, hashtags: entry.hashtags },
         repos: Object.keys(this.settings.repos),
+        messages: messages.map((item) => item.text),
+        tasks: this.topicTasks(entry.topic),
       }),
     );
     const options = plannerOptions(this.settings.worktreeRoot, this.sessionContext(null, abort));
     const run = this.deps.query({ prompt, options });
     const report = await followSession(run, prompt, abort, { mode: "dontAsk", onStart: () => {} });
     this.takePlan(entry.topic, report);
+    if (report.end.kind === "quota") return;
+    for (const item of messages) this.store.retireInbox(item.file);
   }
 
   private takePlan(topic: string, report: SessionReport): void {
@@ -474,14 +706,23 @@ export class Supervisor {
     await this.work(id, workerPrompt({ ...brief, title: planned.title, prompt: planned.prompt }));
   }
 
-  private async resume(id: string): Promise<void> {
+  /**
+   * Resumes `id`'s session with what the captain did. The task is marked
+   * working first, then the answer and inbox files it consumes are retired,
+   * then the session runs: a crash in between leaves the task paused at the
+   * next start, never resumed twice with the same input.
+   */
+  private async resume(id: string, resume: Resume): Promise<void> {
     const task = this.task(id);
-    if (task.session_id === undefined || task.worktree === undefined) {
+    const session = task.worktree === undefined ? undefined : task.session_id;
+    if (session !== undefined) this.setState(id, "working", resume.detail);
+    if (resume.answerId !== undefined) this.closeHold(id, resume.answerId);
+    for (const item of resume.files) this.store.retireInbox(item.file);
+    if (session === undefined) {
       await this.end(id, endingFailed(DETAIL.noSession), 0);
       return;
     }
-    this.setState(id, "working", DETAIL.resumed);
-    await this.work(id, RESUME_PROMPT, task.session_id);
+    await this.work(id, resumePrompt(resume.input), session);
   }
 
   private async work(id: string, text: string, resume?: string): Promise<void> {
@@ -494,6 +735,7 @@ export class Supervisor {
       this.sessionContext(repo.defaultBranch, abort),
     );
     const run = this.deps.query({ prompt, options });
+    this.streams.set(id, prompt);
     const report = await followSession(run, prompt, abort, {
       mode: "auto",
       onStart: (init) => {
@@ -503,6 +745,8 @@ export class Supervisor {
         this.setState(id, "working", `${DETAIL.started}（模型：${init.model ?? "沒寫"}）`);
       },
     });
+    this.streams.delete(id);
+    this.releasePushed(id);
     if (report.sessionId !== undefined) task.session_id = report.sessionId;
     if (report.model !== undefined) task.model = report.model;
     await this.end(id, endingOf(report.end), report.costUsd);
@@ -522,8 +766,88 @@ export class Supervisor {
         : `（估計花費 ${task.cost_usd_estimate.toFixed(2)} 美元）`;
     this.setState(id, ending.state, `${ending.text}${cost}`);
     if (ending.summary !== null) await this.summary(id, ending.summary.kind, ending.summary.text);
+    if (ending.hold !== null) this.openHold(id, ending.hold);
+    await this.syncTodos(id, ending.todos);
     if (ending.quota !== null) this.stopForQuota(id, ending.quota.resetsAtMs);
     if (ending.cleanUp) await this.cleanUp(id);
+    await this.proposeClose(id);
+  }
+
+  /** Opens the hold a worker's question asks for, keyed by its task (plan section 4.4). */
+  private openHold(id: string, request: HoldRequest): void {
+    this.holds.set(id, {
+      state: "open",
+      title: request.title,
+      question: request.question,
+      on_answer: request.onAnswer,
+      hold_set: isoTime(this.deps.nowMs()),
+      origin: "",
+      hold_bucket: "live",
+      hold_until: null,
+      unresolved_blocker_ids: [],
+    });
+    this.store.writeHolds(this.holds);
+  }
+
+  /** Brings the task's 要你動手 items on the board in line with how its session ended. */
+  private async syncTodos(id: string, todos: EndTodos): Promise<void> {
+    if (todos.kind === "keep") return;
+    const items = new Map([...this.readTodoItems()].filter(([, item]) => item.ref === id));
+    const ops =
+      todos.kind === "drop"
+        ? todoOps(items, todos)
+        : todoOps(items, {
+            kind: "sync",
+            wanted: boardTodos(id, this.topicOf(id), todos.todos),
+            summary: todos.summary,
+          });
+    for (const op of ops) await this.runTodo(id, op);
+  }
+
+  private async runTodo(id: string, op: TodoOp): Promise<void> {
+    let problem: string | undefined;
+    if (op.op === "add") problem = await this.board.todoAdd(op.item);
+    else if (op.op === "done") problem = await this.board.todoDone(op.id);
+    else if (op.op === "failed")
+      problem = await this.board.todoFailed(op.id, this.redact(op.reason));
+    else problem = await this.board.todoObsolete(op.id, op.reason);
+    const item = op.op === "add" ? op.item.id : op.id;
+    if (problem !== undefined)
+      this.log(`task ${id}: todo ${op.op} ${item} was not taken: ${problem}`);
+  }
+
+  /** Proposes closing the task's topic when all of its tasks have landed. */
+  private async proposeClose(id: string): Promise<void> {
+    const topic = this.topicOf(id);
+    let board: Board;
+    try {
+      board = readBoard(this.settings.home);
+    } catch (error) {
+      this.log(`cannot read the board's files: ${(error as Error).message}`);
+      return;
+    }
+    const tags = this.store.readTags();
+    const tasks = new Map(
+      [...this.tasks].filter(
+        ([task]) => followMerges(board.topics.merged, tags.get(task) ?? "") === topic,
+      ),
+    );
+    const others = [...this.live].filter(([live, entry]) => live !== id && entry.topic === topic);
+    const queued = this.queued.some((entry) => this.current(entry.topic_hint) === topic);
+    const reason = closeReason({
+      live: board.topics.topics.has(topic),
+      proposed: board.topics.proposed.has(topic),
+      tasks,
+      held: new Set(
+        [...this.holds].filter(([, hold]) => hold.state === "open").map(([task]) => task),
+      ),
+      pending: others.length > 0 || queued || this.sorted.messages.has(topic),
+      closedDetail: DETAIL.closed,
+    });
+    if (reason === undefined) return;
+    const problem = await this.board.closePropose(topic, reason);
+    if (problem === undefined) this.log(`proposed closing topic ${topic}: ${reason}`);
+    else this.log(`topic ${topic}: the close proposal was not taken: ${problem}`);
   }
 
   private async summary(id: string, kind: SummaryKind, text: string): Promise<void> {
@@ -562,6 +886,7 @@ export class Supervisor {
         this.setState(id, "done", DETAIL.merged);
         await this.summary(id, "landed", `已合併：${task.pr_url}`);
         await this.cleanUp(id);
+        await this.proposeClose(id);
       } else if (state === "CLOSED") {
         this.setState(id, "done", DETAIL.closed);
         await this.cleanUp(id);
@@ -629,6 +954,13 @@ export class Supervisor {
     this.store.writeHolds(this.holds);
     if (answerId !== undefined) this.store.retireAnswer(id, answerId);
   }
+}
+
+function resumeDetail(input: ResumeInput): string {
+  if (input.answer !== undefined) return DETAIL.answered(input.answer.label || input.answer.answer);
+  if (input.directs.length > 0) return DETAIL.directed;
+  if (input.todos !== undefined) return DETAIL.verifying;
+  return DETAIL.resumed;
 }
 
 function endingFailed(text: string): Ending {

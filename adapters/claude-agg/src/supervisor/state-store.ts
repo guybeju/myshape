@@ -181,6 +181,23 @@ export class StateStore {
     };
   }
 
+  /** Each file deliver landed in inbox/ and the supervisor has not handled yet, with its text. */
+  readInbox(): { file: string; text: string }[] {
+    const dir = join(this.agg, "inbox");
+    const files: { file: string; text: string }[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || !entry.isFile() || !entry.name.endsWith(".json")) continue;
+      files.push({ file: entry.name, text: readFileSync(join(dir, entry.name), "utf8") });
+    }
+    return files;
+  }
+
+  /** Moves inbox/<file> to inbox/handled/<file>; a file already moved is left as it is. */
+  retireInbox(file: string): void {
+    const from = join(this.agg, "inbox", file);
+    if (existsSync(from)) renameSync(from, join(this.agg, "inbox", "handled", file));
+  }
+
   /** Moves answers/<task>.json to answers/handled/<task>.<write-id>.json. */
   retireAnswer(task: string, writeId: string): void {
     renameSync(

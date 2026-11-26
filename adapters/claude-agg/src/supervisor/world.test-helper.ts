@@ -1,8 +1,11 @@
 // One scratch world for supervisor tests: a board home, a worktree root, the
 // fake commands, the scripted query, a clock, and the supervisor's settings.
 
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { runProgram } from "#agg/test-home.js";
 
 import type { LedgerEvent, TaskEntry } from "#agg/state-files.js";
 
@@ -22,6 +25,19 @@ import { Supervisor, type Deps } from "./supervisor.js";
 export const BOARD_COMMAND = "/opt/board/bin/myshape.sh";
 export const REPO = "/repos/app";
 export const START_MS = Date.parse("2026-11-27T02:00:00Z");
+
+function jsonNames(dir: string): string[] {
+  return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
+}
+
+export interface HoldView {
+  state: string;
+  title: string;
+  question: string;
+  on_answer: string;
+  hold_set: string;
+  hold_until?: string | null;
+}
 
 export class World {
   readonly home: string;
@@ -111,12 +127,69 @@ export class World {
     ).queued;
   }
 
-  holds(): Record<string, { state: string; title: string; hold_until?: string | null }> {
+  holds(): Record<string, HoldView> {
+    if (!existsSync(join(this.agg, "holds.json"))) return {};
     return (
       JSON.parse(readFileSync(join(this.agg, "holds.json"), "utf8")) as {
-        holds: Record<string, { state: string; title: string; hold_until?: string | null }>;
+        holds: Record<string, HoldView>;
       }
     ).holds;
+  }
+
+  /** Hands one action record to bin/agg-board.mjs deliver, as the board does; returns its outcome. */
+  deliver(record: Record<string, unknown>): { outcome: string; error?: string } {
+    this.writes += 1;
+    const full = { v: 1, id: `w-${this.writes}`, attempt: 0, ...record };
+    const run = runProgram(this.home, ["deliver"], `${JSON.stringify(full)}\n`);
+    if (run.status !== 0) throw new Error(`deliver exited ${String(run.status)}: ${run.stderr}`);
+    return JSON.parse(run.stdout.trim().split("\n").at(-1) ?? "") as { outcome: string };
+  }
+
+  private writes = 0;
+
+  /** The captain's answer to `task`'s open hold, given on the page in two steps. */
+  answer(task: string, answer: string): { outcome: string } {
+    const hold = this.holds()[task];
+    if (hold === undefined) throw new Error(`no hold on ${task}`);
+    const sha = createHash("sha256").update(hold.question).digest("hex");
+    const mode = hold.on_answer === "close" ? "done" : "release";
+    return this.deliver({
+      kind: "answer",
+      home: "main",
+      task,
+      answer,
+      label: answer,
+      mode,
+      question_sha256: sha,
+      topic: null,
+    });
+  }
+
+  /** Writes the board's data/myshape/todos.json with these items. */
+  boardTodos(items: Record<string, { state: string; ref: string; title?: string }>): void {
+    const full = Object.fromEntries(
+      Object.entries(items).map(([id, item]) => [id, { title: id, ...item }]),
+    );
+    writeFileSync(
+      join(this.home, "data", "myshape", "todos.json"),
+      JSON.stringify({ v: 1, items: full }),
+    );
+  }
+
+  /** The arguments of every board write the supervisor ran: all but status, open and summary. */
+  boardWrites(): string[][] {
+    return this.commands.calls
+      .filter((call) => call.file === BOARD_COMMAND)
+      .map((call) => [...call.args])
+      .filter((args) => !["status", "open", "summary"].includes(args[0] ?? ""));
+  }
+
+  /** Names in inbox/ and inbox/handled/. */
+  inbox(): { waiting: string[]; handled: string[] } {
+    return {
+      waiting: jsonNames(join(this.agg, "inbox")),
+      handled: jsonNames(join(this.agg, "inbox", "handled")),
+    };
   }
 
   ledger(): LedgerEvent[] {

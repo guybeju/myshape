@@ -50,12 +50,17 @@ function isTexts(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+/** An option the board can show as a button: one line, no ` | ` (contract C5). */
+function isOption(value: string): boolean {
+  return value.trim() !== "" && !/[\r\n]/.test(value) && !value.includes(" | ");
+}
+
 function parseQuestion(value: unknown): Question | null | undefined {
   if (value === null) return null;
   if (!isRecord(value) || !isText(value["title"]) || !isText(value["text"])) return undefined;
   const { options } = value;
-  if (!isTexts(options) || options.length < 2) return undefined;
-  return { title: value["title"], text: value["text"], options };
+  if (!isTexts(options) || options.length < 2 || !options.every(isOption)) return undefined;
+  return { title: value["title"], text: value["text"], options: options.map((o) => o.trim()) };
 }
 
 function parseTodo(value: unknown): Todo | undefined {

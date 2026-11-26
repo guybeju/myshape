@@ -27,13 +27,41 @@ export interface TopicsFile {
   queues: Readonly<Record<Queue, readonly string[]>>;
   /** Old id to new id; chains are possible. */
   merged: ReadonlyMap<string, string>;
+  /** The topics that carry a close proposal (`close_proposal`) now. */
+  proposed: ReadonlySet<string>;
 }
+
+/** The captain's hashtag settings (contract section 3.8), each at its default when missing or bad. */
+export interface HashtagSettings {
+  aggregator_may_tag: boolean;
+  aggregator_may_create: boolean;
+  per_topic_max: number;
+  board_max: number;
+  aggregator_hourly_max: number;
+}
+
+export const HASHTAG_DEFAULTS: HashtagSettings = {
+  aggregator_may_tag: true,
+  aggregator_may_create: true,
+  per_topic_max: 8,
+  board_max: 50,
+  aggregator_hourly_max: 20,
+};
+
+const HASHTAG_RANGES = {
+  per_topic_max: [1, 32],
+  board_max: [1, 500],
+  aggregator_hourly_max: [0, 1000],
+} as const;
 
 export interface HashtagsFile {
   /** Topic id (possibly a merged one) to its hashtags, in the order they were added. */
   topics: ReadonlyMap<string, readonly string[]>;
   /** A hashtag's stored spelling to its `key`, the form two spellings are compared in. */
   keys: ReadonlyMap<string, string>;
+  /** The keys of the hashtags only the captain may put on or take off. */
+  locked: ReadonlySet<string>;
+  settings: HashtagSettings;
 }
 
 export interface Series {
@@ -143,6 +171,7 @@ function parseQueues(doc: Json, path: string): Record<Queue, string[]> {
 export function readTopicsFile(path: string): TopicsFile {
   const doc = readDocument(path) ?? {};
   const topics = new Map<string, Topic>();
+  const proposed = new Set<string>();
   for (const [id, raw] of Object.entries(objectField(doc, "topics", path))) {
     if (!isTopicId(id) || !isRecord(raw)) continue;
     topics.set(id, {
@@ -150,12 +179,13 @@ export function readTopicsFile(path: string): TopicsFile {
       goal: text(raw["goal"]),
       created_at: text(raw["created_at"]),
     });
+    if (isRecord(raw["close_proposal"])) proposed.add(id);
   }
   const merged = new Map<string, string>();
   for (const [from, to] of Object.entries(objectField(doc, "merged", path))) {
     if (typeof to === "string") merged.set(from, to);
   }
-  return { topics, queues: parseQueues(doc, path), merged };
+  return { topics, queues: parseQueues(doc, path), merged, proposed };
 }
 
 /** data/topics-archive.json: the ids of the archived topics. */
@@ -172,10 +202,66 @@ export function readHashtagsFile(path: string): HashtagsFile {
     if (Array.isArray(names)) topics.set(id, strings(names));
   }
   const keys = new Map<string, string>();
+  const locked = new Set<string>();
   for (const [name, raw] of Object.entries(objectField(doc, "hashtags", path))) {
-    if (isRecord(raw) && typeof raw["key"] === "string") keys.set(name, raw["key"]);
+    if (!isRecord(raw) || typeof raw["key"] !== "string") continue;
+    keys.set(name, raw["key"]);
+    if (raw["locked"] === true) locked.add(raw["key"]);
   }
-  return { topics, keys };
+  return {
+    topics,
+    keys,
+    locked,
+    settings: parseHashtagSettings(objectField(doc, "settings", path)),
+  };
+}
+
+function parseHashtagSettings(raw: Json): HashtagSettings {
+  const settings: HashtagSettings = { ...HASHTAG_DEFAULTS };
+  for (const name of ["aggregator_may_tag", "aggregator_may_create"] as const) {
+    const value = raw[name];
+    if (typeof value === "boolean") settings[name] = value;
+  }
+  for (const [name, [min, max]] of Object.entries(HASHTAG_RANGES) as [
+    keyof typeof HASHTAG_RANGES,
+    readonly [number, number],
+  ][]) {
+    const value = raw[name];
+    if (Number.isInteger(value) && (value as number) >= min && (value as number) <= max) {
+      settings[name] = value as number;
+    }
+  }
+  return settings;
+}
+
+export const TODO_STATES = ["open", "claimed", "rejected", "obsolete"] as const;
+export type TodoState = (typeof TODO_STATES)[number];
+
+/** One item on the board's 要你動手 list, as the aggregator needs it. */
+export interface TodoItem {
+  state: TodoState;
+  /** The text the aggregator gave with --ref: claude-agg gives the task id. */
+  ref: string;
+  title: string;
+}
+
+/** data/myshape/todos.json: the items still on the board, by item id. */
+export function readTodosFile(path: string): ReadonlyMap<string, TodoItem> {
+  const doc = readDocument(path) ?? {};
+  const items = new Map<string, TodoItem>();
+  for (const [id, raw] of Object.entries(objectField(doc, "items", path))) {
+    if (!isRecord(raw)) continue;
+    const state = oneOf(TODO_STATES, raw["state"]);
+    if (state !== undefined) {
+      items.set(id, { state, ref: text(raw["ref"]), title: text(raw["title"]) });
+    }
+  }
+  return items;
+}
+
+/** The board's todos.json in the board home `home`. */
+export function readTodos(home: string): ReadonlyMap<string, TodoItem> {
+  return readTodosFile(join(home, "data", "myshape", "todos.json"));
 }
 
 function parseOccurrence(raw: unknown): Occurrence | undefined {
