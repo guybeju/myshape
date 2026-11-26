@@ -14,8 +14,8 @@
 # secondmates. --in-home reads a LOCAL registered secondmate home instead.
 #
 # Task state, holds, and worker questions come from fm-fleet-snapshot.sh
-# --board-input when the snapshot beside it offers that option (its text names
-# it; tb_snapshot_mode in bin/fm-board-lib.sh), else --json; this script does
+# --board-input when the snapshot beside it offers that option (its argument
+# parser has that case label; tb_snapshot_mode in bin/fm-board-lib.sh), else --json; this script does
 # not parse status logs or state files itself. The exceptions
 # are two lines of a hold's body: its origin ("Captain hold origin:") and what
 # answering it does ("Captain hold on answer: close|release", from

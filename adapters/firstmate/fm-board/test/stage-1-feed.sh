@@ -477,14 +477,15 @@ test_topics_leaves_a_remote_home_and_bad_arguments_to_the_full_read() {
   pass "topics is exit 2 for a remote secondmate, an unknown home, and a malformed task id"
 }
 
-# snapshot_logger <root> <comment>: <root>'s fm-fleet-snapshot.sh becomes one
+# snapshot_logger <root> <text>: <root>'s fm-fleet-snapshot.sh becomes one
 # that logs its arguments to $TMP_ROOT/snapshot.log and passes the real
-# snapshot's --json report through. <comment> is the one line of its text the
-# reader's checks see besides the archived-blocker fix's marker, so naming
-# --board-input there makes it look like a snapshot that offers it.
+# snapshot's --json report through. <text> is the only part of it the reader's
+# checks see besides the archived-blocker fix's marker: an argument parser with
+# a --board-input case label makes it a snapshot that offers that option, the
+# word only in a comment does not.
 snapshot_logger() {
   rm "$1/bin/fm-fleet-snapshot.sh"
-  printf '#!/usr/bin/env bash\n# fm_backlog_archived_done_ids\n# %s\nprintf "%%s\\n" "$*" >> %q\nexec %q --json\n' \
+  printf '#!/usr/bin/env bash\n# fm_backlog_archived_done_ids\n%s\nprintf "%%s\\n" "$*" >> %q\nexec %q --json\n' \
     "$2" "$TMP_ROOT/snapshot.log" "$ROOT/bin/fm-fleet-snapshot.sh" > "$1/bin/fm-fleet-snapshot.sh"
   chmod +x "$1/bin/fm-fleet-snapshot.sh"
 }
@@ -500,19 +501,25 @@ test_the_reader_asks_for_board_input_when_the_snapshot_offers_it() {
   tb_make_fake_root "$root"
   with_ledger_on "$MAIN"
   expected=$(feed "$FAKE" main 0 - | jq -c '{tasks, holds, queued}')
-  snapshot_logger "$root" "Offers --board-input, the board's cheaper read."
+  snapshot_logger "$root" $'case "$1" in\n  --json|--board-input) ;;\nesac'
   : > "$TMP_ROOT/snapshot.log"
   assert_equals "$expected" "$(feed "$root" main 0 - | jq -c '{tasks, holds, queued}')" \
     "the report must be the same through a snapshot that offers --board-input"
   feed "$root" sm1 0 - >/dev/null || fail "feed sm1 through a snapshot that offers --board-input failed"
   assert_equals "2 0" "$(snapshot_asks)" \
     "the reader must ask a snapshot that offers --board-input for it, in every home, and never for --json"
-  snapshot_logger "$root" "Offers the full report only."
+  snapshot_logger "$root" "# Offers the full report only."
   : > "$TMP_ROOT/snapshot.log"
   assert_equals "$expected" "$(feed "$root" main 0 - | jq -c '{tasks, holds, queued}')" \
     "the report must be the same through a snapshot without --board-input"
   assert_equals "0 1" "$(snapshot_asks)" "the reader must ask a snapshot without --board-input for --json"
-  pass "the reader asks the snapshot for --board-input when it offers it, else --json"
+  snapshot_logger "$root" "# Offers --board-input, the board's cheaper read."
+  : > "$TMP_ROOT/snapshot.log"
+  assert_equals "$expected" "$(feed "$root" main 0 - | jq -c '{tasks, holds, queued}')" \
+    "the report must be the same through a snapshot that names --board-input only in a comment"
+  assert_equals "0 1" "$(snapshot_asks)" \
+    "the reader must ask a snapshot that names --board-input only in a comment for --json"
+  pass "the reader asks the snapshot for --board-input when its parser offers it, else --json"
 }
 
 fm_test_run test_main_report_carries_the_backlog test_main_report_has_the_contract_keys \
