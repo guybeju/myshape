@@ -41,6 +41,7 @@ written only from that contract.
 | `myshape/` | The service, the page, the specs (`myshape/spec/`) and the tests |
 | `ci-tools/board-tests/` | The locked versions of `pnpm` and `tasks-axi` that CI installs |
 | `adapters/firstmate/` | One aggregator's adapter: the Firstmate side of the board |
+| `adapters/claude-agg/` | An aggregator that is not Firstmate, built from the contract only ([its README](adapters/claude-agg/README.md)) |
 
 `adapters/firstmate/` is the adapter for [Firstmate](https://github.com/guybeju/firstmate).
 Its files keep their paths relative to a Firstmate checkout's root

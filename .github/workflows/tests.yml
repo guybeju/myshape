@@ -1,7 +1,8 @@
 name: Tests
 
-# The board's checks and its Firstmate adapter's suites, on every push to and
-# pull request into main. No `paths:` filter, so every pull request reports.
+# The board's checks, its Firstmate adapter's suites and the Claude aggregator's
+# checks, on every push to and pull request into main. No `paths:` filter, so
+# every pull request reports.
 #
 # Board: the board's own checks at this repository's root.
 # Firstmate adapter: the adapter's suites source Firstmate's tests/lib.sh and
@@ -10,6 +11,9 @@ name: Tests
 #   this repository's two vendor lists name laid over its root and committed
 #   there locally: the shape a Firstmate fork has after vendoring this
 #   repository.
+# Claude aggregator (job claude-agg): adapters/claude-agg/'s own checks, and
+#   guards that keep it out of the board's top-level bin/ and out of both
+#   vendor lists, and keep it from importing the board or the Firstmate adapter.
 #
 # The suites print `skip:` and still pass when a tool is missing. Each job
 # installs the tools its suites use, so any skip fails the job and is listed as
@@ -223,3 +227,109 @@ jobs:
             done
           fi
           exit "$failed"
+
+  claude-agg:
+    name: Claude aggregator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install pnpm from the CI lockfile
+        # The same locked pnpm the Board job uses. No package script runs.
+        run: |
+          npm ci --ignore-scripts --prefix ci-tools/board-tests
+          echo "$GITHUB_WORKSPACE/ci-tools/board-tests/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: pnpm install --frozen-lockfile
+        id: install
+        run: pnpm --dir adapters/claude-agg install --frozen-lockfile
+      # Each check and guard below runs even after an earlier one fails, so one
+      # run shows them all.
+      - name: typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm --dir adapters/claude-agg run typecheck
+      - name: lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm --dir adapters/claude-agg run lint
+      - name: format:check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm --dir adapters/claude-agg run format:check
+      - name: test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm --dir adapters/claude-agg test
+      - name: The top-level bin/ holds only the board's own files
+        # A tracked bin/ file equal to HEAD runs without a confirmation on the
+        # page (myshape/spec/contracts.markdown section 7), so every entry under
+        # bin/ must be a line of myshape/vendor-files, and nothing there may be
+        # named agg-board.
+        if: ${{ !cancelled() }}
+        run: |
+          bad=0
+          while IFS= read -r path; do
+            if ! grep -qxF -- "$path" myshape/vendor-files; then
+              echo "::error::$path is under the top-level bin/ but is not a line of myshape/vendor-files"
+              bad=1
+            fi
+            case "${path##*/}" in
+              *agg-board*)
+                echo "::error::$path: the aggregator's program must stay in adapters/claude-agg/bin/"
+                bad=1
+                ;;
+            esac
+          done < <(find bin -mindepth 1)
+          exit "$bad"
+      - name: Neither vendor list names adapters/claude-agg
+        # Each line expands to the tracked files it vendors, the way the
+        # Firstmate adapter job lays them over the Firstmate root.
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -z "$(git ls-files -- adapters/claude-agg)" ]; then
+            echo '::error::adapters/claude-agg has no tracked file, so this guard checks nothing'
+            exit 1
+          fi
+          bad=0
+          check() {
+            local list=$1 prefix=$2 line covered
+            while IFS= read -r line || [ -n "$line" ]; do
+              [ -n "$line" ] || continue
+              covered=$(git ls-files -- "$prefix$line" | grep -c '^adapters/claude-agg/' || true)
+              if [ "$covered" -ne 0 ]; then
+                echo "::error::$list line '$line' vendors $covered files under adapters/claude-agg/"
+                bad=1
+              fi
+            done < "$list"
+          }
+          check myshape/vendor-files ''
+          check adapters/firstmate/fm-board/vendor-files adapters/firstmate/
+          exit "$bad"
+      - name: adapters/claude-agg imports nothing from myshape/ or adapters/firstmate/
+        # Import, require, shell source and JSON config references that climb
+        # out with `..` or name myshape or firstmate. Plain data paths such as
+        # data/myshape/ are not imports and pass.
+        if: ${{ !cancelled() }}
+        run: |
+          code='(from|import|require)[[:space:]]*\(?[[:space:]]*['\''"][^'\''"]*(\.\.|myshape|firstmate)'
+          shell='^[[:space:]]*(source|\.)[[:space:]]+[^[:space:]]*(\.\.|myshape|firstmate)'
+          config='"[^"]*(\.\.|myshape|firstmate|(file|link|portal|workspace):)[^"]*"'
+          bad=0
+          search() {
+            local rc=0
+            git grep -nIE "$@" || rc=$?
+            case "$rc" in
+              0) bad=1 ;;
+              1) ;;
+              *) echo "::error::git grep failed with exit $rc"; bad=1 ;;
+            esac
+          }
+          search -e "$code" -e "$shell" -- adapters/claude-agg \
+            ':(exclude)adapters/claude-agg/README.md' ':(exclude)adapters/claude-agg/pnpm-lock.yaml'
+          search -e "$config" -- 'adapters/claude-agg/*.json'
+          if [ "$bad" -ne 0 ]; then
+            echo '::error::adapters/claude-agg must not import from myshape/ or adapters/firstmate/'
+          fi
+          exit "$bad"
