@@ -147,8 +147,7 @@ class Follower {
   /** Takes one message; true when the session is over. */
   take(raw: object): boolean {
     if (!isRecord(raw)) return false;
-    const signal = quotaSignal(raw);
-    if (signal !== undefined && typeof this.quota !== "number") this.quota = signal;
+    this.noteQuota(quotaSignal(raw));
     const init = parseInit(raw);
     if (init !== undefined && !this.started) return this.start(init);
     const result = parseResult(raw);
@@ -157,6 +156,11 @@ class Follower {
       return this.finish({ kind: "error", message: "session 沒有送出開頭的系統訊息。" });
     if (Number.isFinite(result.total_cost_usd)) this.report.costUsd = result.total_cost_usd;
     return this.finish(endOf(result, this.quota));
+  }
+
+  /** Keeps the first quota signal, or a later one that says when the limit clears. */
+  private noteQuota(signal: number | null | undefined): void {
+    if (signal !== undefined && typeof this.quota !== "number") this.quota = signal;
   }
 
   private start(init: InitMessage): boolean {

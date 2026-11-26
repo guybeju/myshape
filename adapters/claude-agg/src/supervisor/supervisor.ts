@@ -20,7 +20,7 @@ import {
 } from "./commands.js";
 import { dispatchOrder, followMerges, type OrderEntry } from "./dispatch-order.js";
 import { endingOf, TEXT, type Ending } from "./ending.js";
-import { parsePlannerOutput } from "./outputs.js";
+import { parsePlannerOutput, type PlannedWork } from "./outputs.js";
 import { plannerPrompt, RESUME_PROMPT, workerPrompt } from "./prompts.js";
 import { schedule, type Candidate, type Slot, type TopicStatus } from "./scheduler.js";
 import type { QueryFn } from "./sdk.js";
@@ -181,26 +181,38 @@ export class Supervisor {
       const ended = task.state === "failed" || (task.state === "done" && !task.pr_url);
       if (ended && task.worktree !== undefined) await this.cleanUp(id);
     }
-    for (const [id, hold] of this.holds) {
-      if (hold.state !== "open" || hold.title !== QUOTA_HOLD.title) continue;
-      const until = Date.parse(hold.hold_until ?? "");
-      const untilMs = Number.isNaN(until) ? this.deps.nowMs() + QUOTA_WAIT_MS : until;
-      this.quota = { untilMs, hold: id };
-    }
+    this.quota = this.openQuotaStop();
     this.saveTasks();
     this.store.writeQueued(this.queued);
   }
 
-  private async reconcileWorktrees(): Promise<void> {
+  /** The quota stop an open quota hold of the last run still says, or null. */
+  private openQuotaStop(): Quota | null {
+    for (const [id, hold] of this.holds) {
+      if (hold.state !== "open" || hold.title !== QUOTA_HOLD.title) continue;
+      const until = Date.parse(hold.hold_until ?? "");
+      return { untilMs: Number.isNaN(until) ? this.deps.nowMs() + QUOTA_WAIT_MS : until, hold: id };
+    }
+    return null;
+  }
+
+  /** Every worktree git lists in the settings' repositories, or undefined when a list fails. */
+  private async listedWorktrees(): Promise<Set<string> | undefined> {
     const listed = new Set<string>();
     for (const repo of Object.values(this.settings.repos)) {
       const paths = await this.git.worktrees(repo.path);
       if (paths === undefined) {
-        this.log(`git worktree list failed in ${repo.path}; worktrees there are left as they are`);
-        return;
+        this.log(`git worktree list failed in ${repo.path}; worktrees are left as they are`);
+        return undefined;
       }
       for (const path of paths) listed.add(path);
     }
+    return listed;
+  }
+
+  private async reconcileWorktrees(): Promise<void> {
+    const listed = await this.listedWorktrees();
+    if (listed === undefined) return;
     const known = new Set<string>();
     for (const [id, task] of this.tasks) {
       if (task.worktree === undefined) continue;
@@ -380,7 +392,12 @@ export class Supervisor {
         `planner for ${topic} asked: ${output.question.title}; questions come in a later step`,
       );
     }
-    for (const work of output.tasks) {
+    this.queuePlanned(topic, output.tasks);
+  }
+
+  /** Puts the planner's tasks for `topic` at the end of the queue, those for known repositories. */
+  private queuePlanned(topic: string, tasks: readonly PlannedWork[]): void {
+    for (const work of tasks) {
       if (this.settings.repos[work.repo] === undefined) {
         this.log(
           `planner for ${topic} named repo ${work.repo}, which is not in the settings; skipped`,
@@ -563,15 +580,19 @@ export class Supervisor {
     if (quota.hold === null && id !== null && this.holds.get(id)?.state !== "open") {
       quota.hold = id;
     }
-    if (quota.hold === null) return;
-    this.holds.set(quota.hold, {
+    if (quota.hold !== null) this.writeQuotaHold(quota.hold, quota.untilMs);
+  }
+
+  /** Opens or updates the hold on `id` that says dispatching stopped until `untilMs`. */
+  private writeQuotaHold(id: string, untilMs: number): void {
+    this.holds.set(id, {
       state: "open",
       title: QUOTA_HOLD.title,
-      question: QUOTA_HOLD.question(isoTime(quota.untilMs)),
+      question: QUOTA_HOLD.question(isoTime(untilMs)),
       on_answer: "release",
-      hold_set: this.holds.get(quota.hold)?.hold_set ?? isoTime(this.deps.nowMs()),
+      hold_set: this.holds.get(id)?.hold_set ?? isoTime(this.deps.nowMs()),
       hold_bucket: "live",
-      hold_until: isoTime(quota.untilMs),
+      hold_until: isoTime(untilMs),
     });
     this.store.writeHolds(this.holds);
   }
@@ -580,17 +601,26 @@ export class Supervisor {
   private clearQuota(): void {
     const quota = this.quota;
     if (quota === null) return;
-    const answer = quota.hold === null ? undefined : this.store.readAnswer(quota.hold);
-    const now =
-      answer !== undefined && [answer.answer, answer.label].includes(QUOTA_HOLD.resumeNow);
-    if (answer !== undefined && quota.hold !== null) {
-      this.closeHold(quota.hold, answer.id);
-      quota.hold = null;
-    }
+    const now = this.takeQuotaAnswer(quota);
     if (!now && this.deps.nowMs() < quota.untilMs) return;
     if (quota.hold !== null) this.closeHold(quota.hold, undefined);
     this.quota = null;
     this.log("dispatching resumes after the quota stop");
+  }
+
+  /**
+   * Closes the quota hold the captain answered, if they did.
+   *
+   * Returns:
+   *   Whether the answer was 現在恢復.
+   */
+  private takeQuotaAnswer(quota: Quota): boolean {
+    if (quota.hold === null) return false;
+    const answer = this.store.readAnswer(quota.hold);
+    if (answer === undefined) return false;
+    this.closeHold(quota.hold, answer.id);
+    quota.hold = null;
+    return [answer.answer, answer.label].includes(QUOTA_HOLD.resumeNow);
   }
 
   private closeHold(id: string, answerId: string | undefined): void {
