@@ -1,7 +1,7 @@
 // One scratch world for supervisor tests: a board home, a worktree root, the
 // fake commands, the scripted query, a clock, and the supervisor's settings.
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { LedgerEvent, TaskEntry } from "#agg/state-files.js";
@@ -85,6 +85,7 @@ export class World {
       repo: "app",
       prompt: `prompt ${id}`,
     }));
+    mkdirSync(this.agg, { recursive: true, mode: 0o700 });
     writeFileSync(join(this.agg, "queued.json"), JSON.stringify({ v: 1, queued }));
   }
 
