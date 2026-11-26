@@ -22,12 +22,12 @@
 - **要你動手的項目**：要使用者親手做的事（sudo 指令、登入）。看板自己存在 `data/myshape/todos.json`（第 3.6 節）：要做什麼（一行）、可以沒有的說明（不是指令，沒有複製鈕），與零到多個指令，每個原樣保存（C54）。aggregator 用 `myshape.sh todo add` 放上看板，每個項目在一個議題底下。
   看板存項目之前，first mate 的項目是主 home 原因以 `動手：` 開頭的 captain hold；舊版的 first mate 那一側把它們搬上看板，現在這種 hold 和其他 captain hold 一樣是待決事項（[adapter](../../fm-board/spec/adapter.markdown) 第 3.3 節）。看板自己不讀 hold 的文字。
 - **排程**：掛在一個議題上的時間規則：每天或每週某幾天的 `HH:MM`，加一個 IANA 時區。一個議題最多一筆排程；有排程的議題存在「待辦」（第 3.1、3.9 節）。看板自己存在 `data/myshape/schedules.json`，aggregator 用 `myshape.sh schedule …` 建立與回報，使用者的設定、上鎖與撤回只在頁面上（第 6.1 節）。
-- **一場**：排程規則算出的一個時刻 T，鍵是排程 id 加 T 的 UTC 時刻，例如 `weekly-sync:20261130T0200Z`。看板的時鐘在 T 減提前分鐘數時開這一場，開著的一場到 `closes_by` 一定結束；這一版還沒有時鐘，也不送排程的通知。
+- **一場**：排程規則算出的一個時刻 T，鍵是排程 id 加 T 的 UTC 時刻，例如 `weekly-sync:20261130T0200Z`。看板的時鐘在 T 減提前分鐘數時開這一場、送「快到了」，在 T 送「到了」，開著的一場到 `closes_by` 一定結束（第 3.9 節）。
 - **待決事項**：等使用者回答的 captain hold。**worker 提問**是狀態行裡的 `needs-decision`，對象是 first mate，看板只列出、不能作答。
 - **燈號**：待你決定、卡住、進行中、完成、未知，共五種。
 - **直送**：從看板把訊息送給某一個 agent，不經主 first mate。
 - **里程碑**：`ready`、`report`、`failed`、`landed` 四種結果。**里程碑摘要**是 first mate 在里程碑發生時寫的一到三句。
-- **系統紀錄**：看板自己寫的一行紀錄，不經模型。看板的每一個改動都寫至少一筆，和改動存在同一次存檔裡（第 3.3 節）；在看板作答、歸併送到之後也各寫一筆；讀到一個 home 的待決事項開了、關了，也各寫一筆。每筆記下誰做的：使用者（頁面）、aggregator（指令）或看板自己（啟動時與讀取時）。
+- **系統紀錄**：看板自己寫的一行紀錄，不經模型。看板的每一個改動都寫至少一筆，和改動存在同一次存檔裡（第 3.3 節）；在看板作答、歸併送到之後也各寫一筆；讀到一個 home 的待決事項開了、關了，也各寫一筆。每筆記下誰做的：使用者（頁面）、aggregator（指令）或看板自己（啟動時、讀取時，與排程的時鐘）。
 - **結果不明**：寫入已送出、不知道有沒有生效、重送可能重複。**未送達**：可以安全重送，但重試次數用完。**失敗**：確定沒生效。
 
 ## 2. fork 裡新增的檔案
@@ -118,8 +118,8 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 - 帳本事件：`{"src":"ledger","home":"<home>","raw":"<上游帳本的那一行，原樣的字串>"}`。存原始字串而不是解析後的物件，重啟後才能用同樣的位元組去重。上游的事件有 `v`、`ts`（epoch 秒）、`event`、`task`，五種 `event`：`task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`。
 - 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","rid":"r-<boot_id>-<n>","ts":…,"kind":"…","topic":"<id>","home":…,"task":…,"by":"captain|aggregator|board","label":"<當時 aggregator 的名稱>","text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
   使用者可能要看或撤回的改動另帶 `before` 與 `after`（改之前與之後，第 3.8 節），撤回另一筆的紀錄帶 `ref`（被撤回那一筆的 `rid`）。
-  `rid` 是這筆紀錄的 id，補寫時用它去重；`by` 是看板能證明的做的人：`captain` 是頁面上拿著 token 的人做的，`aggregator` 是經 socket 的指令做的，`board` 是看板啟動時自己做的。這兩個欄位之前寫下的紀錄沒有。
-  排程的 `kind`，都在排程議題底下（設定與全部暫停沒有議題）：`schedule.created`、`schedule.edited`、`schedule.paused`、`schedule.resumed`、`schedule.skipped`（跳過下一場）、`schedule.rt_changed`、`schedule.deleted`、`schedule.merged`（排程跟著議題合併過去，存在 `topics.json`）、`schedule.locked`（上鎖或解鎖排程或它的 rt）、`schedule.seen`（使用者看過 aggregator 到那時為止的排程改動，沒有議題）、`schedule.reverted`（帶 `ref`：撤回的那一筆的 `rid`）、`schedule.settings_changed`、`schedule.all_paused`；一場的 `occurrence.taken`（aggregator 接下）與 `occurrence.closed`（結束，`outcome` 是 `done` 或 `skipped`）。改排程的紀錄另帶 `before` 與 `after`：改前改後那筆排程的 JSON 字串（`{"id":…,"series":…,"skips":[…]}`，`series` 去掉 `seen` 與 `checked_through`，`skips` 是事先跳過的場次），設定的紀錄是改前改後的設定；頁面的撤回從這兩個欄位做。`by` 照上面的意思：頁面上做的是 `captain`，`myshape.sh schedule` 是 `aggregator`。
+  `rid` 是這筆紀錄的 id，補寫時用它去重；`by` 是看板能證明的做的人：`captain` 是頁面上拿著 token 的人做的，`aggregator` 是經 socket 的指令做的，`board` 是看板自己做的：啟動時、讀取時，以及排程的時鐘寫的（開場、到了、照時間結束、錯過，與沒送出就過期的通知）。這兩個欄位之前寫下的紀錄沒有。
+  排程的 `kind`，都在排程議題底下（設定與全部暫停沒有議題）：`schedule.created`、`schedule.edited`、`schedule.paused`、`schedule.resumed`、`schedule.skipped`（跳過下一場）、`schedule.rt_changed`、`schedule.deleted`、`schedule.merged`（排程跟著議題合併過去，存在 `topics.json`）、`schedule.locked`（上鎖或解鎖排程或它的 rt）、`schedule.seen`（使用者看過 aggregator 到那時為止的排程改動，沒有議題）、`schedule.reverted`（帶 `ref`：撤回的那一筆的 `rid`）、`schedule.settings_changed`、`schedule.all_paused`；一場的 `occurrence.opened`（時鐘開了這一場）、`occurrence.due`（時鐘：時間到了；排程暫停中時寫明沒有送通知）、`occurrence.taken`（aggregator 接下）、`occurrence.closed`（結束，`outcome` 是 `done` 或 `skipped`；時鐘照時間結束的是 `untaken`（沒有人接）或 `timed_out`（接了沒回報結束，到 `closes_by`），`by` 是 `board`）與 `occurrence.missed`（時鐘：看板沒在跑時整個時段都過去了，`outcome` 是 `missed`）。改排程的紀錄另帶 `before` 與 `after`：改前改後那筆排程的 JSON 字串（`{"id":…,"series":…,"skips":[…]}`，`series` 去掉 `seen` 與 `checked_through`，`skips` 是事先跳過的場次），設定的紀錄是改前改後的設定；頁面的撤回從這兩個欄位做。`by` 照上面的意思：頁面上做的是 `captain`，`myshape.sh schedule` 是 `aggregator`。
   議題的 `kind`：`topic.created`、`topic.confirmed`、`topic.merged`、`topic.split`、`topic.close_proposed`、`topic.kept`（使用者按了先不關）、`topic.archived`、`topic.reopened`、`topic.moved`、`topic.renamed`、`topic.goal_changed`。頁面上做的 `text` 結尾是「（你在頁面上）」，指令做的是「（<aggregator 的名稱> 用指令）」。
   頁面上的寫入送到之後：`agent.tagged`（歸併）、`hold.answered`（在看板作答，`outcome` 是答案的選項）；作答時那個待決事項已經在別處結束（結果是 `handled_elsewhere`）寫 `hold.closed`，`outcome` 是 `elsewhere`。
 - 要你動手的項目每一步都寫一筆系統紀錄，在項目的議題底下（沒有議題的項目 `topic` 是 `null`），`home` 與 `task` 都是 `null`，標題寫在 `text` 裡。另帶 `item`（項目 id），關掉的另帶 `outcome`（`done`、`dropped`、`taken_down`），帶原因的另帶 `reason`。
@@ -130,7 +130,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
 - hashtag 的每一個改動都寫一筆系統紀錄（第 3.8 節），帶 `before` 與 `after`。在一個議題上的帶那個議題的 `topic`，`before`、`after` 是那個議題改前改後的 hashtag，用一個空白隔開：`hashtag.added`（貼上；開了新的 hashtag 另帶 `outcome: "created"`）、`hashtag.removed`（撕掉）、`hashtag.carried`（議題合併或拆分時帶過來的）、`hashtag.reverted`（使用者撤回 aggregator 的一筆改動，帶 `ref`）。整個 hashtag 的沒有議題：`hashtag.renamed`、`hashtag.merged`、`hashtag.deleted`（`before` 與 `after` 是名稱，刪掉的 `after` 是空字串）、`hashtag.lock_changed`、`hashtag.color_changed`、`hashtag.settings_changed`（`before` 與 `after` 是設定的 JSON）、`hashtag.view_saved`、`hashtag.view_deleted`（視圖的 JSON），與沒有 `before`、`after` 的 `hashtag.seen`（使用者按了「看過了」）。
   `text` 例：「議題「GPU 叢集」貼上 #AI_INFRA（新開的 hashtag：#AI_INFRA）（first mate 用指令）」、「hashtag #AI_INFA 併入 #AI_INFRA（2 個議題）（你在頁面上）」。
-- 看板接上 aggregator 的兩種紀錄，都沒有議題，`home` 與 `task` 是 `null`（第 7 節）：`program.confirmed`（使用者在頁面上確認看板可以執行一支程式，`by` 是 `captain`，`text` 寫出完整路徑、角色與 SHA-256，例如「確認看板可以執行 /opt/agg/plain（feed、deliver；SHA-256 …）（你在頁面上）」），與 `writes.released`（等著的寫入交給 deliver 的程式之前，`by` 是 `board`，`text` 寫出依序放行的 id，例如「接上 plain，依序送出等著的 2 筆：w-…、w-…」）。
+- 看板接上 aggregator 的兩種紀錄，都沒有議題，`home` 與 `task` 是 `null`（第 7 節）：`program.confirmed`（使用者在頁面上確認看板可以執行一支程式，`by` 是 `captain`，`text` 寫出完整路徑、角色與 SHA-256，例如「確認看板可以執行 /opt/agg/plain（feed、deliver；SHA-256 …）（你在頁面上）」），與 `writes.released`（等著的寫入交給 deliver 的程式之前，`by` 是 `board`，`text` 寫出依序放行的 id，例如「接上 plain，依序送出等著的 2 筆：w-…、w-…」）。排程的通知過期沒送出時另寫一筆 `writes.expired`，在那個議題底下，`by` 是 `board`，`text` 寫出為什麼沒送與通知的全文，例如「沒送：已過期限 …（期限 11-30（一）10:00）：排程「週會」…」。
 - 待決事項從讀取資料記下的開與關（C59），`by` 是 `board`，在待決事項的議題底下（它自己的標記，沒有就是來源 task 的），帶 `home` 與 `task`：
   - `hold.opened`：一次讀取的 `holds[]` 裡有、上一次讀取沒有的 hold。同一個 `code_commit` 之間以 task 與 `hold_set` 認一個 hold；`code_commit` 換了的那一次只以 task 認，因為不同的讀取程式可能把同一個 hold 寫成不同的樣子（較舊的沒有 `hold_set`），而且只有 `hold_set` 是確切時間、不早於那個 home 的 `seen_at`（第 3.7 節）的才寫開啟：比那更早的 hold 本來就開著，只是新的讀取程式才報出來（例如不再略過主 home 的 `動手：` hold）。`ts` 是它的 `hold_set`；`hold_set` 只有日期或沒有時是這次讀取的時間，`text` 結尾加「（最晚 MM-DD HH:mm）」。`closed_holds[]` 裡一個上一次讀取時還沒開的、帶 `opened_at` 的待決事項，也先寫一筆，`ts` 是 `opened_at`。
   - `hold.closed`：`closed_holds[]` 裡上一次讀取沒有的一筆。`ts` 是它的 `closed_at`，沒有時是這次讀取的時間，加「（最晚 …）」。`outcome` 是 Resolution mode（`answered`、`released`、`repaired`、`reconciled`、`forge-closed`、`forge-released`，空的記成 `answered`），`answer` 是答案，`source` 是經哪裡（`chat` 是 first mate 直接記下的話）。在看板作答的（`source` 是 `myshape`）有看板自己的 `hold.answered`（`outcome` 是那個答案或它顯示的字）時不另寫，那一筆就是它的關閉；看板的那個作答還在送出中、等待或重試時先不寫，也不記成看過，游標留在原處，下一次讀再看；兩者都不是（送出的結果不是已送達，或有人用同一個入口手動作答）時照一般的關閉寫，「經看板」。
@@ -159,8 +159,8 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
             "text":"<全文>","action":{"kind":"message|direct|answer|tag|notice", …},"createdAt":…}}
 ```
 
-- `state`：`waiting`（等 aggregator 接上，第 7 節）、`sending`（送出中）、`retrying`（重試中，另帶 `attempt`、`next_at`、`error`）、`delivered`（已送達）、`handled_elsewhere`（已由別處處理）、`failed`（失敗，帶 `error`）、`undelivered`（未送達）、`unknown`（結果不明）、`ignored`（使用者按了忽略）。
-- 整筆寫入（全文、對象、`action` 也就是 7.1 的動作紀錄去掉 `v`、`id`、`attempt`）只在第一行的 `sending` 寫一次。看板改版前寫的行在那裡是 `plan`，看板照 7.1 換算。
+- `state`：`waiting`（等 aggregator 接上，第 7 節）、`sending`（送出中）、`retrying`（重試中，另帶 `attempt`、`next_at`、`error`）、`delivered`（已送達）、`handled_elsewhere`（已由別處處理）、`failed`（失敗，帶 `error`）、`undelivered`（未送達）、`unknown`（結果不明）、`ignored`（使用者按了忽略）、`expired`（排程的通知過了期限、被同一場的「到了」取代，或那一場已經結束，沒有交出去；帶 `error` 寫原因，不能重送）。
+- 整筆寫入（全文、對象、`action` 也就是 7.1 的動作紀錄去掉 `v`、`id`、`attempt`）只在第一行的 `sending` 寫一次。排程的通知用時鐘給的固定 id（第 3.9 節），同一個 id 再交一次什麼都不做，所以每個 id 只有一個第一行；過了期限才交的，第一行是 `waiting`，下一行就是 `expired`。看板改版前寫的行在那裡是 `plan`，看板照 7.1 換算。
 - 被拒絕的瀏覽器請求另記 `{"ts":…,"rejected":"<原因>","host":…,"origin":…,"path":…}`。`path` 只記路徑、不記查詢字串（有人可能把 token 貼在網址裡），所以紀錄裡不會有 token。
 
 ### 3.6 `data/myshape/todos.json`
@@ -269,14 +269,23 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 
 - `series` 的鍵是排程 id：議題 id 的文法，最長 64 字元，建立時用議題 id，用過的（`series` 或 `removed` 裡有的）加 `-2`、`-3`。看板之後的通知 id `w-s-<排程 id>-<UTC>-<pre|start|missed>` 與 first mate 收件匣的 request id 靠這個長度與字元。不合文法的鍵讀的時候略過。
 - `topic` 是建立時的議題 id；議題被合併時不改寫，讀的一方（看板與 `list`）照 `merged` 走到底。`title` 是建立時的議題名稱。`rule` 是 `daily HH:MM` 或 `weekly <星期> HH:MM`，星期是 `sun,mon,tue,wed,thu,fri,sat` 裡的幾個，照這個順序用逗號連起來。`tz` 是 IANA 時區，建立時沒指定就用 `settings.default_tz`，那是 `null` 時用這台機器的時區。
-- `duration_min`（5 到 480）與 `lead_min`（0 到 120，0 表示不送「快到了」）是 `null` 時用設定的值。`rt` 是 `none`、`soft-rt`、`hard-rt`；`rt_locked` 是 `true` 時 aggregator 不能改 rt。`state` 是 `on` 或 `paused`。`locked` 是 `true` 時 aggregator 不能改、暫停、恢復、跳過或刪除它；使用者在頁面上建的照 `captain_locks_by_default` 上鎖，aggregator 建的不上鎖。`by` 是 `captain` 或 `aggregator`；aggregator 建的另有 `seen`，使用者在頁面上看過之前是 `false`（頁面標「新」）；頁面的「看過」同一次改動寫一筆 `schedule.seen`，並把每一筆 aggregator 建的設成 `true`。`aggregator_needs_enable` 打開時，aggregator 建的排程要等 `seen` 是 `true` 才響（之後的時鐘照這個欄位），aggregator 自己也不能恢復它。`checked_through` 是看板的時鐘檢查到哪一刻，由之後的時鐘寫；這一版只原樣保留。
+- `duration_min`（5 到 480）與 `lead_min`（0 到 120，0 表示不送「快到了」）是 `null` 時用設定的值。`rt` 是 `none`、`soft-rt`、`hard-rt`；`rt_locked` 是 `true` 時 aggregator 不能改 rt。`state` 是 `on` 或 `paused`。`locked` 是 `true` 時 aggregator 不能改、暫停、恢復、跳過或刪除它；使用者在頁面上建的照 `captain_locks_by_default` 上鎖，aggregator 建的不上鎖。`by` 是 `captain` 或 `aggregator`；aggregator 建的另有 `seen`，使用者在頁面上看過之前是 `false`（頁面標「新」）；頁面的「看過」同一次改動寫一筆 `schedule.seen`，並把每一筆 aggregator 建的設成 `true`。`aggregator_needs_enable` 打開時，aggregator 建的排程要等 `seen` 是 `true` 才響（之後的時鐘照這個欄位），aggregator 自己也不能恢復它。`checked_through` 是看板的時鐘檢查到哪一刻：時鐘只在開場、到了、結束或錯過時把它存成那一刻，不是每次檢查都存；恢復、全部恢復、使用者按啟用（或關掉「要先按啟用」）、改規則或時間或時區或提前分鐘數，以及撤回，也把它設成那一刻。它只往後走。時鐘找的是 `checked_through`（沒有時是 `created_at`）與 `recent` 裡最晚那一場之後的場次，所以暫停中、改時間之前與時鐘往回跳的時段都不會算成錯過。
 - 一場的時刻：一個當地日期最多一場；日光節約調回、同一個當地時間出現兩次時只算第一次，跳過的當地時間往後順延同樣的長度（02:00 跳到 03:00 時，02:30 是 03:30）。時鐘往回跳時，已經處理過（在 `recent` 或開著）的場次不會再出現；改規則時開著的那一場照舊，新規則的下一場在它的 `closes_by` 之後才開。
-- `occurrences` 只放開著的場次，鍵是一場的鍵。`state` 是 `upcoming`（快到了）、`due`（到了）或 `taken`（aggregator 接了）；每一場一定帶 `closes_by`，任何讀的一方都把超過 `closes_by` 的當成已結束，不管檔裡還寫著什麼。aggregator 接下時，`closes_by` 改成 T 加 `max_open_min` 與時段長度較長的那個。`notices` 是之後的時鐘交出的通知 id，原樣保留。
-- `recent` 是每個排程最近十場：結束的（`outcome` 是 `done` 或 `skipped`，`by` 是結束的人，另有 `note`、`closed_at`，開著時的 `notices` 跟著搬過來）、事先跳過的（跳過下一場：`by` 是要跳過的人；aggregator 建立或改時間後 `first_bell_min_ahead` 分鐘內會響的場次：`by` 是 `board`，`note` 寫原因），以及之後的時鐘寫的錯過（`notice`、`count`、`from`、`to` 原樣保留）。`closed_at` 早於那一場的時刻的 `skipped` 就是事先跳過的；改規則時，新規則沒有的那幾筆拿掉。
+- `occurrences` 只放開著的場次，鍵是一場的鍵。`state` 是 `upcoming`（快到了）、`due`（到了）或 `taken`（aggregator 接了）；每一場一定帶 `closes_by`，任何讀的一方都把超過 `closes_by` 的當成已結束，不管檔裡還寫著什麼。aggregator 接下時，`closes_by` 改成 T 加 `max_open_min` 與時段長度較長的那個。`notices` 是時鐘交出的通知的固定 id：`pre`（快到了）與 `start`（到了），`w-s-<排程 id>-<T 的 UTC>-<pre|start>`。看板先把 id 存進這裡，再交給寫入引擎；中途當掉時，下一次檢查看到有 id、寫入引擎裡沒有，就用同一個 id 補交。
+- `recent` 是每個排程最近十場：結束的（`outcome` 是 `done` 或 `skipped`，`by` 是結束的人，另有 `note`、`closed_at`，開著時的 `notices` 跟著搬過來）、事先跳過的（跳過下一場：`by` 是要跳過的人；aggregator 建立或改時間後 `first_bell_min_ahead` 分鐘內會響的場次：`by` 是 `board`，`note` 寫原因），時鐘照時間結束的（`outcome` 是 `untaken` 或 `timed_out`，`by` 是 `board`），以及時鐘寫的錯過（`outcome` 是 `missed`，`by` 是 `board`，`key` 是最近錯過的那一場，送了錯過通知時 `notice` 是它的固定 id `w-s-<排程 id>-<UTC>-missed`；不只一場時另有 `count` 與 `from`、`to`，是最早與最晚那一場的 UTC 時刻）。`closed_at` 早於那一場的時刻的 `skipped` 就是事先跳過的；改規則時，新規則沒有的那幾筆拿掉。
 - `removed` 是刪掉的排程，多 `removed_at` 與 `removed_by`，留 30 天，頁面上可以撤回；下一次寫 `removed` 時拿掉超過 30 天的。
 - `settings` 的每一項、範圍與預設在設計的第 5.1 節：`lead_min` 0 到 120、`duration_min` 5 到 480、`max_open_min` 15 到 1440、`missed` 是 `notice`／`due`／`record`、`late_after_min` 1 到 60、`first_bell_min_ahead` 0 到 1440、`max_active` 1 到 100、`aggregator_changes_per_hour` 1 到 100、`default_rt`、`default_tz`（IANA 或 `null`）、四個是非題與 `all_paused`。讀到沒有或超出範圍的值就用預設。任何一筆排程的提前分鐘數加上時段長度與 `max_open_min` 較長的那個，都不能超過它兩場之間最短的間隔（每天是 22 小時，因為一天最多可以少 2 小時；每週照選的星期算），所以同一筆排程不會同時開著兩場；設定與排程改動違反這一條就拒絕。
 - `outbox` 是最後一次排程改動寫的系統紀錄，和 `todos.json` 的一樣（第 3.3 節）。
 - 讀的一方略過不認得的欄位；不合格的排程、場次與紀錄略過。沒有這個檔時當成沒有排程、設定都是預設，第一次改排程時才建立。
+
+時鐘（`myshape/src/schedule-clock.ts`）：看板服務啟動時檢查一次，之後每 30 秒一次；`myshape.sh schedule tick` 立刻跑同一段檢查一次。它只看時間和存著的資料，不讀任何 home。改動和它的紀錄經 `commitChange` 存（`by` 是 `board`），存好了才把通知交給寫入引擎；存不了就什麼都不交，下一次檢查再來。
+
+- 響不響：排程是 `on`、沒有全部暫停、不是在等使用者按啟用的 aggregator 排程時才響。不響的排程不開新場次、不送通知；開著的那一場照樣到 T 變成「到了」（不送通知，之後也不補送）、到 `closes_by` 結束。
+- 開場：T 減提前分鐘數一到就開，`state` 是 `upcoming`、`closes_by` 是 T 加時段長度，送 `schedule.upcoming`。提前分鐘數是 0，或開的時候已經過了 T，就直接是 `due`，只送 `schedule.due`。同一個排程有一場開著時不開下一場。
+- 到了：`upcoming` 的那一場在 T 變成 `due`，送 `schedule.due`；還沒交出去的 `schedule.upcoming` 同時作廢。aggregator 在 T 之前就接下（`taken`）的那一場不送 `schedule.due`。
+- 結束：到 `closes_by` 結束，沒人接的記 `untaken`，接了的記 `timed_out`，搬進 `recent`。一場不論怎麼結束，它還沒交出去的通知都作廢。
+- 看板回來時：每個排程只看最近的那一場。還在時段裡的照常開，通知寫明晚了多久（晚超過 `late_after_min` 才寫，例如「（晚了 7 分鐘）」）；更早整個錯過的只記一筆。時段整個過去了的，照 `missed` 設定：`notice` 記一筆錯過並送一則 `schedule.missed`（每個排程只有最近那一場一則，更早的算進同一筆的 `count`），`record` 只記下來，`due` 把最近那一場重新開成 `due`、從現在算時段長度並送晚了的 `schedule.due`。錯過先記進 `recent`（帶 `notice` 的 id）再交出，所以看板一天重啟幾次都只送一次。
+- 時鐘往回跳時，`recent` 裡或開著的場次不會再開，`checked_through` 不往回寫。
 
 ## 4. 讀取契約（feed）
 
@@ -370,7 +379,7 @@ first mate 這一側怎麼產生這份回報（`fm-topic-board-read.sh` 讀 back
 
 `state/myshape/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`hashtag-add`、`hashtag-remove`、`schedule-add`、`schedule-edit`、`schedule-pause`、`schedule-resume`、`schedule-skip`、`schedule-rt`、`schedule-delete`、`schedule-take`、`schedule-close`、`reset-token`。`create` 另收 `hashtags`（名稱的清單）。
+`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`hashtag-add`、`hashtag-remove`、`schedule-add`、`schedule-edit`、`schedule-pause`、`schedule-resume`、`schedule-skip`、`schedule-rt`、`schedule-delete`、`schedule-take`、`schedule-close`、`schedule-tick`、`reset-token`。`create` 另收 `hashtags`（名稱的清單）。`schedule-tick` 不在操作表裡：它跑一次排程的時鐘（第 3.9 節），改動記成 `board` 的，不先等讀取，回「ok schedule tick：…」寫這次做了什麼。
 改動看板的操作全部列在一張表裡（`myshape/src/ops.ts` 的 `OPERATIONS`）：哪條通道可以用、經哪個檔存（第 3.3 節）。socket 與頁面都只經這張表改看板，每一個改動都至少寫一筆系統紀錄，沒有紀錄的改動編譯不過。
 `keep`（頁面的「先不關」）、`todo-claim`（「做完了」）、`todo-drop`（「不做了」）與 `todo-takedown`（「好，撤下」）是使用者自己按的，socket 收到就拒絕，什麼都不改；它們只在頁面的 API 上。hashtag 的 `hashtag-rename`、`hashtag-merge`、`hashtag-delete`、`hashtag-settings`、`hashtag-lock`、`hashtag-color`、`hashtag-revert`、`hashtag-seen`、`view-save`、`view-delete` 也是（第 3.8 節）。
 `schedule-settings`、`schedule-lock`、`schedule-pause-all`、`schedule-revert`、`schedule-seen` 也是使用者自己按的，socket 收到就拒絕，什麼都不改；`schedule-take` 是 aggregator 的回報，只從 socket 收。頁面的路由這一版還沒有。
@@ -493,11 +502,13 @@ deliver 的程式能執行之後，`waiting` 的寫入照稽核紀錄的順序�
 | `direct` | `home`、`task`、`text` | 使用者寫給某一個 home 的某一個 worker |
 | `answer` | `home`、`task`、`answer`、`label`、`mode`（`done` 或 `release`）、`question_sha256`、`topic {id, name}` 或 `null` | 使用者回答一個待決事項（第二步） |
 | `tag` | `home`、`task`、`topic`、`last_tag_line` | 使用者把一個 agent 歸到議題 |
-| `notice` | `event`、`text`，選用的 `topic {id, name}`、`item {id, title, ref}`、`by`、`words` | 看板上發生了 aggregator 可能要處理的事 |
+| `notice` | `event`、`text`，選用的 `topic {id, name}`、`item {id, title, ref}`、`by`、`words`、`occurrence` | 看板上發生了 aggregator 可能要處理的事 |
 
 - `answer` 的 `mode` 照 hold 記下的處理方式（第 8 節），不是使用者選的；`question_sha256` 是問題全文的 SHA-256。
 - `tag` 的 `last_tag_line` 是看板送出時看到的那個 task 最後一行議題標記，沒有就是空字串。重試之前看板先重讀那個 home：標記已經是這個議題就算送達，已經被別人改成別的就算別處已處理。
-- `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）、`todo.closed`（一個要你動手的項目離開看板）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
+- `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）、`todo.closed`（一個要你動手的項目離開看板）、`schedule.upcoming`（一場快到了）、`schedule.due`（一場的時間到了）、`schedule.missed`（看板沒在跑時一場整個過去了）、`schedule.closed`（使用者在頁面上結束或跳過一場已經送過通知的時段）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
+- 排程的通知：`text` 是固定的句子，填議題現在的名稱與 id、當地時間、這一場的鍵與 rt 的固定詞，不放排程的標題，例如「排程「週會」11-30（一）10:00 開始，還有 15 分鐘（議題 weekly-sync，這一場 weekly-sync:20261130T0200Z）（hard-rt）」、「排程「週會」11-30（一）10:00 時間到了（議題 …，這一場 …）（晚了 7 分鐘）（hard-rt）」、「排程「看信」11-27（五）06:00 錯過了：看板當時沒在跑，這一場沒有通知（議題 …，這一場 …）（soft-rt）」、「排程「週會」11-30（一）10:00 那一場，使用者在看板上結束了，不用準備了（議題 …，這一場 …）」。rt 是 `none` 時不加詞。另帶 `topic {id, name}` 與 `occurrence`：`key`、`at`（UTC）、`local`（例如 `2026-11-30T10:00+08:00`）、`phase`（`pre`、`start`、`missed`、`closed`）、`rt`，時鐘送的另有 `expires_at`，`pre` 與 `start` 另有 `late_min`。first mate 那一側只把 `text` 轉成筆記。
+- 時鐘送的三種用固定的 `id` `w-s-<排程 id>-<T 的 UTC>-<pre|start|missed>`，同一個 id 不會交兩次。過期就不交出：`schedule.upcoming` 到 T、`schedule.due` 到那一場的 `closes_by`、`schedule.missed` 到同一個排程下一場的「快到了」（提前分鐘數是 0 時到下一場的 T）；每一次嘗試之前、從等待放行之前、重啟後接續之前與重送之前都檢查，過期的記成 `expired`。
 - 要你動手的通知帶 `item`：項目的 `id`、`title`，與放上看板時給的 `ref`（沒給是空字串）。`todo.closed` 另帶 `by`（`captain` 是使用者在頁面上按的，`aggregator` 是 aggregator 自己的 `todo done` 或 `todo obsolete`）與 `words`（`做完了`、`不做了`、`撤下`）。
 - 看板在有動作紀錄之前寫下的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）不再讀：讀稽核紀錄時略過，不接著送，頁面上也不列，所以不會顯示成沒送完。
 
@@ -511,7 +522,7 @@ deliver 的程式能執行之後，`waiting` 的寫入照稽核紀錄的順序�
 | `failed`（帶 `error`） | 失敗 |
 
 - stdout 最後一行不是上面四種之一、程式跑不起來、逾時被停掉，都算失敗，原因是 stderr。
-- 冪等：aggregator 要讓同一個 `id` 重來一次是安全的，`direct` 以外的每一種都要。所以看板重啟時，還沒送完的 `message`、`answer`、`tag`、`notice` 會接著送（30 分鐘內），還沒送完的 `direct` 記成結果不明、要使用者確認才重送。
+- 冪等：aggregator 要讓同一個 `id` 重來一次是安全的，`direct` 以外的每一種都要。所以看板重啟時，還沒送完的 `message`、`answer`、`tag`、`notice` 會接著送（30 分鐘內，排程的通知另受它的期限限制），還沒送完的 `direct` 記成結果不明、要使用者確認才重送。
 - 從頁面看到的 `id` 與 `attempt`：重試是同一個 `id`、`attempt` 加一；重送是同一個 `id`、`attempt` 從 0 開始。
 
 first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果，在 [adapter](../../fm-board/spec/adapter.markdown) 第 3 節。
@@ -568,7 +579,8 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 啟動後等就緒 | 10 秒 |
 | 卡死時 TERM 到 KILL | 5 秒 |
 | 確認碼有效 | 約 2 分鐘 |
-| 寫入的重試間隔 | 10 秒、30 秒、1 分、5 分、15 分，共 5 次 |
+| 寫入的重試間隔 | 10 秒、30 秒、1 分、5 分、15 分，共 5 次；每次嘗試本身最多 400 秒，所以一筆寫入從第一次到用完，最壞大約 1 小時（排程的通知另有期限，過期就不再試） |
+| 排程的時鐘 | 啟動時一次，之後每 30 秒；`myshape.sh schedule tick` 立刻一次 |
 | 重啟後接續可去重寫入的時限 | `sending` 寫下後 30 分鐘；`waiting` 的寫入不受限 |
 | 議題變成可派後多久發通知 | 30 秒內沒有再被移動 |
 | `summary`／`which` 等一次補讀 | 最多 10 秒；同一個請求裡的補讀（`--home` 先讀根 home 再讀那個 home）合起來算 |
