@@ -74,6 +74,24 @@ export function invocationFor(command) {
         refuse("an action record must be one line");
     return { args: ["deliver"], stdin: `${command.record}\n` };
 }
+/**
+ * The binding role whose program runs `command`: "topics" runs the feed's.
+ * Every kind is listed, so a new kind fails to compile until it is mapped, and
+ * a kind not listed is refused (throws CommandRefused).
+ */
+export function roleFor(command) {
+    switch (command.kind) {
+        case "feed":
+        case "topics":
+            return "feed";
+        case "deliver":
+            return "deliver";
+        default: {
+            const unlisted = command;
+            return refuse(`unknown command kind: ${String(unlisted.kind)}`);
+        }
+    }
+}
 /** PATH without its empty and relative entries, which would search the working directory. */
 export function absolutePath(value) {
     return value
@@ -99,15 +117,17 @@ export function programEnv(own, home) {
 /** Builds the runner bound to one home, whose programs `gate` allows. */
 export function commandRunner(config, gate) {
     return (command, timeoutMs) => new Promise((resolve) => {
+        let role;
         let invocation;
         try {
+            role = roleFor(command);
             invocation = invocationFor(command);
         }
         catch (error) {
             resolve({ code: null, stdout: "", stderr: error.message });
             return;
         }
-        const allowed = gate(command.kind === "deliver" ? "deliver" : "feed");
+        const allowed = gate(role);
         if ("blocked" in allowed) {
             resolve({ code: null, stdout: "", stderr: "", blocked: allowed.blocked });
             return;

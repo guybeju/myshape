@@ -9,6 +9,7 @@ import {
   directTextProblem,
   invocationFor,
   programEnv,
+  roleFor,
 } from "./commands.js";
 import type { AllowedCommand, ProgramGate } from "./commands.js";
 
@@ -84,6 +85,20 @@ describe("the deliverer", () => {
 
   it("refuses a record that is more than one line", () => {
     expect(refusedFor({ kind: "deliver", record: '{"v":1}\n{"v":1}' })).toContain("one line");
+  });
+});
+
+describe("roleFor", () => {
+  it("maps each known kind to its program's role", () => {
+    expect(roleFor({ kind: "feed", home: "main", offset: 0, sha: "-" })).toBe("feed");
+    expect(roleFor({ kind: "topics", home: "main", tasks: ["t1"] })).toBe("feed");
+    expect(roleFor({ kind: "deliver", record: "{}" })).toBe("deliver");
+  });
+
+  it("refuses a kind it does not list", () => {
+    const unknown = { kind: "probe", home: "main" } as unknown as AllowedCommand;
+    expect(() => roleFor(unknown)).toThrow(CommandRefused);
+    expect(() => roleFor(unknown)).toThrow("unknown command kind: probe");
   });
 });
 
@@ -199,6 +214,16 @@ describe("commandRunner", () => {
     const result = await run({ kind: "topics", home: "sm1", tasks: ["t1", "t2"] }, 5000);
     expect(result).toEqual({ code: 0, stdout: "topics|sm1|t1|t2|", stderr: "" });
     expect(roles).toEqual(["feed"]);
+  });
+
+  it("refuses a kind it does not list without asking the gate or running anything", async () => {
+    program(`touch ${path.join(root, "ran-unknown")}`);
+    roles.length = 0;
+    const unknown = { kind: "probe", record: "{}" } as unknown as AllowedCommand;
+    const result = await run(unknown, 5000);
+    expect(result).toEqual({ code: null, stdout: "", stderr: "unknown command kind: probe" });
+    expect(roles).toEqual([]);
+    expect(fs.existsSync(path.join(root, "ran-unknown"))).toBe(false);
   });
 
   it("hands the program only the fixed environment", async () => {
