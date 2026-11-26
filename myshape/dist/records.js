@@ -30,6 +30,7 @@ export const RECORD_KINDS = [
     "agent.tagged",
     "program.confirmed",
     "writes.released",
+    "writes.expired",
     "hashtag.added",
     "hashtag.removed",
     "hashtag.carried",
@@ -56,8 +57,11 @@ export const RECORD_KINDS = [
     "schedule.reverted",
     "schedule.settings_changed",
     "schedule.all_paused",
+    "occurrence.opened",
+    "occurrence.due",
     "occurrence.taken",
     "occurrence.closed",
+    "occurrence.missed",
 ];
 /** The optional text fields a record may carry, in the order they are saved. */
 export const OPTIONAL_TEXT_FIELDS = [

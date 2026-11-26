@@ -185,7 +185,8 @@ export function minGapMinutes(rule) {
 function dayIndex(day) {
     return WEEKDAYS.indexOf(day);
 }
-function compactUtc(ms) {
+/** A UTC instant written compactly, as occurrence keys and notice ids carry it: 20261130T0200Z. */
+export function compactUtc(ms) {
     const date = new Date(ms);
     return (`${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
         `T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}Z`);
@@ -210,6 +211,16 @@ export function localLabel(zone, ms) {
     const weekday = WEEKDAYS[wall.getUTCDay()];
     return (`${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}（${WEEKDAY_LABEL[weekday]}）` +
         `${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())}`);
+}
+/** An instant as local time in `zone` with its offset, the way notices carry it: 2026-11-30T10:00+08:00. */
+export function localIso(zone, ms) {
+    const wall = new Date(wallClock(zone, ms));
+    const offset = Math.round(offsetAt(zone, ms) / 60_000);
+    const sign = offset < 0 ? "-" : "+";
+    const size = Math.abs(offset);
+    return (`${wall.getUTCFullYear()}-${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}` +
+        `T${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())}` +
+        `${sign}${pad(Math.floor(size / 60))}:${pad(size % 60)}`);
 }
 /** An ISO instant without milliseconds, the way the board's files store times. */
 export function isoSeconds(ms) {

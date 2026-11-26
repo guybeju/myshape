@@ -18,6 +18,7 @@ export const WRITE_LABEL = {
     undelivered: "未送達",
     unknown: "結果不明",
     ignored: "已忽略",
+    expired: "過期沒送",
 };
 export const BAD_WRITES = ["failed", "undelivered", "unknown"];
 let label = "aggregator";

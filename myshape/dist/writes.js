@@ -7,6 +7,11 @@
 // writes wait; they are handed over in record order, oldest first, when it may
 // again: at the next start, at the page's confirmation of the deliverer,
 // after a good read of the root home, and before any newer write is sent.
+//
+// A schedule notice comes with a fixed id from the clock, so handing it in
+// again does nothing, and with a time after which it is no longer worth
+// sending: it then ends expired instead of being sent, retried, released or
+// resumed, and a newer notice of the same occurrence can expire it sooner.
 import crypto from "node:crypto";
 import { appendLine, isRecord, readCompleteLines, stringField } from "./files.js";
 export const DEFAULT_WRITE_TIMINGS = {
@@ -90,6 +95,22 @@ export function parseOutcome(result) {
         error: (error ?? errorText(result)).slice(0, ERROR_MAX),
     };
 }
+/** When a write stops being worth handing over: a schedule notice's expires_at; null when never. */
+export function expiresAt(action) {
+    if (action.kind !== "notice")
+        return null;
+    const at = action.occurrence?.expires_at;
+    return at === undefined ? null : Date.parse(at);
+}
+/** Why `record` may no longer be handed over at `nowMs`, or null when it may. */
+function overdue(record, nowMs) {
+    const at = expiresAt(record.action);
+    if (at === null || nowMs < at)
+        return null;
+    return `沒送：已過期限 ${new Date(at).toISOString()}`;
+}
+/** The states a write may expire from: it has not reached the deliverer, or will try again. */
+const EXPIRABLE = ["waiting", "sending", "retrying"];
 /** True when handing the same record over again cannot make it take effect twice. */
 export function isDedupable(action) {
     return action.kind !== "direct";
@@ -124,6 +145,8 @@ export class WriteEngine {
     records = new Map();
     queues = new Map();
     timers = new Set();
+    /** The writes whose deliverer is running now; they can no longer expire. */
+    running = new Set();
     constructor(auditFile, host, timings) {
         this.auditFile = auditFile;
         this.host = host;
@@ -145,6 +168,7 @@ export class WriteEngine {
      * submitted afterwards can overtake them.
      */
     resumeUnfinished() {
+        this.expireOverdue();
         const released = this.connected && this.recordRelease();
         for (const record of this.records.values()) {
             if (record.state === "waiting") {
@@ -161,6 +185,7 @@ export class WriteEngine {
      * and the record of it was saved; returns how many went.
      */
     releaseWaiting() {
+        this.expireOverdue();
         const waiting = this.waiting();
         if (waiting.length === 0 || !this.connected || !this.recordRelease())
             return 0;
@@ -173,19 +198,43 @@ export class WriteEngine {
         const ids = this.waiting().map((record) => record.id);
         return ids.length === 0 || this.host.onRelease(ids);
     }
-    /** Records a new write and starts delivering it, or leaves it waiting. */
-    submit(input) {
-        // Older writes waiting for the deliverer go first, or this one would overtake them.
-        const connected = this.connected && (this.waiting().length === 0 || this.releaseWaiting() > 0);
+    /**
+     * Records a new write and starts delivering it, or leaves it waiting. With
+     * a fixed id that is already known, nothing happens and the known write is
+     * returned; a new one first expires the writes it supersedes. A write
+     * already past its expiry is recorded expired and never handed over.
+     */
+    submit(input, fixed) {
+        const known = fixed === undefined ? undefined : this.records.get(fixed.id);
+        if (known !== undefined)
+            return known;
+        for (const id of fixed?.supersedes ?? [])
+            this.expire(id, "沒送：同一場的「到了」取代了它");
         const record = {
             ...input,
-            id: `w-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`,
-            state: connected ? "sending" : "waiting",
+            id: fixed?.id ?? `w-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`,
+            state: "waiting",
             attempt: 0,
             error: null,
             nextAt: null,
             createdAt: Date.now(),
         };
+        const late = overdue(record, Date.now());
+        if (late === null)
+            this.start(record);
+        else {
+            this.records.set(record.id, record);
+            this.audit(record, { sending: record });
+            this.finishExpired(record, late);
+        }
+        return record;
+    }
+    /** Records a new write and sends it, or leaves it waiting for the deliverer. */
+    start(record) {
+        // Older writes waiting for the deliverer go first, or this one would overtake them.
+        const connected = this.connected && (this.waiting().length === 0 || this.releaseWaiting() > 0);
+        if (connected)
+            record.state = "sending";
         this.records.set(record.id, record);
         this.audit(record, { sending: record });
         if (connected)
@@ -193,9 +242,33 @@ export class WriteEngine {
         // A waiting write changes nothing else later, so the page must hear of it now.
         else
             this.host.onChange();
-        return record;
     }
-    /** Sends a failed write again under the same id. */
+    /**
+     * Gives up on a write that has not reached the deliverer: it ends expired
+     * with `reason`. Returns false, changing nothing, when the write is unknown,
+     * already ended, or its deliverer is running.
+     */
+    expire(id, reason) {
+        const record = this.records.get(id);
+        if (record === undefined || !EXPIRABLE.includes(record.state) || this.running.has(id))
+            return false;
+        this.finishExpired(record, reason);
+        return true;
+    }
+    /** Expires every write that waits or retries past its expiry. */
+    expireOverdue() {
+        const nowMs = Date.now();
+        for (const record of this.records.values()) {
+            const late = overdue(record, nowMs);
+            if (late !== null)
+                this.expire(record.id, late);
+        }
+    }
+    finishExpired(record, reason) {
+        this.setState(record, "expired", reason);
+        this.host.onExpired(record);
+    }
+    /** Sends a failed write again under the same id; one past its expiry ends expired instead. */
     resend(id, confirmed) {
         const record = this.records.get(id);
         if (record === undefined)
@@ -204,6 +277,11 @@ export class WriteEngine {
             return "這筆寫入不需要重送。";
         if (record.state === "unknown" && !confirmed)
             return "這筆寫入結果不明，重送可能會重複，需要先確認。";
+        const late = overdue(record, Date.now());
+        if (late !== null) {
+            this.finishExpired(record, late);
+            return "這則通知已經過期，不再送。";
+        }
         record.attempt = 0;
         if (!this.connected) {
             this.setState(record, "waiting", null);
@@ -279,6 +357,8 @@ export class WriteEngine {
         for (;;) {
             const outcome = await this.exclusive(record.home, () => this.attempt(record, reconcile));
             reconcile = true;
+            if (outcome === null)
+                return;
             if (outcome.kind === "wait") {
                 this.setState(record, "waiting", null);
                 return;
@@ -297,16 +377,35 @@ export class WriteEngine {
             record.attempt += 1;
             this.setState(record, "retrying", outcome.error, Date.now() + delay);
             await this.sleep(delay);
+            if (record.state === "expired")
+                return;
         }
     }
+    /**
+     * One run of the deliverer, or null when the write expired first: it is
+     * checked here, after any wait behind another run for the same home.
+     */
     async attempt(record, reconcile) {
-        if (record.action.kind === "tag" && reconcile) {
-            const settled = await this.reconcileTag(record.action);
-            if (settled !== null)
-                return settled;
+        if (record.state === "expired")
+            return null;
+        const late = overdue(record, Date.now());
+        if (late !== null) {
+            this.finishExpired(record, late);
+            return null;
         }
-        const result = await this.host.run({ kind: "deliver", record: actionRecord(record) }, this.timings.commandTimeoutMs);
-        return result.blocked === undefined ? parseOutcome(result) : { kind: "wait" };
+        this.running.add(record.id);
+        try {
+            if (record.action.kind === "tag" && reconcile) {
+                const settled = await this.reconcileTag(record.action);
+                if (settled !== null)
+                    return settled;
+            }
+            const result = await this.host.run({ kind: "deliver", record: actionRecord(record) }, this.timings.commandTimeoutMs);
+            return result.blocked === undefined ? parseOutcome(result) : { kind: "wait" };
+        }
+        finally {
+            this.running.delete(record.id);
+        }
     }
     /**
      * Before any attempt to file a task after the first, the home is read
@@ -347,7 +446,11 @@ export class WriteEngine {
         this.enqueue(record, false);
     }
     resume(record) {
-        if (!isDedupable(record.action)) {
+        const late = overdue(record, Date.now());
+        if (late !== null) {
+            this.finishExpired(record, late);
+        }
+        else if (!isDedupable(record.action)) {
             this.setState(record, "unknown", "看板在送出途中重啟，不知道有沒有送到。");
         }
         else if (Date.now() - record.createdAt > this.timings.resumeWindowMs) {
