@@ -368,6 +368,7 @@ const TOPIC_COMMANDS: Record<string, CommandShape> = {
   "schedule-delete": { positional: ["topic"] },
   "schedule-take": { positional: ["key"], valued: ["note"] },
   "schedule-close": { positional: ["key", "outcome"], valued: ["note"] },
+  "schedule-tick": { positional: [] },
 };
 
 function buildTopicRequest(sub: string, shape: CommandShape, args: string[]): BoardRequest {

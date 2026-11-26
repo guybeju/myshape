@@ -30,6 +30,7 @@
 #   myshape.sh schedule delete <topic-id>
 #   myshape.sh schedule take <key> [--note <one line>]
 #   myshape.sh schedule close <key> done|skipped [--note <one line>]
+#   myshape.sh schedule tick
 #   myshape.sh open | status | stop | restart | reset-token
 #
 # Every subcommand except open runs only in a home where the board has run:
@@ -149,8 +150,22 @@
 # and --duration how long an occurrence nobody takes stays open; left out,
 # the captain's settings decide. --rt soft-rt|hard-rt orders the topics that
 # are up at the same time and appears in their notices; it never changes
-# when anything is sent. The board's clock that opens occurrences and sends
-# their notices is not built yet.
+# when anything is sent.
+#
+# The board's clock checks every 30 seconds while the service runs; tick runs
+# that same check once, now. An occurrence opens at its time less the lead,
+# with a coming-up notice (schedule.upcoming), and is due at its time, with a
+# due notice (schedule.due); one the aggregator took before its time gets no
+# due notice. Nobody taking it ends it at its time plus the duration; a taken
+# one ends when the aggregator closes it, at the latest at its closes_by.
+# After the board was not running, an occurrence still inside its window
+# opens as usual and its notice says how late it is; for each schedule whose
+# window passed entirely, the latest missed occurrence gets one missed notice
+# (schedule.missed) and the earlier ones are only recorded. A paused
+# schedule, everything paused, or an aggregator's schedule waiting for the
+# captain's enable rings nothing. Each notice has a fixed id, so it is never
+# sent twice, and is not sent once it is too late to matter. A notice's text
+# names the topic, never the schedule's title, and ends with its rt.
 #
 # While a topic has a schedule it stays in 待辦: move refuses taking it out,
 # reopen puts it back there, a merge of two scheduled topics is refused, and
@@ -412,14 +427,14 @@ cmd_todo() {
   esac
 }
 
-SCHEDULE_SUBS="add、edit、pause、resume、skip、rt、delete、take、close"
+SCHEDULE_SUBS="add、edit、pause、resume、skip、rt、delete、take、close、tick"
 
 cmd_schedule() {
   local sub=${1:-}
   [ "$#" -gt 0 ] || usage_error "schedule 的用法是 ${SCHEDULE_SUBS} 其中之一"
   shift
   case "$sub" in
-    add | edit | pause | resume | skip | rt | delete | take | close) cmd_service "schedule-$sub" "$@" ;;
+    add | edit | pause | resume | skip | rt | delete | take | close | tick) cmd_service "schedule-$sub" "$@" ;;
     *) usage_error "schedule 不認得 ${sub}；可用的是 ${SCHEDULE_SUBS}" ;;
   esac
 }
