@@ -410,13 +410,19 @@ function writeOwnFile(
   writeFileAtomic(paths[file], serialize({ ...next, outbox }), FILE_MODE);
 }
 
+/** The board after a change was written, and the records it saved. */
+interface Written {
+  board: StoredBoard;
+  records: StoredRecord[];
+}
+
 /** Saves a change's files and returns the board after it. */
 function writeChange(
   paths: BoardPaths,
   board: StoredBoard,
   change: Change,
   stamp: (records: Records) => StoredRecord[],
-): { board: StoredBoard; records: StoredRecord[] } {
+): Written {
   const records = stamp(change.records);
   if (change.file === "todos") {
     const topics = writeTodos(paths, board, change.next, records);
