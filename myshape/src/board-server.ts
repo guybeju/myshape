@@ -1034,6 +1034,7 @@ function serveBrowser(service: Service): void {
         return found ?? roleReason(roleCheck(service, role)) ?? "這支程式不需要確認。";
       },
       programConfirmed: () => programConfirmed(service),
+      hashtagTopics: (name) => taggedBy(service, name)?.topics ?? [],
     }),
     // Only the path is recorded: a query string could carry a token someone pasted into the URL.
     onRejected: (reason, request) => {

@@ -262,11 +262,20 @@ async function ensureRunning(config: BoardConfig, paths: BoardPaths): Promise<He
 
 interface ParsedArgs {
   positional: string[];
-  flags: Map<string, string | true>;
+  flags: Map<string, string | true | string[]>;
 }
 
-/** Splits arguments into positionals and the named flags; `valued` flags take the next argument. */
-function parseArgs(args: string[], valued: string[], bare: string[] = []): ParsedArgs {
+/**
+ * Splits arguments into positionals and the named flags; `valued` flags take
+ * the next argument, and `repeated` ones (flag name to argument name) collect
+ * every value they are given.
+ */
+function parseArgs(
+  args: string[],
+  valued: string[],
+  bare: string[] = [],
+  repeated: Record<string, string> = {},
+): ParsedArgs {
   const parsed: ParsedArgs = { positional: [], flags: new Map() };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
@@ -275,7 +284,12 @@ function parseArgs(args: string[], valued: string[], bare: string[] = []): Parse
       continue;
     }
     const name = arg.slice(2);
-    if (bare.includes(name)) {
+    const list = Object.hasOwn(repeated, name) ? (repeated[name] as string) : null;
+    if (list !== null && index + 1 < args.length) {
+      index += 1;
+      const values = parsed.flags.get(list);
+      parsed.flags.set(list, [...(Array.isArray(values) ? values : []), args[index] as string]);
+    } else if (bare.includes(name)) {
       parsed.flags.set(name, true);
     } else if (valued.includes(name) && index + 1 < args.length) {
       index += 1;
@@ -295,11 +309,17 @@ interface CommandShape {
   positional: string[];
   valued?: string[];
   bare?: string[];
+  repeated?: Record<string, string>;
   required?: string[];
 }
 
 const TOPIC_COMMANDS: Record<string, CommandShape> = {
-  create: { positional: ["name"], valued: ["goal", "id", "queue"], required: ["goal"] },
+  create: {
+    positional: ["name"],
+    valued: ["goal", "id", "queue"],
+    repeated: { hashtag: "hashtags" },
+    required: ["goal"],
+  },
   merge: { positional: ["from", "into"], valued: ["reason"] },
   "close-propose": { positional: ["id"], valued: ["reason"], required: ["reason"] },
   move: { positional: ["id", "queue"], valued: ["before"], bare: ["first"] },
@@ -322,7 +342,7 @@ const TOPIC_COMMANDS: Record<string, CommandShape> = {
 };
 
 function buildTopicRequest(sub: string, shape: CommandShape, args: string[]): BoardRequest {
-  const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? []);
+  const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? [], shape.repeated ?? {});
   const missingFlag = (shape.required ?? []).find((name) => !parsed.flags.has(name));
   if (parsed.positional.length !== shape.positional.length || missingFlag !== undefined) {
     const wanted = [
@@ -508,6 +528,22 @@ async function todoAdd(config: BoardConfig, paths: BoardPaths, args: string[]): 
   return finish(await send(config, paths, request("todo-add", item)));
 }
 
+const HASHTAG_USAGE =
+  "hashtag 的用法：myshape.sh hashtag <議題 id> +<名稱>，或 myshape.sh hashtag <議題 id> --remove <名稱>（myshape.sh --help 看用法）";
+
+/** `hashtag <topic> +NAME` puts a hashtag on, `hashtag <topic> --remove NAME` takes it off. */
+function hashtagRequest(args: string[]): BoardRequest {
+  const parsed = parseArgs(args, ["remove"]);
+  const [id, change, ...rest] = parsed.positional;
+  const remove = parsed.flags.get("remove");
+  if (id === undefined || rest.length > 0) throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+  if (typeof remove === "string" && change === undefined)
+    return request("hashtag-remove", { id, name: remove });
+  if (remove === undefined && change !== undefined && change.startsWith("+") && change.length > 1)
+    return request("hashtag-add", { id, name: change.slice(1) });
+  throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+}
+
 async function topicCommand(
   config: BoardConfig,
   paths: BoardPaths,
@@ -515,9 +551,9 @@ async function topicCommand(
   args: string[],
 ): Promise<never> {
   const shape = TOPIC_COMMANDS[sub];
-  if (shape === undefined)
+  if (sub !== "hashtag" && shape === undefined)
     throw new Exit(EXIT_USAGE, `不認得的子命令：${sub}（myshape.sh --help 看用法）`);
-  const message = buildTopicRequest(sub, shape, args);
+  const message = shape === undefined ? hashtagRequest(args) : buildTopicRequest(sub, shape, args);
   await ensureRunning(config, paths);
   return finish(await send(config, paths, message));
 }

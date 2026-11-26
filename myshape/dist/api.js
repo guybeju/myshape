@@ -49,10 +49,10 @@ const move = (host, body) => fromTopicOp(host.topicOp("move", body["before"] ===
  * code, gets one bound to `binding`; the second must return it for the same
  * binding.
  */
-function twoStep(host, body, binding, act) {
+function twoStep(host, body, binding, act, shown = {}) {
     const code = body["confirm"];
     if (code === undefined)
-        return ok({ ...host.confirm.issue(binding) });
+        return ok({ ...shown, ...host.confirm.issue(binding) });
     if (typeof code !== "string" || !host.confirm.redeem(code, binding)) {
         return fail(409, "confirm", "確認已失效或對象變了，請重新操作一次。");
     }
@@ -118,6 +118,23 @@ const confirmProgram = (host, body) => {
         return reply;
     });
 };
+/**
+ * Renaming, merging or deleting a whole hashtag changes every topic that
+ * carries it, so it takes two steps. The first answers which topics, as the
+ * service reads them; the code is bound to that list, so a topic that gained
+ * or lost the hashtag in between makes the second step refuse.
+ */
+function wholeHashtag(op, second) {
+    return (host, body) => {
+        const name = field(body, "name");
+        const other = second === null ? "" : field(body, second);
+        const topics = host.hashtagTopics(name);
+        const into = op === "hashtag-merge" ? host.hashtagTopics(other) : [];
+        const binding = bindingOf(op, name, other, topics.join(","), into.join(","));
+        const args = second === null ? { name } : { name, [second]: other };
+        return twoStep(host, body, binding, () => fromTopicOp(host.topicOp(op, args)), { topics });
+    };
+}
 /** Every browser API route, as "<method> <path>". */
 export const ROUTES = {
     "GET state": state,
@@ -139,6 +156,18 @@ export const ROUTES = {
     "POST writes/resend": resend,
     "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
     "POST programs/confirm": confirmProgram,
+    "POST hashtags/add": topicRoute("hashtag-add"),
+    "POST hashtags/remove": topicRoute("hashtag-remove"),
+    "POST hashtags/rename": wholeHashtag("hashtag-rename", "to"),
+    "POST hashtags/merge": wholeHashtag("hashtag-merge", "into"),
+    "POST hashtags/delete": wholeHashtag("hashtag-delete", null),
+    "POST hashtags/lock": topicRoute("hashtag-lock"),
+    "POST hashtags/color": topicRoute("hashtag-color"),
+    "POST hashtags/settings": topicRoute("hashtag-settings"),
+    "POST hashtags/revert": topicRoute("hashtag-revert"),
+    "POST hashtags/seen": topicRoute("hashtag-seen"),
+    "POST views/save": topicRoute("view-save"),
+    "POST views/delete": topicRoute("view-delete"),
 };
 export function createApi(host) {
     return async (method, route, query, body) => {

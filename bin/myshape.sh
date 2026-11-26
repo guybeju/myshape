@@ -2,8 +2,9 @@
 # myshape.sh - the topic board's command.
 #
 # Usage:
-#   myshape.sh list [--all] [--json]
-#   myshape.sh create <name> --goal <one line> [--id <id>] [--queue high|normal|later]
+#   myshape.sh list [--all] [--json] [--hashtag <name>]
+#   myshape.sh create <name> --goal <one line> [--id <id>] [--queue high|normal|later] [--hashtag <name>]...
+#   myshape.sh hashtag <topic-id> +<name> | --remove <name>
 #   myshape.sh merge <old-topic-id> <new-topic-id> [--reason <one line>]
 #   myshape.sh close-propose <topic-id> --reason <text>
 #   myshape.sh move <topic-id> <queue> [--before <topic-id> | --first]
@@ -36,6 +37,27 @@
 # create makes a topic that is confirmed at once and last in its queue:
 # normal unless --queue names another. A live topic with the same name and
 # goal is the same topic, so a repeat prints its id and leaves it where it is.
+# Each --hashtag puts that hashtag on the topic, like hashtag below; when the
+# board refuses one of them, it makes no topic.
+#
+# hashtag puts one hashtag on one live topic (+<name>) or takes it off
+# (--remove <name>). Hashtags describe what a topic is about; they change no
+# queue, order or dispatch and send nothing. A name is letters (Chinese too),
+# digits and underscore, 1 to 32 characters; case and full-width forms do not
+# make another hashtag, and the spelling first created is the one shown. The
+# first use of a name opens the hashtag. The board refuses, and changes
+# nothing, when the captain turned off the aggregator's tagging or opening of
+# new hashtags on the page, when the hashtag is locked, when the topic already
+# has the per-topic maximum (8 unless changed), when the board already has the
+# board-wide maximum of hashtags (50) and the name is new, or past the hourly
+# cap of the aggregator's hashtag changes (20); the captain changes these on
+# the page. Renaming, merging and deleting a whole hashtag, the settings,
+# locks, reverts and saved views are on the page only. Every change is
+# recorded on the topic's updates with what it had before and after.
+# list --hashtag <name> lists only the topics with that hashtag, read from
+# data/myshape/hashtags.json with jq, so it works with the service down; it
+# matches the stored spelling and its case and full-width variants. find also
+# matches hashtags: a keyword that is a hashtag prints its topics.
 #
 # open prints the board's URL. status and stop never start the service, but
 # the main home's next session start does.
@@ -145,6 +167,7 @@ DEFAULT_PORT=47819
 EXIT_UNAVAILABLE=69
 TOPICS_FILE="$DATA/topics.json"
 ARCHIVE_FILE="$DATA/topics-archive.json"
+HASHTAGS_FILE="$DATA/myshape/hashtags.json"
 
 # shellcheck source=bin/myshape-lib.sh
 . "$SCRIPT_DIR/myshape-lib.sh"
@@ -185,11 +208,16 @@ require_jq() {
 }
 
 cmd_list() {
-  local all=0 json=0 archive
+  local all=0 json=0 archive hashtag='' tags=/dev/null filtered=false
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --all) all=1 ;;
       --json) json=1 ;;
+      --hashtag)
+        [ "$#" -ge 2 ] && [ -n "$2" ] || usage_error "--hashtag 後面要有 hashtag 名稱"
+        hashtag=$2 filtered=true
+        shift
+        ;;
       *) usage_error "list 不認得的參數：$1" ;;
     esac
     shift
@@ -203,7 +231,10 @@ cmd_list() {
   if [ "$all" -eq 0 ] || [ ! -f "$archive" ]; then
     archive=/dev/null
   fi
-  jq -r -n --argjson json "$json" --slurpfile live "$TOPICS_FILE" --slurpfile gone "$archive" '
+  [ ! -f "$HASHTAGS_FILE" ] || tags=$HASHTAGS_FILE
+  jq -r -n --argjson json "$json" --slurpfile live "$TOPICS_FILE" --slurpfile gone "$archive" \
+    --slurpfile tags "$tags" --arg hashtag "$hashtag" --argjson filtered "$filtered" "$(tb_hashtag_fold_jq)
+$(tb_hashtag_topics_jq)"'
     $live[0] as $doc
     | [ ("high", "normal", "later") as $queue
         | ($doc.queues[$queue] // []) | to_entries[]
@@ -214,12 +245,15 @@ cmd_list() {
         | {id: .key, status: "confirmed", queue: null, position: null, name: .value.name} ] as $loose
     | [ ($gone[0].topics // {}) | to_entries[]
         | {id: .key, status: "archived", queue: null, position: null, name: .value.name} ] as $archived
-    | ($queued + $loose + $archived) as $rows
+    | ($queued + $loose + $archived) as $all
+    | (if $filtered then hashtag_topics($tags[0] // {}; $doc; $hashtag) else null end) as $tagged
+    | (if $tagged == null then $all else [ $all[] | select(.id as $id | any($tagged[]; . == $id)) ] end) as $rows
     | if $json == 1 then $rows
+      elif ($rows | length) == 0 and $filtered then "沒有議題貼著 #\($hashtag | ltrimstr("#"))。"
       elif ($rows | length) == 0 then "還沒有議題。"
       else $rows[] | "\(.id)\t\(.status)\t\(.queue // "-")\t\(.position // "-")\t\(.name)"
       end
-  ' 2>/dev/null || tb_die 1 "讀不懂 $TOPICS_FILE 或 ${ARCHIVE_FILE}。"
+  ' 2>/dev/null || tb_die 1 "讀不懂 ${TOPICS_FILE}、${ARCHIVE_FILE} 或 ${HASHTAGS_FILE}。"
 }
 
 # todo_part <flag> <value>: <value> with carriage returns and trailing newlines
@@ -406,7 +440,7 @@ main() {
       usage
       return 0
       ;;
-    open | list | todo | split | create | merge | close-propose | move | rename | \
+    open | list | todo | split | create | merge | close-propose | move | rename | hashtag | \
       goal | archive | reopen | summary | retract | which | find | status | stop | restart | reset-token) ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac

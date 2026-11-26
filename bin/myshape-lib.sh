@@ -65,3 +65,30 @@ tb_topic_for_tag() {
   fi
   printf '%s\n' "$resolved"
 }
+
+# tb_hashtag_fold_jq: prints a jq definition, hashtag_fold, that turns a
+# hashtag name into the key the board stores with it (hashtags.json
+# .hashtags[].key, NFKC then lower case) as far as jq can: a leading # is
+# dropped, full-width ASCII forms (U+FF01 to U+FF5E) become ASCII, and ASCII
+# letters become lower case. jq has no NFKC, so a name that differs from the
+# stored spelling in any other compatibility form or in non-ASCII case is not
+# matched; the stored spelling itself always is.
+tb_hashtag_fold_jq() {
+  printf '%s\n' 'def hashtag_fold: ltrimstr("#") | explode | map(if . >= 65281 and . <= 65374 then . - 65248 else . end) | implode | ascii_downcase;'
+}
+
+# tb_hashtag_topics_jq: prints a jq definition, hashtag_topics($tags; $doc;
+# $want), the ids of the topics that carry the hashtag $want in the hashtags
+# file $tags, each followed through the merged table of the topics file $doc,
+# sorted and unique. Needs tb_hashtag_fold_jq's definition before it.
+tb_hashtag_topics_jq() {
+  # shellcheck disable=SC2016 # jq variables, expanded by jq.
+  printf '%s\n' 'def hashtag_topics($tags; $doc; $want):
+    ($want | hashtag_fold) as $key
+    | [ ($tags.hashtags // {}) | to_entries[]
+        | select(((.value.key // null) == $key) or ((.key | hashtag_fold) == $key)) | .key ] as $names
+    | [ ($tags.topics // {}) | to_entries[] | select(any(.value[]?; . as $n | any($names[]; . == $n)))
+        | {id: .key, hops: 0}
+        | until(.hops > 64 or ((($doc.merged // {})[.id]) == null); {id: ($doc.merged[.id]), hops: (.hops + 1)})
+        | .id ] | unique;'
+}

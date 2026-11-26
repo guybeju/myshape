@@ -27,6 +27,8 @@ export interface ApiHost {
   programToConfirm: (role: Role) => ProgramToConfirm | string;
   /** Called after a confirmation is saved. */
   programConfirmed: () => void;
+  /** The ids of the topics that carry the hashtag spelled `name` (any case or width), sorted. */
+  hashtagTopics: (name: string) => string[];
 }
 
 /** What the captain confirms: computed by the service at both steps, never taken from the request. */
@@ -95,9 +97,15 @@ const move: Route = (host, body) =>
  * code, gets one bound to `binding`; the second must return it for the same
  * binding.
  */
-function twoStep(host: ApiHost, body: Body, binding: string, act: () => ApiReply): ApiReply {
+function twoStep(
+  host: ApiHost,
+  body: Body,
+  binding: string,
+  act: () => ApiReply,
+  shown: Record<string, unknown> = {},
+): ApiReply {
   const code = body["confirm"];
-  if (code === undefined) return ok({ ...host.confirm.issue(binding) });
+  if (code === undefined) return ok({ ...shown, ...host.confirm.issue(binding) });
   if (typeof code !== "string" || !host.confirm.redeem(code, binding)) {
     return fail(409, "confirm", "確認已失效或對象變了，請重新操作一次。");
   }
@@ -177,6 +185,24 @@ const confirmProgram: Route = (host, body) => {
   });
 };
 
+/**
+ * Renaming, merging or deleting a whole hashtag changes every topic that
+ * carries it, so it takes two steps. The first answers which topics, as the
+ * service reads them; the code is bound to that list, so a topic that gained
+ * or lost the hashtag in between makes the second step refuse.
+ */
+function wholeHashtag(op: string, second: string | null): Route {
+  return (host, body) => {
+    const name = field(body, "name");
+    const other = second === null ? "" : field(body, second);
+    const topics = host.hashtagTopics(name);
+    const into = op === "hashtag-merge" ? host.hashtagTopics(other) : [];
+    const binding = bindingOf(op, name, other, topics.join(","), into.join(","));
+    const args = second === null ? { name } : { name, [second]: other };
+    return twoStep(host, body, binding, () => fromTopicOp(host.topicOp(op, args)), { topics });
+  };
+}
+
 /** Every browser API route, as "<method> <path>". */
 export const ROUTES: Record<string, Route> = {
   "GET state": state,
@@ -220,6 +246,18 @@ export const ROUTES: Record<string, Route> = {
   "POST writes/resend": resend,
   "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
   "POST programs/confirm": confirmProgram,
+  "POST hashtags/add": topicRoute("hashtag-add"),
+  "POST hashtags/remove": topicRoute("hashtag-remove"),
+  "POST hashtags/rename": wholeHashtag("hashtag-rename", "to"),
+  "POST hashtags/merge": wholeHashtag("hashtag-merge", "into"),
+  "POST hashtags/delete": wholeHashtag("hashtag-delete", null),
+  "POST hashtags/lock": topicRoute("hashtag-lock"),
+  "POST hashtags/color": topicRoute("hashtag-color"),
+  "POST hashtags/settings": topicRoute("hashtag-settings"),
+  "POST hashtags/revert": topicRoute("hashtag-revert"),
+  "POST hashtags/seen": topicRoute("hashtag-seen"),
+  "POST views/save": topicRoute("view-save"),
+  "POST views/delete": topicRoute("view-delete"),
 };
 
 export function createApi(host: ApiHost): ApiHandler {

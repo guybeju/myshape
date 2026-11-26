@@ -239,8 +239,12 @@ async function ensureRunning(config, paths) {
         release();
     }
 }
-/** Splits arguments into positionals and the named flags; `valued` flags take the next argument. */
-function parseArgs(args, valued, bare = []) {
+/**
+ * Splits arguments into positionals and the named flags; `valued` flags take
+ * the next argument, and `repeated` ones (flag name to argument name) collect
+ * every value they are given.
+ */
+function parseArgs(args, valued, bare = [], repeated = {}) {
     const parsed = { positional: [], flags: new Map() };
     for (let index = 0; index < args.length; index += 1) {
         const arg = args[index];
@@ -249,7 +253,13 @@ function parseArgs(args, valued, bare = []) {
             continue;
         }
         const name = arg.slice(2);
-        if (bare.includes(name)) {
+        const list = Object.hasOwn(repeated, name) ? repeated[name] : null;
+        if (list !== null && index + 1 < args.length) {
+            index += 1;
+            const values = parsed.flags.get(list);
+            parsed.flags.set(list, [...(Array.isArray(values) ? values : []), args[index]]);
+        }
+        else if (bare.includes(name)) {
             parsed.flags.set(name, true);
         }
         else if (valued.includes(name) && index + 1 < args.length) {
@@ -266,7 +276,12 @@ function withFlags(base, parsed) {
     return { ...base, ...Object.fromEntries(parsed.flags) };
 }
 const TOPIC_COMMANDS = {
-    create: { positional: ["name"], valued: ["goal", "id", "queue"], required: ["goal"] },
+    create: {
+        positional: ["name"],
+        valued: ["goal", "id", "queue"],
+        repeated: { hashtag: "hashtags" },
+        required: ["goal"],
+    },
     merge: { positional: ["from", "into"], valued: ["reason"] },
     "close-propose": { positional: ["id"], valued: ["reason"], required: ["reason"] },
     move: { positional: ["id", "queue"], valued: ["before"], bare: ["first"] },
@@ -288,7 +303,7 @@ const TOPIC_COMMANDS = {
     "todo-obsolete": { positional: ["task"], valued: ["reason"], required: ["reason"] },
 };
 function buildTopicRequest(sub, shape, args) {
-    const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? []);
+    const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? [], shape.repeated ?? {});
     const missingFlag = (shape.required ?? []).find((name) => !parsed.flags.has(name));
     if (parsed.positional.length !== shape.positional.length || missingFlag !== undefined) {
         const wanted = [
@@ -424,11 +439,25 @@ async function todoAdd(config, paths, args) {
     await ensureRunning(config, paths);
     return finish(await send(config, paths, request("todo-add", item)));
 }
+const HASHTAG_USAGE = "hashtag 的用法：myshape.sh hashtag <議題 id> +<名稱>，或 myshape.sh hashtag <議題 id> --remove <名稱>（myshape.sh --help 看用法）";
+/** `hashtag <topic> +NAME` puts a hashtag on, `hashtag <topic> --remove NAME` takes it off. */
+function hashtagRequest(args) {
+    const parsed = parseArgs(args, ["remove"]);
+    const [id, change, ...rest] = parsed.positional;
+    const remove = parsed.flags.get("remove");
+    if (id === undefined || rest.length > 0)
+        throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+    if (typeof remove === "string" && change === undefined)
+        return request("hashtag-remove", { id, name: remove });
+    if (remove === undefined && change !== undefined && change.startsWith("+") && change.length > 1)
+        return request("hashtag-add", { id, name: change.slice(1) });
+    throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+}
 async function topicCommand(config, paths, sub, args) {
     const shape = TOPIC_COMMANDS[sub];
-    if (shape === undefined)
+    if (sub !== "hashtag" && shape === undefined)
         throw new Exit(EXIT_USAGE, `不認得的子命令：${sub}（myshape.sh --help 看用法）`);
-    const message = buildTopicRequest(sub, shape, args);
+    const message = shape === undefined ? hashtagRequest(args) : buildTopicRequest(sub, shape, args);
     await ensureRunning(config, paths);
     return finish(await send(config, paths, message));
 }

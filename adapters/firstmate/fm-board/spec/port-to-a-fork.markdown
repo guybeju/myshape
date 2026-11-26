@@ -330,7 +330,7 @@ hook 點很少改；改的時候 guybeju/myshape 會有新的 patch，照第 1.2
 5. `--on-answer` 與事件紀錄：之後第一個經 `bin/fm-captain-hold.sh hold … --on-answer close|release` 開的待決事項，內文有 `Captain hold on answer: <值>` 那一行，`tail -1 <home>/state/captain-hold-events.jsonl` 是那個 task 的 `"event":"held"`；回答之後多一行 `"event":"resolved"`。
 6. session start 的那一行：看板第一次成功啟動之後，下一次開 session 的啟動摘要在 fleet state 那一段的最後有一行 `看板服務：在跑`（或 FORK-SETUP 第 5 步列的其他四種之一）。
 
-然後是 captain 的步驟（FORK-SETUP 第 6 步）：每個 home 都是 `相同` 之後，由 captain 跑或明講之後跑 `bin/fm-board.sh install-rules`，輸出有 `captain.md：新增（v11）` 與 `captain-shared.md：新增（v5）`，`bin/fm-board.sh rules` 印 `規則：captain.md 和範本相同（v11）；captain-shared.md 和範本相同（v5）`；裝完重開主 first mate 的 session，規則從下一個 session 生效。
+然後是 captain 的步驟（FORK-SETUP 第 6 步）：每個 home 都是 `相同` 之後，由 captain 跑或明講之後跑 `bin/fm-board.sh install-rules`，輸出有 `captain.md：新增（v12）` 與 `captain-shared.md：新增（v5）`，`bin/fm-board.sh rules` 印 `規則：captain.md 和範本相同（v12）；captain-shared.md 和範本相同（v5）`；裝完重開主 first mate 的 session，規則從下一個 session 生效。
 有 second mate 時，順序與多出來的步驟照 FORK-SETUP 第 8 節，但其中把 code root 指向 `carry` 的部分不做：每台遠端的 code root 照它自己的更新方式跟到同一個 fork commit。
 
 ## 6. 測試
