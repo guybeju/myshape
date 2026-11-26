@@ -25,6 +25,8 @@ export interface TaskEntry {
   worktree?: string;
   branch?: string;
   pr_url?: string | null;
+  /** The model the worker's session named in its start message. */
+  model?: string;
   cost_usd_estimate?: number;
 }
 

@@ -56,7 +56,7 @@ name that does.
 {"v": 1, "tasks": {
   "billing-1": {"kind": "ship", "state": "working", "detail": "running the tests", "unstarted": false,
                 "title": "Move billing", "repo": "owner/name", "session_id": "…", "worktree": "/…/billing-1",
-                "branch": "agg/billing-1", "pr_url": null, "cost_usd_estimate": 0.42}
+                "branch": "agg/billing-1", "pr_url": null, "model": "…", "cost_usd_estimate": 0.42}
 }}
 ```
 
@@ -69,7 +69,8 @@ name that does.
 - `done` and `failed` mean the worker has ended: `direct` refuses them. Every
   other state, and `unstarted`, takes a `direct` message for the supervisor
   to pass on.
-- `title`, `repo`, `session_id`, `worktree`, `branch`, `pr_url` and
+- `title`, `repo`, `session_id`, `worktree`, `branch`, `pr_url`, `model`
+  (the model the worker's session named in its start message) and
   `cost_usd_estimate` are the supervisor's; the board program never reads
   them and never reports them.
 
