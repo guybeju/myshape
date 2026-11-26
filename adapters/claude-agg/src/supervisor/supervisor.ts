@@ -557,6 +557,7 @@ export class Supervisor {
         port: this.settings.port,
         defaultBranch,
         realPath: this.deps.realPath,
+        userHome: this.deps.env.HOME,
       },
     };
   }
@@ -731,7 +732,12 @@ export class Supervisor {
     const abort = new AbortController();
     const prompt = new PromptStream(text);
     const options = workerOptions(
-      { worktree: task.worktree ?? "", mainCheckout: repo.path, resume },
+      {
+        worktree: task.worktree ?? "",
+        mainCheckout: repo.path,
+        resume,
+        scout: task.kind === "scout",
+      },
       this.sessionContext(repo.defaultBranch, abort),
     );
     const run = this.deps.query({ prompt, options });
