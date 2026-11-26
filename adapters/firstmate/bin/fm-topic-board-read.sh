@@ -13,8 +13,10 @@
 # and ledger.to_prefix_sha256. The main home's output also lists the registered
 # secondmates. --in-home reads a LOCAL registered secondmate home instead.
 #
-# Task state, holds, and worker questions come from fm-fleet-snapshot.sh --json;
-# this script does not parse status logs or state files itself. The exceptions
+# Task state, holds, and worker questions come from fm-fleet-snapshot.sh
+# --board-input when the snapshot beside it offers that option (its text names
+# it; tb_snapshot_mode in bin/fm-board-lib.sh), else --json; this script does
+# not parse status logs or state files itself. The exceptions
 # are two lines of a hold's body: its origin ("Captain hold origin:") and what
 # answering it does ("Captain hold on answer: close|release", from
 # fm-captain-hold.sh hold --on-answer), reported as on_answer, null when the
@@ -156,20 +158,7 @@ ledger_section() {
 
 # Write {"<task-id>": "<tag file content>"} for every tagged task to <out-file>.
 topics_section() {
-  local out=$1 file task
-  for file in "$DATA"/*/topic; do
-    [ -f "$file" ] || continue
-    task=${file%/topic}
-    task=${task##*/}
-    # A tab can never start a tag line, so it marks where the next task begins.
-    printf '\t%s\n%s\n' "$task" "$(< "$file")"
-  done | jq -R -n '
-    reduce inputs as $line ({tags: {}, task: null};
-      if ($line | startswith("\t")) then .task = $line[1:] | .tags[.task] = []
-      elif .task != null then .tags[.task] += [$line]
-      else . end)
-    | .tags | map_values(join("\n"))
-  ' > "$out"
+  tb_tag_files_json "$DATA"/*/topic > "$1"
 }
 
 # Write the registered secondmates as a JSON array to <out-file>.
@@ -400,7 +389,7 @@ main() {
   trap 'rm -rf "$WORK"' EXIT
 
   FM_HOME="$FM_HOME" FM_SNAPSHOT_SECONDMATES=1 FM_SNAPSHOT_BUDGET=1 FM_CREW_STATE_NO_FORGE=1 \
-    "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json > "$WORK/snapshot" ||
+    "$SCRIPT_DIR/fm-fleet-snapshot.sh" "$(tb_snapshot_mode "$SCRIPT_DIR")" > "$WORK/snapshot" ||
     tb_die 1 "fm-topic-board-read.sh: fm-fleet-snapshot.sh failed"
 
   ledger_section "$offset" "$prefix" "$WORK/ledger"

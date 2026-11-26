@@ -91,7 +91,9 @@ test_the_hook_binds_and_replaces_a_running_board() {
   assert_equals 1 "$(tb_board_count "$MAIN")" "exactly one board must serve the home"
   assert_equals "true|0" "$(aggregator '"\(.connected)|\(.confirm | length)"')" \
     "the group-writable, tracked bin/fm-board.sh must run with nothing to confirm"
-  run "$CODE/bin/myshape.sh" find nothing-here >/dev/null
+  # A lookup's own read is now the feed's topics call, which reads no report;
+  # a --home lookup on a board that never read the root home reads it whole.
+  run "$CODE/bin/myshape.sh" which --home nobody nothing-here >/dev/null 2>&1
   until [ -f "$MAIN/data/myshape/aggregator.json" ]; do
     tries=$((tries + 1))
     [ "$tries" -lt 100 ] || fail "the board never read the home through fm-board.sh feed"
