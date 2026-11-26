@@ -1,6 +1,8 @@
 // What the page remembers between renders, and the actions its buttons call.
+import type { HashtagView } from "#board/hashtags.js";
 import type { Queue } from "#board/topics.js";
 import type { BoardView } from "#board/view.js";
+import type { Filter } from "./filter.js";
 
 export interface WriteView {
   id: string;
@@ -45,6 +47,7 @@ export type View = BoardView & {
   version: string;
   polling: boolean;
   writes: WriteView[];
+  hashtags: HashtagView;
 };
 
 /** The first half of a two-step action, waiting for the captain to confirm. */
@@ -53,6 +56,8 @@ export interface Pending {
   body: Record<string, unknown>;
   confirm: string;
   expiresAt: number;
+  /** What the board answered with the code, such as the topics a whole-hashtag change touches. */
+  data: Record<string, unknown>;
 }
 
 export interface Page {
@@ -69,6 +74,10 @@ export interface Page {
   panel: "menu" | "archive" | "merge" | null;
   /** The last refusal from the board, shown until the next action. */
   notice: string | null;
+  /** Which topics the home page shows; kept in the URL fragment (filter.ts). */
+  filter: Filter;
+  /** Whether the hashtag settings panel, or the list of the agent's recent hashtag changes, is open. */
+  tagPanel: "settings" | "recent" | null;
 }
 
 export interface Actions {
@@ -90,6 +99,10 @@ export interface Actions {
   tag: (home: string, task: string, topic: string) => void;
   resend: (write: WriteView) => void;
   ignore: (write: WriteView) => void;
+  /** Sends one change to any route, for the hashtag and view operations. */
+  send: (path: string, body: Record<string, unknown>) => void;
+  setFilter: (filter: Filter) => void;
+  setTagPanel: (panel: Page["tagPanel"]) => void;
 }
 
 /** The queues in display order. Kept here because page scripts cannot load modules outside dist/page. */

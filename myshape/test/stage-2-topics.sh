@@ -168,6 +168,42 @@ test_merge() {
   pass "merge aliases the old id, and old ids keep working everywhere"
 }
 
+# Hashtags on topics: put on and taken off, one hashtag whatever its case or
+# width, on a new topic with create, listed from the file with the service
+# down, and found by find.
+test_hashtags() {
+  local out tags=$HOME_DIR/data/myshape/hashtags.json
+  out=$(t hashtag billing-rework +AI_INFRA)
+  assert_equals "ok billing-rework 已貼上 #AI_INFRA（新開的 hashtag：#AI_INFRA）" "$out" \
+    "hashtag + must put the hashtag on and say it opened it"
+  assert_contains "$(t hashtag billing-rework +ai_infra)" "本來就有 #AI_INFRA" "another case must be the same hashtag"
+  assert_contains "$(t hashtag billing-rework +ＡＩ_INFRA)" "本來就有 #AI_INFRA" "a full-width spelling must be the same hashtag"
+  expect_code 2 "$(code hashtag billing-rework -AI_INFRA)" "a name after a minus, which is not the remove form"
+  expect_code 2 "$(code hashtag billing-rework)" "hashtag without a change"
+  expect_code 1 "$(code hashtag billing-rework +a-b)" "a name with a dash"
+  expect_code 1 "$(code hashtag nope +X)" "a hashtag on an unknown topic"
+  out=$(t create "GPU" --goal "g" --id gpu --hashtag AI_INFRA --hashtag 基礎)
+  assert_equals "ok gpu 已建立，排在「一般」最後；已貼上 #AI_INFRA、#基礎（新開的 hashtag：#基礎）" "$out" \
+    "create --hashtag must put every hashtag on the new topic"
+  assert_equals "AI_INFRA 基礎" "$(jq -r '.topics.gpu | join(" ")' "$tags")" "hashtags.json must hold the new topic's hashtags"
+  assert_equals 2 "$(grep -c '"kind":"hashtag.added"' "$HOME_DIR/data/myshape/events.jsonl")" \
+    "each change must write one record"
+  t stop >/dev/null
+  assert_equals "billing-rework gpu" "$(t list --hashtag ai_infra --json | jq -r 'map(.id) | sort | join(" ")')" \
+    "list --hashtag must list the topics with the hashtag"
+  assert_equals "$(printf 'gpu\tconfirmed\tnormal')" "$(t list --hashtag 基礎 | cut -f1-3)" \
+    "list --hashtag must print the topics' usual lines"
+  assert_contains "$(t list --hashtag NOPE)" "沒有議題貼著 #NOPE" "list --hashtag must say when no topic has it"
+  expect_code 2 "$(code list --hashtag)" "list --hashtag without a name"
+  assert_absent "$HOME_DIR/state/myshape/board.sock" "list --hashtag must not start the service"
+  out=$(t find ai_infra)
+  assert_contains "$out" "hashtag #AI_INFRA：2 個議題" "find must answer a hashtag with its topics"
+  assert_contains "$out" "gpu　GPU（一般）" "find must name each topic with the hashtag"
+  assert_equals "ok gpu 已撕掉 #AI_INFRA" "$(t hashtag gpu --remove ai_infra)" "--remove must take the hashtag off"
+  assert_contains "$(t hashtag gpu --remove AI_INFRA)" "本來就沒有 #AI_INFRA" "removing twice must change nothing"
+  pass "hashtags go on and off topics by command, and list and find read them"
+}
+
 test_reset_token() {
   local before
   before=$(cat "$HOME_DIR/state/myshape/token")
@@ -246,6 +282,6 @@ test_secondmate_home_cannot_create() {
 }
 
 fm_test_run test_create test_move test_rename_goal_and_close_propose \
-  test_archive_and_reopen test_merge test_reset_token test_confirms_leftover_proposals \
+  test_archive_and_reopen test_merge test_hashtags test_reset_token test_confirms_leftover_proposals \
   test_secondmate_home_cannot_create
 t stop >/dev/null

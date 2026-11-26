@@ -1,6 +1,11 @@
 import { h } from "./dom.js";
 import { agentRow, closedFold, closedTodoEntries, holdCard, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
+import { isShown, resolveFilter, shownTopics } from "./filter.js";
+import { filterBar, mergeTagNote, topicChips } from "./tags.js";
+function shownOf(page, view) {
+    return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
+}
 const RECENT_SUMMARIES = 12;
 function lightCounts(agents) {
     return Object.keys(LIGHT_LABEL)
@@ -8,7 +13,14 @@ function lightCounts(agents) {
         .filter((entry) => entry.count > 0)
         .map((entry) => h("span", {}, h("span", { class: `dot l-${entry.name}` }), String(entry.count)));
 }
-function topicCard(view, actions, id) {
+/** Which fields a keyword matched in, under a topic's card. */
+function matchedFields(shown, id) {
+    const fields = shown?.get(id) ?? [];
+    return fields.length === 0
+        ? null
+        : h("div", { class: "note matched" }, `符合：${fields.join("、")}`);
+}
+function topicCard(view, actions, id, shown) {
     const topic = view.topics[id];
     if (topic === undefined)
         return null;
@@ -17,21 +29,24 @@ function topicCard(view, actions, id) {
     const doing = liveTodos(view, id).filter(needsCaptain).length;
     const waiting = view.queued.filter((item) => item.topic === id).length;
     const unsent = view.writes.filter((write) => write.topic === id && BAD_WRITES.includes(write.state)).length;
-    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null));
+    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), topicChips(view, id), matchedFields(shown, id));
 }
-function queueBox(view, actions, queue) {
-    return h("div", { class: "queue", "data-queue": queue }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, view.queues[queue].map((id) => topicCard(view, actions, id)), h("div", { class: "empty" }, "拖到這裡")));
+function queueBox(view, actions, queue, shown) {
+    return h("div", { class: "queue", "data-queue": queue }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, view.queues[queue]
+        .filter((id) => isShown(shown, id))
+        .map((id) => topicCard(view, actions, id, shown)), h("div", { class: "empty" }, "拖到這裡")));
 }
-function archivedBox(view, actions) {
-    const archived = Object.entries(view.topics).filter(([, topic]) => topic.status === "archived");
+function archivedBox(view, actions, shown) {
+    const archived = Object.entries(view.topics).filter(([id, topic]) => topic.status === "archived" && isShown(shown, id));
     return h("details", { "data-key": "archived" }, h("summary", {}, `已封存 ${archived.length}`), archived.map(([id, topic]) => h("div", { class: "card" }, h("button", { class: "link", onclick: () => actions.open(id) }, topic.name), h("div", { class: "goal" }, topic.goal), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("reopen", { id }) }, "重開（放「一般」）")))));
 }
-export function sidebar(view, actions) {
-    return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), QUEUES.map((queue) => queueBox(view, actions, queue)), archivedBox(view, actions));
+export function sidebar(page, view, actions) {
+    const shown = shownOf(page, view);
+    return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), QUEUES.map((queue) => queueBox(view, actions, queue, shown)), archivedBox(view, actions, shown));
 }
-function closeProposals(view, actions) {
+function closeProposals(view, actions, shown) {
     return Object.entries(view.topics)
-        .filter(([, topic]) => topic.close_reason !== null)
+        .filter(([id, topic]) => topic.close_reason !== null && isShown(shown, id))
         .map(([id, topic]) => h("div", { class: "card" }, h("div", { class: "meta" }, topicLink(view, id, actions), h("span", { class: "pill warn" }, "提議關閉")), h("div", {}, `${agentName()} 認為這個議題可以關了：${topic.close_reason ?? ""}`), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))));
 }
 function section(title, ...children) {
@@ -69,7 +84,7 @@ export function mergeConfirm(page, view, actions, key) {
         return null;
     const from = topicName(view, String(pending.body["from"]));
     const into = topicName(view, String(pending.body["into"]));
-    return h("div", { class: "confirm" }, `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`, h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, `併入「${into}」`), h("button", { onclick: () => actions.cancel(key) }, "取消")));
+    return h("div", { class: "confirm" }, `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`, mergeTagNote(view, String(pending.body["from"]), String(pending.body["into"])), h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, `併入「${into}」`), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
 function unsortedRow(view, actions, agent) {
     return h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent));
@@ -121,23 +136,29 @@ function noTopic(view) {
 }
 export function home(page, view, actions) {
     const active = ["working", "stuck", "unknown", "decide"];
+    const shown = shownOf(page, view);
+    const mine = (items) => items.filter((item) => isShown(shown, item.topic));
+    const todos = mine(liveTodos(view));
     return [
-        liveTodos(view).length === 0
+        filterBar(page, view, actions, shown),
+        todos.length === 0
             ? null
-            : section("要你動手", liveTodos(view).map((todo) => todoCard(page, view, actions, todo, true))),
-        noTopic(view),
-        section("等你決定", closeProposals(view, actions), view.holds
+            : section("要你動手", todos.map((todo) => todoCard(page, view, actions, todo, true))),
+        shown === null ? noTopic(view) : null,
+        section("等你決定", closeProposals(view, actions, shown), mine(view.holds)
             .filter((hold) => hold.live)
             .map((hold) => holdCard(page, view, actions, hold, true))),
-        section("最近的結果", view.summaries
+        section("最近的結果", mine(view.summaries)
             .slice(0, RECENT_SUMMARIES)
             .map((summary) => summaryRow(view, actions, summary, true))),
-        section("進行中", view.agents
+        section("進行中", mine(view.agents)
             .filter((agent) => agent.topic !== null && active.includes(agent.light))
             .map((agent) => agentRow(view, actions, agent))),
-        section("排定的", view.queues.later.map((id) => h("div", { class: "row" }, topicLink(view, id, actions), h("span", { class: "note" }, "待辦，不自動開工"))), view.holds
+        section("排定的", view.queues.later
+            .filter((id) => isShown(shown, id))
+            .map((id) => h("div", { class: "row" }, topicLink(view, id, actions), h("span", { class: "note" }, "待辦，不自動開工"))), mine(view.holds)
             .filter((hold) => !hold.live && hold.topic !== null)
             .map((hold) => holdCard(page, view, actions, hold, true))),
-        unsorted(page, view, actions),
+        shown === null ? unsorted(page, view, actions) : null,
     ];
 }

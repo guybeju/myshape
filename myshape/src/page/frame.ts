@@ -168,7 +168,7 @@ export function frame(page: Page, actions: Actions): Child {
             ? h(
                 "div",
                 { class: "side" },
-                sidebar(view, actions),
+                sidebar(page, view, actions),
                 h("div", {}, home(page, view, actions)),
               )
             : topicPage(page, view, actions, topic),

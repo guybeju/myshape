@@ -153,6 +153,7 @@ SH
       summary | retract) case_args="$sub task-1 ready -" ;;
       which) case_args='which task-1' ;;
       find) case_args='find billing' ;;
+      hashtag) case_args='hashtag billing +AI_INFRA' ;;
       open | status | stop | restart | reset-token) case_args=$sub ;;
       'todo add') case_args='todo add item-1 T --topic billing --do d' ;;
       'todo done') case_args='todo done item-1' ;;
@@ -166,6 +167,8 @@ SH
       fail "myshape.sh $sub failed before reaching the board: $out"
     op=${sub/todo /todo-}
     assert_contains "$(cat "$log")" "-- $op" "myshape.sh $sub must hand $op to the board's client"
+    # The client turns hashtag +NAME into the hashtag-add operation.
+    [ "$op" != hashtag ] || op=hashtag-add
     case "$sub" in
       open | status | stop | restart | reset-token | summary | retract | which | find) ;;
       *) printf '%s\n' "$ops" | grep -qxF "$op" || fail "myshape.sh $sub changes the board but $op is not an operation in OPERATIONS" ;;

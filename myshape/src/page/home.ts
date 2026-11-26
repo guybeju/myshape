@@ -21,6 +21,15 @@ import {
 } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
+import { isShown, resolveFilter, shownTopics } from "./filter.js";
+import { filterBar, mergeTagNote, topicChips } from "./tags.js";
+
+/** The topics the captain's filter shows, with what each matched; null when nothing is filtered. */
+type Shown = Map<string, string[]> | null;
+
+function shownOf(page: Page, view: View): Shown {
+  return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
+}
 
 const RECENT_SUMMARIES = 12;
 
@@ -33,7 +42,15 @@ function lightCounts(agents: AgentView[]): Child {
     );
 }
 
-function topicCard(view: View, actions: Actions, id: string): Child {
+/** Which fields a keyword matched in, under a topic's card. */
+function matchedFields(shown: Shown, id: string): Child {
+  const fields = shown?.get(id) ?? [];
+  return fields.length === 0
+    ? null
+    : h("div", { class: "note matched" }, `符合：${fields.join("、")}`);
+}
+
+function topicCard(view: View, actions: Actions, id: string, shown: Shown): Child {
   const topic = view.topics[id];
   if (topic === undefined) return null;
   const agents = view.agents.filter((agent) => agent.topic === id);
@@ -58,10 +75,12 @@ function topicCard(view: View, actions: Actions, id: string): Child {
       topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"),
       unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null,
     ),
+    topicChips(view, id),
+    matchedFields(shown, id),
   );
 }
 
-function queueBox(view: View, actions: Actions, queue: Queue): Child {
+function queueBox(view: View, actions: Actions, queue: Queue, shown: Shown): Child {
   return h(
     "div",
     { class: "queue", "data-queue": queue },
@@ -69,14 +88,18 @@ function queueBox(view: View, actions: Actions, queue: Queue): Child {
     h(
       "div",
       { class: "list" },
-      view.queues[queue].map((id) => topicCard(view, actions, id)),
+      view.queues[queue]
+        .filter((id) => isShown(shown, id))
+        .map((id) => topicCard(view, actions, id, shown)),
       h("div", { class: "empty" }, "拖到這裡"),
     ),
   );
 }
 
-function archivedBox(view: View, actions: Actions): Child {
-  const archived = Object.entries(view.topics).filter(([, topic]) => topic.status === "archived");
+function archivedBox(view: View, actions: Actions, shown: Shown): Child {
+  const archived = Object.entries(view.topics).filter(
+    ([id, topic]) => topic.status === "archived" && isShown(shown, id),
+  );
   return h(
     "details",
     { "data-key": "archived" },
@@ -97,19 +120,20 @@ function archivedBox(view: View, actions: Actions): Child {
   );
 }
 
-export function sidebar(view: View, actions: Actions): Child {
+export function sidebar(page: Page, view: View, actions: Actions): Child {
+  const shown = shownOf(page, view);
   return h(
     "div",
     { id: "sidebar" },
     h("h2", {}, "優先順序"),
-    QUEUES.map((queue) => queueBox(view, actions, queue)),
-    archivedBox(view, actions),
+    QUEUES.map((queue) => queueBox(view, actions, queue, shown)),
+    archivedBox(view, actions, shown),
   );
 }
 
-function closeProposals(view: View, actions: Actions): Child {
+function closeProposals(view: View, actions: Actions, shown: Shown): Child {
   return Object.entries(view.topics)
-    .filter(([, topic]) => topic.close_reason !== null)
+    .filter(([id, topic]) => topic.close_reason !== null && isShown(shown, id))
     .map(([id, topic]) =>
       h(
         "div",
@@ -188,6 +212,7 @@ export function mergeConfirm(page: Page, view: View, actions: Actions, key: stri
     "div",
     { class: "confirm" },
     `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`,
+    mergeTagNote(view, String(pending.body["from"]), String(pending.body["into"])),
     h(
       "div",
       { class: "btns" },
@@ -287,47 +312,54 @@ function noTopic(view: View): Child {
 
 export function home(page: Page, view: View, actions: Actions): Child {
   const active = ["working", "stuck", "unknown", "decide"];
+  const shown = shownOf(page, view);
+  const mine = <T extends { topic: string | null }>(items: T[]): T[] =>
+    items.filter((item) => isShown(shown, item.topic));
+  const todos = mine(liveTodos(view));
   return [
-    liveTodos(view).length === 0
+    filterBar(page, view, actions, shown),
+    todos.length === 0
       ? null
       : section(
           "要你動手",
-          liveTodos(view).map((todo) => todoCard(page, view, actions, todo, true)),
+          todos.map((todo) => todoCard(page, view, actions, todo, true)),
         ),
-    noTopic(view),
+    shown === null ? noTopic(view) : null,
     section(
       "等你決定",
-      closeProposals(view, actions),
-      view.holds
+      closeProposals(view, actions, shown),
+      mine(view.holds)
         .filter((hold) => hold.live)
         .map((hold) => holdCard(page, view, actions, hold, true)),
     ),
     section(
       "最近的結果",
-      view.summaries
+      mine(view.summaries)
         .slice(0, RECENT_SUMMARIES)
         .map((summary) => summaryRow(view, actions, summary, true)),
     ),
     section(
       "進行中",
-      view.agents
+      mine(view.agents)
         .filter((agent) => agent.topic !== null && active.includes(agent.light))
         .map((agent) => agentRow(view, actions, agent)),
     ),
     section(
       "排定的",
-      view.queues.later.map((id) =>
-        h(
-          "div",
-          { class: "row" },
-          topicLink(view, id, actions),
-          h("span", { class: "note" }, "待辦，不自動開工"),
+      view.queues.later
+        .filter((id) => isShown(shown, id))
+        .map((id) =>
+          h(
+            "div",
+            { class: "row" },
+            topicLink(view, id, actions),
+            h("span", { class: "note" }, "待辦，不自動開工"),
+          ),
         ),
-      ),
-      view.holds
+      mine(view.holds)
         .filter((hold) => !hold.live && hold.topic !== null)
         .map((hold) => holdCard(page, view, actions, hold, true)),
     ),
-    unsorted(page, view, actions),
+    shown === null ? unsorted(page, view, actions) : null,
   ];
 }
