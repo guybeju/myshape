@@ -1,6 +1,7 @@
 // Loads the board's state files and is their only writer. A change and its
 // records are saved together: commitChange renames the change's commit file
-// (topics.json, todos.json, confirmations.json or hashtags.json) with the
+// (topics.json, todos.json, confirmations.json, hashtags.json or
+// schedules.json) with the
 // records in its `outbox`, then appends them to events.jsonl,
 // and every later commit (and every start) first saves any outbox record the
 // journal still lacks.
@@ -11,6 +12,7 @@ import { GOAL_MAX, HISTORY_ACTORS, HISTORY_KINDS, QUEUES, QUEUE_LABEL, TODO_STAT
 import { emptyConfirmations } from "./confirmations.js";
 import { carryMarks, emptyTodos, isValidItemId, withProjection } from "./todos.js";
 import { emptyHashtags, parseHashtags, reconcile } from "./hashtags.js";
+import { emptySchedules, parseSchedules } from "./schedules.js";
 const FILE_MODE = 0o644;
 function parseCloseProposal(raw) {
     if (!isRecord(raw) || typeof raw["at"] !== "string" || typeof raw["reason"] !== "string")
@@ -175,6 +177,10 @@ function parseFile(file, raw, parse) {
         throw new Error(`${file} 讀不懂：${error.message}`, { cause: error });
     }
 }
+/** A board file's contents, or `empty()` when the file is not there. */
+function parseOr(file, raw, parse, empty) {
+    return raw === null ? empty() : parseFile(file, raw, parse);
+}
 const OPTIONAL_RECORD_FIELDS = ["item", ...OPTIONAL_TEXT_FIELDS];
 function parseRecord(raw) {
     if (!isRecord(raw) || raw["src"] !== "board")
@@ -229,7 +235,13 @@ const EMPTY_ARCHIVE = serialize(emptyState().archive);
 const EMPTY_DOC = serialize({ ...emptyState().doc, outbox: [] });
 /** Appends every outbox record the journal lacks; returns why it could not, or null. */
 function flushOutbox(sink, outbox) {
-    const waiting = [...outbox.topics, ...outbox.todos, ...outbox.confirmations, ...outbox.hashtags];
+    const waiting = [
+        ...outbox.topics,
+        ...outbox.todos,
+        ...outbox.confirmations,
+        ...outbox.hashtags,
+        ...outbox.schedules,
+    ];
     for (const record of waiting) {
         if (sink.has(record.rid))
             continue;
@@ -271,11 +283,14 @@ function writeTodos(paths, board, next, outbox) {
     return topics;
 }
 /**
- * Writes a file that is its own commit point: the captain's confirmations, or
- * the hashtags. A topic change with a follow-up in hashtags.json writes it
- * after topics.json, so a crash between the two leaves the topic change made
- * and recorded and the follow-up neither: a topic without its hashtags, never
- * a hashtag on a topic that is not there.
+ * Writes a file that is its own commit point: the captain's confirmations,
+ * the hashtags, or the schedules. A topic change with a follow-up in
+ * hashtags.json writes it after topics.json, so a crash between the two
+ * leaves the topic change made and recorded and the follow-up neither: a
+ * topic without its hashtags, never a hashtag on a topic that is not there.
+ * A topic change with a part in schedules.json writes it before topics.json,
+ * so a crash between the two leaves the schedule paused with its records and
+ * the topic not yet archived; archiving again changes the schedule no more.
  */
 function writeOwnFile(paths, file, next, outbox) {
     fs.mkdirSync(paths.boardDataDir, { recursive: true });
@@ -303,10 +318,20 @@ function writeChange(paths, board, change, stamp) {
             records,
         };
     }
+    if (change.file === "schedules") {
+        writeOwnFile(paths, "schedules", change.next, records);
+        const outbox = { ...board.outbox, schedules: records };
+        return { board: { ...board, schedules: change.next, outbox }, records };
+    }
+    const part = writeSchedulePart(paths, board, change.schedules, stamp);
     writeTopics(paths, board.topics, change.next, records);
-    const next = { ...board, topics: change.next, outbox: { ...board.outbox, topics: records } };
+    const next = {
+        ...part.board,
+        topics: change.next,
+        outbox: { ...part.board.outbox, topics: records },
+    };
     if (change.hashtags === undefined)
-        return { board: next, records };
+        return { board: next, records: [...part.records, ...records] };
     const follow = stamp(change.hashtags.records);
     writeOwnFile(paths, "hashtags", change.hashtags.next, follow);
     return {
@@ -315,8 +340,17 @@ function writeChange(paths, board, change, stamp) {
             hashtags: change.hashtags.next,
             outbox: { ...next.outbox, hashtags: follow },
         },
-        records: [...records, ...follow],
+        records: [...part.records, ...records, ...follow],
     };
+}
+/** Saves a topic change's part in schedules.json, before the topic change itself. */
+function writeSchedulePart(paths, board, part, stamp) {
+    if (part === undefined)
+        return { board, records: [] };
+    const records = stamp(part.records);
+    writeOwnFile(paths, "schedules", part.next, records);
+    const outbox = { ...board.outbox, schedules: records };
+    return { board: { ...board, schedules: part.next, outbox }, records };
 }
 /**
  * The only writer of the board's state files. First saves every earlier
@@ -362,6 +396,7 @@ export function readBoard(paths) {
     const rawTodos = readFile(paths.todos);
     const rawConfirmations = readFile(paths.confirmations);
     const rawHashtags = readFile(paths.hashtags);
+    const rawSchedules = readFile(paths.schedules);
     const live = rawTopics === null
         ? { doc: empty.doc, confirmed: [] }
         : parseFile(paths.topics, rawTopics, parseDoc);
@@ -374,20 +409,21 @@ export function readBoard(paths) {
     }
     const state = { doc: live.doc, archive: gone.archive };
     const store = rawTodos === null ? null : parseFile(paths.todos, rawTodos, parseTodoStore);
-    const confirmations = rawConfirmations === null
-        ? emptyConfirmations()
-        : parseFile(paths.confirmations, rawConfirmations, parseConfirmations);
+    const confirmations = parseOr(paths.confirmations, rawConfirmations, parseConfirmations, emptyConfirmations);
+    const schedules = parseOr(paths.schedules, rawSchedules, parseSchedules, emptySchedules);
     return {
         board: {
             topics: store === null ? state : withProjection(state, store),
             todos: store ?? emptyTodos(),
             confirmations,
             hashtags: readHashtags(paths, rawHashtags, state),
+            schedules,
             outbox: {
                 topics: parseOutbox(rawTopics),
                 todos: parseOutbox(rawTodos),
                 confirmations: parseOutbox(rawConfirmations),
                 hashtags: parseOutbox(rawHashtags),
+                schedules: parseOutbox(rawSchedules),
             },
         },
         hasTodos: store !== null,

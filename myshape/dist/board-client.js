@@ -279,6 +279,12 @@ function parseArgs(args, valued, bare = [], repeated = {}) {
 function withFlags(base, parsed) {
     return { ...base, ...Object.fromEntries(parsed.flags) };
 }
+/** schedule add and edit: the topic, then the rule's parts, each optional for edit. */
+const SCHEDULE_SHAPE = {
+    positional: ["topic"],
+    valued: ["weekly", "at", "tz", "duration", "lead", "rt"],
+    bare: ["daily"],
+};
 const TOPIC_COMMANDS = {
     create: {
         positional: ["name"],
@@ -305,6 +311,15 @@ const TOPIC_COMMANDS = {
     "todo-done": { positional: ["task"] },
     "todo-failed": { positional: ["task"], valued: ["reason"], required: ["reason"] },
     "todo-obsolete": { positional: ["task"], valued: ["reason"], required: ["reason"] },
+    "schedule-add": SCHEDULE_SHAPE,
+    "schedule-edit": SCHEDULE_SHAPE,
+    "schedule-pause": { positional: ["topic"] },
+    "schedule-resume": { positional: ["topic"] },
+    "schedule-skip": { positional: ["topic"] },
+    "schedule-rt": { positional: ["topic", "rt"] },
+    "schedule-delete": { positional: ["topic"] },
+    "schedule-take": { positional: ["key"], valued: ["note"] },
+    "schedule-close": { positional: ["key", "outcome"], valued: ["note"] },
 };
 function buildTopicRequest(sub, shape, args) {
     const parsed = parseArgs(args, shape.valued ?? [], shape.bare ?? [], shape.repeated ?? {});
