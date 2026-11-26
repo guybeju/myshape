@@ -46,7 +46,7 @@
 
 ### `list`
 
-`list [--all] [--json]`：讀 `data/topics.json`（`--all` 加讀封存檔），每行印 id、狀態、佇列、位置、名稱。唯讀，不經服務。沒有議題檔時印「還沒有議題」並回 0。在 secondmate home 印「議題檔只在主 home」，exit 1。沒有 `jq` 時印原因與安裝方式（文字比照上游 `bin/fm-bootstrap.sh:872`），exit 1。
+`list [--all] [--json] [--hashtag <名稱>]`：讀 `data/topics.json`（`--all` 加讀封存檔），每行印 id、狀態、佇列、位置、名稱。`--hashtag` 只列貼著那個 hashtag 的議題，用 jq 讀 `data/myshape/hashtags.json`（[contracts](contracts.markdown) 第 3.8 節），比對的方式和 `fm-dispatch-plan.sh order --hashtag` 相同；沒有一個議題貼著時印「沒有議題貼著 #<名稱>。」並回 0。唯讀，不經服務。沒有議題檔時印「還沒有議題」並回 0。在 secondmate home 印「議題檔只在主 home」，exit 1。沒有 `jq` 時印原因與安裝方式（文字比照上游 `bin/fm-bootstrap.sh:872`），exit 1。
 
 ### `order`
 

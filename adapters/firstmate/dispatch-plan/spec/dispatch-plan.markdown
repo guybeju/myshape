@@ -1,7 +1,7 @@
 # dispatch-plan：照看板的佇列派工，到每個 home
 
 `bin/fm-dispatch-plan.sh` 是 first mate 這一側的派工計畫，不是看板的程式。
-它讀看板公開的檔（`data/topics.json`、`data/topics-archive.json`），從不改看板的檔，也從不改 backlog。
+它讀看板公開的檔（`data/topics.json`、`data/topics-archive.json`，`order --hashtag` 另讀 `data/myshape/hashtags.json`），從不改看板的檔，也從不改 backlog。
 確切的用法、參數、輸出的字與 exit code 寫在那支指令開頭的說明（`bin/fm-dispatch-plan.sh --help`），這裡寫的是行為、檔案與理由。
 看板這一側與 first mate 這一側的分界在 [adapter](../../fm-board/spec/adapter.markdown)。
 
@@ -9,7 +9,7 @@
 
 | 子命令 | 在哪裡跑 | 做什麼 |
 | --- | --- | --- |
-| `order` | 每個 home | 列出排隊中的項目該派、該 hold、該解除的順序，其餘的列在「先不派」並附原因 |
+| `order [--hashtag <名稱>]` | 每個 home；`--hashtag` 只在主 home | 列出排隊中的項目該派、該 hold、該解除的順序，其餘的列在「先不派」並附原因；`--hashtag` 只列議題貼著那個 hashtag 的那幾行 |
 | `queues-in -` | 遠端的 second mate | 收下主 home 送來的佇列副本 |
 | `queues-push [--check \| --to <id>]` | 主 home | 把佇列副本送到每個遠端的 second mate，或只送給 `<id>` |
 
@@ -36,6 +36,11 @@
   一個項目等的 id 算完成，照 `bin/fm-fleet-snapshot.sh` 的判斷：backlog 裡那一筆是 Done，或 backlog 裡沒有那個 id、但 Done 的保留把它搬進封存檔時是完成的（封存檔的位置照 tasks-axi 自己的設定，`bin/fm-backlog-archive-lib.sh`）。
   backlog 裡還開著的同一個 id 優先於封存檔裡舊的那一筆；兩邊都找不到的 id 不算完成，所以打錯的 id 不會被當成做完了。
 - 「等你驗證」列的是看板 `data/myshape/todos.json` 裡使用者按了做完了的項目（contracts 第 3.6 節），每個附它的議題與佇列；second mate 的 home 不印這一段：那些項目是主 home 看板上的。
+
+`order --hashtag <名稱>` 是只看一組議題的唯讀檢視，派工的順序與意思都不變：
+- 第一行寫「只列議題貼著 #<名稱> 的項目。」，每一段的標題照舊，每一段只留議題貼著那個 hashtag 的行（「等你驗證」也是）；沒有議題的項目不列。
+- 哪些議題貼著它，直接讀主 home 的 `data/myshape/hashtags.json`（contracts 第 3.8 節）：併掉的議題 id 的 hashtag 算在它併進去的議題上。名稱比對存下的 `key`，jq 沒有 NFKC，所以只把全形 ASCII 換成半形、ASCII 轉小寫（`bin/myshape-lib.sh` 的 `tb_hashtag_fold_jq`，和 `myshape.sh list --hashtag` 同一份）；存下的寫法本身一定比對得到。沒有這個檔或沒有這個 hashtag 時每一段都是空的。
+- 只在主 home 跑：遠端的 second mate 照主 home 推來的副本排，副本裡沒有 hashtag（第 3 節），所以 second mate 的 home 一律拒絕，exit 1，stderr 一行說要在主 home 跑；同機的 second mate 雖然現讀主 home 的檔，也照同一條拒絕，兩種 second mate 才不會有不同的答案。
 
 壞掉時放行，都 exit 0：
 
@@ -111,7 +116,7 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 
 | 檔 | 測什麼 |
 | --- | --- |
-| `stage-1-order.sh` | 主 home 的各段與「先不派」的原因、封存檔裡已完成的依賴、`topic:` 那一行、壞掉時放行 |
+| `stage-1-order.sh` | 主 home 的各段與「先不派」的原因、封存檔裡已完成的依賴、`topic:` 那一行、壞掉時放行、`--hashtag` 只列那幾行而 second mate 的 home 拒絕 |
 | `stage-2-sources.sh` | 同機與遠端的 second mate 的來源、第一行、一小時的提醒、等你驗證不出現 |
 | `stage-3-queues-in.sh` | 收下、略過較舊的、拒收壞的與太大的、只在 second mate 的 home 跑 |
 | `stage-4-queues-push.sh` | 第一次送時 stderr 沒有 shell 的錯誤、每台只送一次、沒變不送、30 分鐘再送、失敗下一輪再試、拒收的每小時一次、18 秒、通知只一則、`--to` 只送一台、交給遠端之前先送 |
