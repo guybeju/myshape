@@ -218,7 +218,8 @@ function dayIndex(day: Weekday): number {
   return WEEKDAYS.indexOf(day);
 }
 
-function compactUtc(ms: number): string {
+/** A UTC instant written compactly, as occurrence keys and notice ids carry it: 20261130T0200Z. */
+export function compactUtc(ms: number): string {
   const date = new Date(ms);
   return (
     `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
@@ -249,6 +250,19 @@ export function localLabel(zone: string, ms: number): string {
   return (
     `${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}（${WEEKDAY_LABEL[weekday]}）` +
     `${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())}`
+  );
+}
+
+/** An instant as local time in `zone` with its offset, the way notices carry it: 2026-11-30T10:00+08:00. */
+export function localIso(zone: string, ms: number): string {
+  const wall = new Date(wallClock(zone, ms));
+  const offset = Math.round(offsetAt(zone, ms) / 60_000);
+  const sign = offset < 0 ? "-" : "+";
+  const size = Math.abs(offset);
+  return (
+    `${wall.getUTCFullYear()}-${pad(wall.getUTCMonth() + 1)}-${pad(wall.getUTCDate())}` +
+    `T${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())}` +
+    `${sign}${pad(Math.floor(size / 60))}:${pad(size % 60)}`
   );
 }
 

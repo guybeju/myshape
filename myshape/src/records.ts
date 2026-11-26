@@ -31,6 +31,7 @@ export const RECORD_KINDS = [
   "agent.tagged",
   "program.confirmed",
   "writes.released",
+  "writes.expired",
   "hashtag.added",
   "hashtag.removed",
   "hashtag.carried",
@@ -57,8 +58,11 @@ export const RECORD_KINDS = [
   "schedule.reverted",
   "schedule.settings_changed",
   "schedule.all_paused",
+  "occurrence.opened",
+  "occurrence.due",
   "occurrence.taken",
   "occurrence.closed",
+  "occurrence.missed",
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 
