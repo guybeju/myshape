@@ -1,7 +1,8 @@
 // The program wired to a real board (plan section 7, step 1's acceptance items
 // 1, 3, 4, 5, 6 and 7), in a scratch board-only root and a scratch home on a
 // free port that is never the live board's 47819. The root is a git
-// repository holding exactly the board's files (myshape/vendor-files) plus
+// repository holding the board's runtime files (the first block of
+// myshape/vendor-files, as the board's own tests copy them) plus
 // adapters/claude-agg/bin/agg-board.mjs, so the program sits in the code root
 // but outside its bin/, as it does in a real checkout, and the tests may
 // change its mode and bytes. The board is started and stopped only through
@@ -93,9 +94,9 @@ function git(root: string, ...args: string[]): string {
 
 /** A board-only root: the board's files and the program, committed as one commit. */
 function makeRoot(root: string): void {
-  const files = readFileSync(join(REPO_ROOT, "myshape", "vendor-files"), "utf8")
-    .split("\n")
-    .filter((line) => line !== "");
+  const lines = readFileSync(join(REPO_ROOT, "myshape", "vendor-files"), "utf8").split("\n");
+  const blank = lines.indexOf("");
+  const files = blank === -1 ? lines : lines.slice(0, blank);
   for (const path of [...files, "adapters/claude-agg/bin/agg-board.mjs"]) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     cpSync(join(REPO_ROOT, path), join(root, path), { recursive: true });
@@ -254,14 +255,14 @@ async function setUp(): Promise<void> {
   const scratch = mkdtempSync(join(tmpdir(), "agg-board-it-"));
   const root = join(scratch, "root");
   const home = join(scratch, "home");
-  for (const dir of ["h", "tmp", "probe", "home/state", "home/data", "home/config"]) {
+  for (const dir of ["h", "tmp", "probe", "probe-bin", "home/state", "home/data", "home/config"]) {
     mkdirSync(join(scratch, dir), { recursive: true });
   }
   makeRoot(root);
   const port = await freePort();
   writeFileSync(join(home, "config", "myshape-port"), `${port}\n`);
   const program = join(root, "adapters", "claude-agg", "bin", "agg-board.mjs");
-  const probe = join(root, "adapters", "claude-agg", "bin", "env-probe.mjs");
+  const probe = join(scratch, "probe-bin", "env-probe.mjs");
   writeFileSync(probe, probeSource(join(scratch, "probe")));
   chmodSync(probe, 0o755);
   board = {
@@ -437,13 +438,14 @@ describe.skipIf(!IN_CI)("on a real board (runs only when CI is set; skipped othe
         expect(names, role).toEqual(FIVE_NAMES);
       }
       bind(board.program);
-      await post("refresh", {});
-      if ((await aggregator()).confirm.length > 0) await confirmOnPage();
       const back = await message("回來了");
-      await waitFor(
-        "the program's deliver again",
-        async () => (await writeState(back)) === "delivered",
-      );
+      await waitFor("the program's deliver again", async () => {
+        if ((await writeState(back)) === "delivered") return true;
+        if ((await aggregator()).confirm.some((entry) => entry.path === board.program)) {
+          await twoStep("programs/confirm", { role: "feed" });
+        }
+        return false;
+      });
       expect(existsSync(inboxFile(back))).toBe(true);
     },
     STEP_MS,

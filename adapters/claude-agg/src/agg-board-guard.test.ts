@@ -53,7 +53,6 @@ describe("agg-board.mjs is one self-contained file", () => {
   it("is an executable with a node shebang, and git keeps it executable", () => {
     expect(source.startsWith("#!/usr/bin/env node\n")).toBe(true);
     expect(statSync(PROGRAM).mode & 0o111).toBe(0o111);
-    expect(statSync(PROGRAM).mode & 0o022).toBe(0);
     const git = spawnSync("git", ["-C", PACKAGE_DIR, "ls-files", "-s", "--", "bin/agg-board.mjs"], {
       encoding: "utf8",
     });

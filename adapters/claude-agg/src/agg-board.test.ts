@@ -423,10 +423,12 @@ describe("deliver", () => {
       },
     ]) {
       expect(deliver(h, record)).toEqual(DELIVERED);
+      expect(deliver(h, { ...record, attempt: 1 })).toEqual(DELIVERED);
       expect(readLanded(join(h.agg, "inbox", `${String(record["id"])}.json`)).record).toEqual(
         record,
       );
     }
+    expect(inboxNames(h)).toHaveLength(5);
   });
 
   it("treats an id the supervisor already moved to inbox/handled/ as landed", () => {
@@ -466,6 +468,15 @@ describe("deliver", () => {
         expect(deliver(h, { ...record, id })).toEqual(DELIVERED);
         expect(inboxNames(h)).toContain(`${id}.json`);
       }
+    });
+
+    it("lands once for the same id, and keeps it delivered after the worker ends", () => {
+      const h = makeHome();
+      writeTasks(h.agg, { v: 1, tasks: { [task]: { kind: "ship", state: "working" } } });
+      expect(deliver(h, record)).toEqual(DELIVERED);
+      writeTasks(h.agg, { v: 1, tasks: { [task]: { kind: "ship", state: "done" } } });
+      expect(deliver(h, { ...record, attempt: 1 })).toEqual(DELIVERED);
+      expect(inboxNames(h)).toEqual(["handled", `${String(record["id"])}.json`]);
     });
 
     it("fails for a worker that has ended, or that it does not know, and lands nothing", () => {
