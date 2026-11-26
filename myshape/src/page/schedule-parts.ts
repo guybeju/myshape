@@ -170,17 +170,16 @@ function choiceControl(
   name: "missed" | "default_rt",
   apply: (value: unknown) => void,
 ): Child {
-  const choices = name === "missed" ? view.schedules.missed_modes : view.schedules.rt_values;
+  const choices =
+    name === "missed"
+      ? view.schedules.missed_modes.map((mode) => [mode, settingWords("missed", mode)] as const)
+      : view.schedules.rt_values.map((rt) => [rt, rt] as const);
   const current = view.schedules.settings[name];
   return h(
     "select",
     { class: "auto", onchange: (event) => apply((event.target as HTMLSelectElement).value) },
-    choices.map((choice) =>
-      h(
-        "option",
-        { value: choice, ...(choice === current ? { selected: true } : {}) },
-        name === "missed" ? settingWords("missed", choice as Settings["missed"]) : choice,
-      ),
+    choices.map(([value, words]) =>
+      h("option", { value, ...(value === current ? { selected: true } : {}) }, words),
     ),
   );
 }

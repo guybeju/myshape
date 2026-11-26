@@ -73,9 +73,11 @@ const SETTING_LABEL = {
     default_tz: () => "新排程的時區",
 };
 function choiceControl(view, name, apply) {
-    const choices = name === "missed" ? view.schedules.missed_modes : view.schedules.rt_values;
+    const choices = name === "missed"
+        ? view.schedules.missed_modes.map((mode) => [mode, settingWords("missed", mode)])
+        : view.schedules.rt_values.map((rt) => [rt, rt]);
     const current = view.schedules.settings[name];
-    return h("select", { class: "auto", onchange: (event) => apply(event.target.value) }, choices.map((choice) => h("option", { value: choice, ...(choice === current ? { selected: true } : {}) }, name === "missed" ? settingWords("missed", choice) : choice)));
+    return h("select", { class: "auto", onchange: (event) => apply(event.target.value) }, choices.map(([value, words]) => h("option", { value, ...(value === current ? { selected: true } : {}) }, words)));
 }
 function typedControl(page, actions, name, hint, apply) {
     const key = `schedule-setting:${name}`;

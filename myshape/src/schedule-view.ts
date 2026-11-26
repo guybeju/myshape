@@ -25,6 +25,7 @@ import {
   ruleOf,
 } from "./schedules.js";
 import type {
+  MissedMode,
   OccurrenceState,
   RecentEntry,
   Rt,
@@ -108,7 +109,7 @@ export interface ScheduleView {
   settings: Settings;
   defaults: Settings;
   ranges: typeof RANGES;
-  missed_modes: readonly string[];
+  missed_modes: readonly MissedMode[];
   rt_values: readonly Rt[];
   /** How many schedules are switched on. */
   active: number;
