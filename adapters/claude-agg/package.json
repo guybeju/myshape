@@ -7,9 +7,9 @@
   },
   "scripts": {
     "typecheck": "tsc -p . --noEmit",
-    "lint": "oxlint src",
-    "format": "oxfmt src",
-    "format:check": "oxfmt --check src",
+    "lint": "oxlint src bin",
+    "format": "oxfmt src bin",
+    "format:check": "oxfmt --check src bin",
     "test": "vitest run"
   },
   "devDependencies": {
