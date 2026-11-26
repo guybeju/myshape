@@ -197,6 +197,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 `summary`、`which`、`find <task>` 與頁面寫入前的對帳只要一個 task 的議題標記，看板先用同一支程式、同一個角色問：`<feed> topics <home> <task>…`。task id 照看板一向的檢查（`[A-Za-z0-9_][A-Za-z0-9._-]*`）。
 成功是 exit 0、stdout 一個 JSON 物件 `{"topics": {"<task-id>": "<議題標記的原文>"}}`，意思和回報的 `topics{}` 一樣（C7）；沒有標記檔的 task 不列。
 這個呼叫在請求之後才開始，所以讀到的是請求當時的標記。
+同一個 home 的讀取（F）還在跑時，這個呼叫等它結束才開始；這個呼叫還在跑時，那個 home 的讀取也等它結束。所有 home 合起來同時最多跑 2 個這種呼叫，多的排隊；排到時請求的補讀期限已經過了，就不跑。
 其他任何結果（非 0 的 exit，或 stdout 不是這個形狀）都當成「不支援或失敗」，看板改讀整個 home（上面的 `feed`）；exit 2 之後看板不再對那個 home 問這個呼叫，直到它回報的 `code_commit` 變了。
 不認得 `topics` 的 aggregator 照舊能用。
 
@@ -477,6 +478,7 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 重啟後接續可去重寫入的時限 | `sending` 寫下後 30 分鐘；`waiting` 的寫入不受限 |
 | 議題變成可派後多久發通知 | 30 秒內沒有再被移動 |
 | `summary`／`which` 等一次補讀 | 最多 10 秒；同一個請求裡的補讀（`--home` 先讀根 home 再讀那個 home）合起來算 |
+| 同時進行的 `topics` 呼叫 | 所有 home 合起來最多 2 個 |
 | `myshape.sh` 等一個請求的回應 | 12 秒（補讀的上限再加 2 秒，讓回應在 client 放棄前送到） |
 | `service.log` 輪替 | 啟動時超過 1 MiB 就改名成 `service.log.1`，只留一份 |
 | 一次讀取的輸出 | 最多 4 MiB |
