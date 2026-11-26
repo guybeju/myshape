@@ -446,7 +446,8 @@ test_topics_reads_the_tag_files_of_the_home() {
   local out
   out=$(topics "$FAKE" main run-a gone-merged no-tag) || fail "topics main failed"
   assert_equals "$(feed "$FAKE" main 0 - |
-    jq -c '{topics: (.topics | with_entries(select(.key == "run-a" or .key == "gone-merged")))}')" "$out" \
+    jq -cS '{topics: (.topics | with_entries(select(.key == "run-a" or .key == "gone-merged")))}')" \
+    "$(jq -cS . <<< "$out")" \
     "topics main must print the full report's tag text of each task asked for, and leave out one with no tag file"
   assert_equals "$(printf 'billing 2026-07-01T00:00:00Z\nt2 2026-07-02T00:00:00Z')" \
     "$(jq -r '.topics["run-a"]' <<< "$out")" "a tag file is carried whole, without its trailing newline"
@@ -488,6 +489,12 @@ snapshot_logger() {
   chmod +x "$1/bin/fm-fleet-snapshot.sh"
 }
 
+# snapshot_asks: "<--board-input calls> <--json calls>" in $TMP_ROOT/snapshot.log.
+snapshot_asks() {
+  printf '%s %s\n' "$(grep -cx -e --board-input "$TMP_ROOT/snapshot.log")" \
+    "$(grep -cx -e --json "$TMP_ROOT/snapshot.log")"
+}
+
 test_the_reader_asks_for_board_input_when_the_snapshot_offers_it() {
   local root="$TMP_ROOT/snapshot-root" expected
   tb_make_fake_root "$root"
@@ -498,13 +505,13 @@ test_the_reader_asks_for_board_input_when_the_snapshot_offers_it() {
   assert_equals "$expected" "$(feed "$root" main 0 - | jq -c '{tasks, holds, queued}')" \
     "the report must be the same through a snapshot that offers --board-input"
   feed "$root" sm1 0 - >/dev/null || fail "feed sm1 through a snapshot that offers --board-input failed"
-  assert_equals "--board-input --board-input" "$(tr '\n' ' ' < "$TMP_ROOT/snapshot.log" | sed 's/ $//')" \
-    "the reader must ask a snapshot that offers --board-input for it, in every home"
+  assert_equals "2 0" "$(snapshot_asks)" \
+    "the reader must ask a snapshot that offers --board-input for it, in every home, and never for --json"
   snapshot_logger "$root" "Offers the full report only."
   : > "$TMP_ROOT/snapshot.log"
   assert_equals "$expected" "$(feed "$root" main 0 - | jq -c '{tasks, holds, queued}')" \
     "the report must be the same through a snapshot without --board-input"
-  assert_equals "--json" "$(cat "$TMP_ROOT/snapshot.log")" "the reader must ask a snapshot without --board-input for --json"
+  assert_equals "0 1" "$(snapshot_asks)" "the reader must ask a snapshot without --board-input for --json"
   pass "the reader asks the snapshot for --board-input when it offers it, else --json"
 }
 

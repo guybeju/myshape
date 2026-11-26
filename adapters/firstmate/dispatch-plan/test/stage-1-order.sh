@@ -284,9 +284,14 @@ order_root() {
     "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-queue-source-lib.sh "$ROOT"/bin/fm-board-lib.sh \
     "$root/bin/"
   [ "$2" = 0 ] || note="Offers --board-input, the board's cheaper read."
-  printf '#!/usr/bin/env bash\n# %s\nprintf "%%s\\n" "$*" >> %q\nexec %q --json\n' \
+  printf '#!/usr/bin/env bash\n# %s\nprintf "%%s\\n" "$*" >> %q\nexec env -u FM_ROOT_OVERRIDE %q --json\n' \
     "$note" "$root/snapshot.log" "$ROOT/bin/fm-fleet-snapshot.sh" > "$root/bin/fm-fleet-snapshot.sh"
   chmod +x "$root/bin/fm-fleet-snapshot.sh"
+}
+
+# asks <log>: "<--board-input calls> <--json calls>" in an order_root snapshot log.
+asks() {
+  printf '%s %s\n' "$(grep -cx -e --board-input "$1")" "$(grep -cx -e --json "$1")"
 }
 
 test_asks_for_board_input_when_the_snapshot_offers_it() {
@@ -303,9 +308,9 @@ test_asks_for_board_input_when_the_snapshot_offers_it() {
     assert_equals "h1 h2 r1 n1 u1 p1 d1 " "$(section "$out" "可派：")" \
       "order must rank the same either way (offers board input: $offers)"
   done
-  assert_equals "--board-input" "$(cat "$TMP_ROOT/order-mode-1/snapshot.log")" \
-    "order must ask a snapshot that offers --board-input for it"
-  assert_equals "--json" "$(cat "$TMP_ROOT/order-mode-0/snapshot.log")" \
+  assert_equals "1 0" "$(asks "$TMP_ROOT/order-mode-1/snapshot.log")" \
+    "order must ask a snapshot that offers --board-input for it, and not for --json"
+  assert_equals "0 1" "$(asks "$TMP_ROOT/order-mode-0/snapshot.log")" \
     "order must ask a snapshot without --board-input for --json"
   pass "order reads the backlog through --board-input when the snapshot offers it, else --json"
 }
