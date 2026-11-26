@@ -9,6 +9,7 @@
 // only writer of the agent's state and the only one that runs the board's
 // command; workers never write the board.
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
@@ -33,7 +34,7 @@ import {
 } from "./ending.js";
 import { parseInboxFile, sortInbox, type InboxItem, type Sorted } from "./inbox.js";
 import { closeReason } from "./landing.js";
-import { parsePlannerOutput, type PlannedWork } from "./outputs.js";
+import { parsePlannerOutput, type PlannedWork, type Todo } from "./outputs.js";
 import {
   livePrompt,
   plannerPrompt,
@@ -381,7 +382,7 @@ export class Supervisor {
 
   /** The captain answered a hold that was a question only: it closes, and nothing resumes. */
   private closeAnswered(item: InboxItem & { kind: "answer" }): void {
-    const answer = this.store.readAnswer(item.task);
+    const answer = this.currentAnswer(item.task);
     if (answer !== undefined) {
       this.closeHold(item.task, answer.id);
       this.log(`task ${item.task}: the captain answered ${answer.label || answer.answer}`);
@@ -420,6 +421,7 @@ export class Supervisor {
     if (task === undefined) return undefined;
     const files = this.sorted.inputs.get(id) ?? [];
     const answer = this.answerOf(id, files);
+    if (answer === undefined && this.waitsForAnswer(id)) return undefined;
     const directs = files.flatMap((item) => (item.kind === "direct" ? [item.text] : []));
     const input: ResumeInput = { quota: this.resumable(id), directs };
     const todos = this.todoInput(id, task, files);
@@ -429,6 +431,17 @@ export class Supervisor {
     return detail === undefined ? undefined : { input, detail, files, answerId: answer?.id };
   }
 
+  /**
+   * Whether `id` waits on the answer to its worker's question: then only
+   * the answer resumes it, and directs and todo notices wait with it.
+   */
+  private waitsForAnswer(id: string): boolean {
+    const hold = this.holds.get(id);
+    return (
+      hold?.state === "open" && hold.on_answer === "release" && hold.title !== QUOTA_HOLD.title
+    );
+  }
+
   /** The task when it has a session that is not running and has not ended, else undefined. */
   private stopped(id: string): TaskEntry | undefined {
     const task = this.tasks.get(id);
@@ -436,11 +449,27 @@ export class Supervisor {
     return task.state === "done" || task.state === "failed" ? undefined : task;
   }
 
+  /**
+   * The answer in answers/ to the question `id`'s open hold asks now. An
+   * answer to another question (one the hold no longer asks) is moved to
+   * answers/handled/ with a log line, so it can never answer the new one.
+   */
+  private currentAnswer(id: string) {
+    const hold = this.holds.get(id);
+    const answer = this.store.readAnswer(id);
+    if (hold === undefined || answer === undefined) return undefined;
+    const asked = createHash("sha256").update(hold.question).digest("hex");
+    if (answer.questionSha256 === asked) return answer;
+    this.log(`task ${id}: an answer to an earlier question was set aside`);
+    this.store.retireAnswer(id, answer.id);
+    return undefined;
+  }
+
   /** The captain's answer to the task's open hold, when an answer among `files` is waiting. */
   private answerOf(id: string, files: readonly InboxItem[]) {
     const hold = this.holds.get(id);
     if (hold === undefined || !files.some((item) => item.kind === "answer")) return undefined;
-    const answer = this.store.readAnswer(id);
+    const answer = this.currentAnswer(id);
     if (answer === undefined) return undefined;
     const { title, question } = hold;
     return { id: answer.id, text: { title, question, answer: answer.answer, label: answer.label } };
@@ -785,9 +814,10 @@ export class Supervisor {
 
   /** Opens the hold a worker's question asks for, keyed by its task (plan section 4.4). */
   private openHold(id: string, request: HoldRequest): void {
+    const reserved = request.title === QUOTA_HOLD.title;
     this.holds.set(id, {
       state: "open",
-      title: request.title,
+      title: reserved ? `${request.title}（worker 的問題）` : request.title,
       question: request.question,
       on_answer: request.onAnswer,
       hold_set: isoTime(this.deps.nowMs()),
@@ -808,10 +838,24 @@ export class Supervisor {
         ? todoOps(items, todos)
         : todoOps(items, {
             kind: "sync",
-            wanted: boardTodos(id, this.topicOf(id), todos.todos),
+            wanted: boardTodos(
+              id,
+              this.topicOf(id),
+              todos.todos.map((todo) => this.redactTodo(todo)),
+            ),
             summary: todos.summary,
           });
     for (const op of ops) await this.runTodo(id, op);
+  }
+
+  private redactTodo(todo: Todo): Todo {
+    const { redact } = this;
+    return {
+      id: redact(todo.id),
+      title: redact(todo.title),
+      do: redact(todo.do),
+      cmds: todo.cmds.map(redact),
+    };
   }
 
   private async runTodo(id: string, op: TodoOp): Promise<void> {

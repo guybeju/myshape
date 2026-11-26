@@ -267,7 +267,13 @@ describe("how a worker can end", () => {
 
 describe("the subscription token", () => {
   it("reaches no state file, ledger line, summary, log line or other command", async () => {
-    const leaky = workerOutput("failed", { summary: `token is ${CANARY}` });
+    const leakyTodo = { id: `v${CANARY}`, title: CANARY, do: CANARY, cmds: [CANARY] };
+    const leakyQuestion = { title: CANARY, text: CANARY, options: [CANARY, "B"] };
+    const leaky = workerOutput("failed", {
+      summary: `token is ${CANARY}`,
+      todos: [leakyTodo],
+      question: leakyQuestion,
+    });
     const world = oneTask([init("w1"), result(leaky)]);
     world.query.worker.push({ messages: [init("w2")], error: new Error(`died: ${CANARY}`) });
     world.query.planner[0] = {

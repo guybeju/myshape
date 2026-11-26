@@ -111,7 +111,15 @@ export interface Call {
   /** Every message the session produced: its transcript. */
   transcript: object[];
   /** The tool calls the session tried, and whether its rules or hook let them run. */
-  tools: { tool: string; input: Record<string, unknown>; ran: boolean; reason: string }[];
+  tools: {
+    tool: string;
+    input: Record<string, unknown>;
+    ran: boolean;
+    /** The deny rule that matched, or undefined. */
+    rule: string | undefined;
+    /** The hook's refusal, or undefined; the hook is asked even when a rule matched. */
+    hook: string | undefined;
+  }[];
 }
 
 /** A tool call a scripted session tries; the double checks it as the SDK would, never runs it. */
@@ -166,35 +174,33 @@ function ruleDenies(rule: string, attempt: ToolAttempt): boolean {
   return new RegExp(`^${pattern.join(".*")}$`, "s").test(String(attempt.input["command"]));
 }
 
-/** Checks a tool call against the session's deny rules, then its PreToolUse hooks, as the SDK orders them. */
+/**
+ * Checks a tool call against the session's deny rules and its PreToolUse
+ * hooks. The SDK stops at whichever denies first; the double asks both, so a
+ * test sees each layer's answer.
+ */
 async function tryTool(attempt: ToolAttempt, call: Call): Promise<object[]> {
   const id = `toolu_${call.tools.length + 1}`;
-  let reason = "";
   const rule = call.options.disallowedTools.find((each) => ruleDenies(each, attempt));
-  if (rule !== undefined) reason = `denied by rule ${rule}`;
-  for (const matcher of reason === "" ? call.options.hooks.PreToolUse : []) {
-    for (const hook of matcher.hooks) {
+  let hook: string | undefined;
+  for (const matcher of call.options.hooks.PreToolUse) {
+    for (const each of matcher.hooks) {
       const input = {
         hook_event_name: "PreToolUse",
         tool_name: attempt.tool,
         tool_input: attempt.input,
         cwd: call.options.cwd,
       };
-      const out = await hook(input, id, { signal: new AbortController().signal });
+      const out = await each(input, id, { signal: new AbortController().signal });
       const decision = out.hookSpecificOutput;
-      if (decision?.permissionDecision === "deny" && reason === "") {
-        reason = decision.permissionDecisionReason;
-      }
+      if (decision?.permissionDecision === "deny") hook ??= decision.permissionDecisionReason;
     }
   }
-  call.tools.push({ ...attempt, ran: reason === "", reason });
+  const ran = rule === undefined && hook === undefined;
+  call.tools.push({ ...attempt, ran, rule, hook });
+  const reason = rule === undefined ? (hook ?? "ok") : `denied by rule ${rule}`;
   const use = { type: "tool_use", id, name: attempt.tool, input: attempt.input };
-  const answer = {
-    type: "tool_result",
-    tool_use_id: id,
-    is_error: reason !== "",
-    content: reason || "ok",
-  };
+  const answer = { type: "tool_result", tool_use_id: id, is_error: !ran, content: reason };
   return [
     { type: "assistant", message: { role: "assistant", content: [use] } },
     { type: "user", message: { role: "user", content: [answer] } },

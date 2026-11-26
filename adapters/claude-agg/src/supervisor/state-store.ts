@@ -167,17 +167,20 @@ export class StateStore {
   }
 
   /** The answer the captain gave to `task`'s hold, as deliver landed it, or undefined. */
-  readAnswer(task: string): { id: string; answer: string; label: string } | undefined {
+  readAnswer(
+    task: string,
+  ): { id: string; answer: string; label: string; questionSha256: string } | undefined {
     const path = join(this.agg, "answers", `${task}.json`);
     if (!existsSync(path)) return undefined;
     const landed = JSON.parse(readFileSync(path, "utf8")) as {
-      record?: { id?: unknown; answer?: unknown; label?: unknown };
+      record?: { id?: unknown; answer?: unknown; label?: unknown; question_sha256?: unknown };
     };
     const record = landed.record ?? {};
     return {
       id: String(record.id),
       answer: String(record.answer ?? ""),
       label: String(record.label ?? ""),
+      questionSha256: String(record.question_sha256 ?? ""),
     };
   }
 

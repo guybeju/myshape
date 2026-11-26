@@ -13,9 +13,10 @@ import { runProgram } from "#agg/test-home.js";
 
 import { TEXT } from "./ending.js";
 import { Gate, init, plan, removeScratch, result, workerOutput } from "./harness.test-helper.js";
+import { REASONS } from "./guard.js";
 import { INBOX_LOG } from "./inbox.js";
 import { MAX_RUNNING, WAIT } from "./scheduler.js";
-import { DETAIL, type Supervisor } from "./supervisor.js";
+import { DETAIL, QUOTA_HOLD, type Supervisor } from "./supervisor.js";
 import { TODO_REASON } from "./todos.js";
 import { BOARD_COMMAND, World } from "./world.test-helper.js";
 
@@ -144,6 +145,67 @@ describe("a worker's question", () => {
     expect(world.holds()["build-1"]).toMatchObject({ state: "open", title: "第二題" });
     expect(world.answer("build-1", "不留")).toEqual({ outcome: "delivered" });
     supervisor.close();
+  });
+});
+
+describe("a held worker", () => {
+  it("waits for the answer: a direct to it waits too, then goes with the answer", async () => {
+    const world = oneTask([init("w1"), result(workerOutput("report", { question: QUESTION }))]);
+    world.query.worker.push({ messages: [init("w1"), result(workerOutput("report"))] });
+    const supervisor = await run(world);
+    world.deliver({ kind: "direct", home: "main", task: "build-1", text: "先別急" });
+    await pass(supervisor);
+    expect(workerCalls(world)).toHaveLength(1);
+    expect(world.holds()["build-1"]?.state).toBe("open");
+    world.answer("build-1", "留");
+    await pass(supervisor);
+    const [, resumed] = workerCalls(world);
+    expect(resumed?.prompts[0]).toContain('"answer": "留"');
+    expect(resumed?.prompts[0]).toContain('"先別急"');
+    expect(world.inbox().waiting).toEqual([]);
+    supervisor.close();
+  });
+
+  it("sets aside an answer to a question the hold no longer asks", async () => {
+    const world = oneTask([init("w1"), result(workerOutput("report", { question: QUESTION }))]);
+    const supervisor = await run(world);
+    const record = {
+      v: 1,
+      id: "w-old",
+      attempt: 0,
+      kind: "answer",
+      home: "main",
+      task: "build-1",
+      answer: "留",
+      label: "留",
+      mode: "release",
+      question_sha256: "0".repeat(64),
+      topic: null,
+    };
+    const landed = JSON.stringify({ v: 1, received_ms: 1, record });
+    writeFileSync(join(world.agg, "answers", "build-1.json"), landed);
+    writeFileSync(join(world.agg, "inbox", "w-old.json"), landed);
+    await pass(supervisor);
+    expect(workerCalls(world)).toHaveLength(1);
+    expect(world.holds()["build-1"]?.state).toBe("open");
+    expect(world.logs).toContain("task build-1: an answer to an earlier question was set aside");
+    expect(world.answer("build-1", "不留")).toEqual({ outcome: "delivered" });
+    supervisor.close();
+  });
+
+  it("never takes a worker's question for the quota hold, even with its title", async () => {
+    const quotaLike = { ...QUESTION, title: QUOTA_HOLD.title };
+    const world = oneTask([init("w1"), result(workerOutput("report", { question: quotaLike }))]);
+    const supervisor = await run(world);
+    expect(world.holds()["build-1"]?.title).toBe(`${QUOTA_HOLD.title}（worker 的問題）`);
+    supervisor.close();
+    world.query.worker.push({ messages: [init("w1"), result(workerOutput("report"))] });
+    const again = await world.start();
+    world.answer("build-1", "留");
+    await pass(again);
+    expect(workerCalls(world)).toHaveLength(2);
+    expect(world.tasks()["build-1"]?.state).toBe("done");
+    again.close();
   });
 });
 
@@ -437,6 +499,10 @@ describe("workers never write the board", () => {
     for (const call of workers) {
       expect(call.tools).toHaveLength(ATTEMPTS.length);
       expect(call.tools.filter((tool) => tool.ran)).toEqual([]);
+      for (const tool of call.tools) {
+        expect(tool.rule, tool.input["command"] as string).toBe("Bash(*myshape.sh*)");
+        expect(tool.hook, tool.input["command"] as string).toBe(REASONS.board);
+      }
       const results = call.transcript.flatMap((message) => toolResults(message));
       expect(results).toHaveLength(ATTEMPTS.length);
       expect(results.every((each) => each.is_error)).toBe(true);
