@@ -285,6 +285,11 @@ export function closePropose(state, rawId, rawReason, now) {
         { kind: "topic.close_proposed", topic: found.id, text: `提議關閉：${reason}` },
     ]);
 }
+/** Where `anchor` (merges followed) is in `queue`, or -1 when it is not there or is `id` itself. */
+function anchorIndex(queue, id, anchor, doc) {
+    const resolved = resolveTopicId(doc, anchor);
+    return resolved === id ? -1 : queue.indexOf(resolved);
+}
 function insertAt(queue, id, position, doc) {
     const without = queue.filter((entry) => entry !== id);
     if (position === undefined)
@@ -293,9 +298,14 @@ function insertAt(queue, id, position, doc) {
         return [id, ...without];
     if ("last" in position)
         return [...without, id];
-    const anchor = resolveTopicId(doc, position.before);
-    const at = without.indexOf(anchor);
-    if (anchor === id || at === -1)
+    if ("after" in position) {
+        const above = anchorIndex(without, id, position.after, doc);
+        if (above === -1)
+            return `落點上面的 ${position.after} 已經不在那個佇列裡；等頁面更新後再拖一次。`;
+        return [...without.slice(0, above + 1), id, ...without.slice(above + 1)];
+    }
+    const at = anchorIndex(without, id, position.before, doc);
+    if (at === -1)
         return `--before 指的 ${position.before} 不在那個佇列裡。`;
     return [...without.slice(0, at), id, ...without.slice(at)];
 }

@@ -984,9 +984,11 @@ describe("api", () => {
     expect((await call("POST topics/confirm", { id: "a" })).status).toBe(404);
     await call("POST topics/move", { id: "a", queue: "high" });
     await call("POST topics/move", { id: "a", queue: "high", before: "b" });
-    expect(seen.slice(-2)).toEqual([
+    await call("POST topics/move", { id: "a", queue: "high", after: "b" });
+    expect(seen.slice(-3)).toEqual([
       'move:{"id":"a","queue":"high","last":true}',
       'move:{"id":"a","queue":"high","before":"b"}',
+      'move:{"id":"a","queue":"high","after":"b"}',
     ]);
     expect((await call("POST topics/propose", { name: "x" })).status).toBe(404);
     const refusing = api(h, { topicOp: () => ({ ok: false, code: "refused", line: "不行" }) });

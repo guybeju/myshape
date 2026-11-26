@@ -90,9 +90,11 @@ const refresh: Route = async (host) => {
   return ok();
 };
 
-/** A drop with no "before" lands at the end of the queue. */
-const move: Route = (host, body) =>
-  fromTopicOp(host.topicOp("move", body["before"] === undefined ? { ...body, last: true } : body));
+/** A drop with neither "before" nor "after" lands at the end of the queue. */
+const move: Route = (host, body) => {
+  const anchored = body["before"] !== undefined || body["after"] !== undefined;
+  return fromTopicOp(host.topicOp("move", anchored ? body : { ...body, last: true }));
+};
 
 /**
  * Runs `act` only on the second of two requests. The first request, without a
