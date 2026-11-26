@@ -8,13 +8,54 @@ sections 4 and 7). It imports nothing from `myshape/` or `adapters/firstmate/`,
 and the board imports nothing from it.
 
 So far it holds the program the board runs, `bin/agg-board.mjs`, the formats
-of the agent's state files, and the start of the supervisor in
-`src/supervisor/`, which reads a board home's `data/topics.json`,
-`data/topics-archive.json`, `data/myshape/hashtags.json` and
-`data/myshape/schedules.json` and computes the order new work is handed out in
-(`dispatch-order.ts`). No program here starts a worker, calls a model or
-writes to the board yet, and nothing writes the supervisor's state files but a
-person or a test.
+of the agent's state files, and the supervisor in `src/supervisor/` (below).
+The supervisor takes the Agent SDK's `query()` as an injected function; the
+package is not a dependency yet and there is no entry point that runs the
+supervisor, so nothing here calls a model. The tests pass a scripted double.
+
+## The supervisor: `src/supervisor/`
+
+It reads a board home's `data/topics.json`, `data/topics-archive.json`,
+`data/myshape/hashtags.json` and `data/myshape/schedules.json`, computes the
+order new work is handed out in (`dispatch-order.ts`), and then:
+
+- **plans** each dispatchable topic that has no task with one read-only
+  planner session (`Read`, `Grep`, `Glob`, `dontAsk`), keeping only tasks for
+  the repositories its settings list;
+- **dispatches** at most 2 sessions in all and 1 per topic (`scheduler.ts`);
+  the rest wait in `queued.json` with the reason as `hold`. Nothing new starts
+  for a topic in 待辦 or archived, and a running worker is never stopped;
+- **claims** a task in `tasks.json` and its `tags/<task-id>` first, then takes
+  it out of `queued.json`, then runs `git worktree add <root>/<task-id> -b
+  agg/<task-id> <base>` in the repository's main checkout, with the worktree
+  root outside the board home;
+- **runs** one worker session per task with the options of
+  `session-options.ts` (auto mode with no prompts, the deny rules and the
+  PreToolUse guard of `guard.ts`, the target repository's project settings
+  from its main checkout, no MCP but what it passes, 200 turns, a structured
+  output), and stops a session whose start message is not `auto` or names an
+  API key;
+- **writes** the ledger (`task.dispatched`, `task.status`, `task.pr_ready`,
+  `task.merged`, `task.cleaned_up`) and summaries through the board's
+  `bin/myshape.sh summary`; workers never write the board;
+- **cleans up** a worktree with `git worktree remove` once its task ended
+  (after the PR merged or closed, for a PR), never with `--force`, and records
+  `blocked` with 「worktree 還有沒推的提交」 instead when it holds commits no remote
+  has;
+- **stops dispatching** when a session ends on the quota or rate limit,
+  leaves running workers alone, opens a hold on that task, and resumes its
+  session when the time the limit gave has passed or the captain answers
+  「現在恢復」;
+- **reconciles** at start: a worker of the last run that was still working is
+  `paused`, a task listed in both `tasks.json` and `queued.json` stays in
+  `tasks.json` only, worktrees git no longer lists are dropped from
+  `tasks.json`, and a lock in the worktree root keeps a second supervisor
+  away.
+
+The model is the user's setting, passed to every session unchanged; with no
+setting, sessions get no model option. The subscription token is read from a
+file only its owner can read (`token.ts`), goes only into the sessions'
+environment, and is taken out of every text the supervisor writes.
 
 ## What the board runs: `bin/agg-board.mjs`
 
@@ -122,10 +163,12 @@ pnpm --dir adapters/claude-agg test
 
 `typecheck` checks `bin/agg-board.mjs` too, from its JSDoc types
 (`checkJs`); lint and format cover `src/` and `bin/`. The tests run the
-program as a child process against scratch homes. The tests in
-`src/board.integration.test.ts` start a real board service in a scratch root
-and home on a free port, so they run only when `CI` is set (GitHub's runner
-sets it) and are skipped otherwise.
+program as a child process against scratch homes, and the supervisor with a
+scripted `query()` and fake commands; `worktrees.sandbox.test.ts` runs real
+git in sandbox repositories under its own temporary directory. The tests in
+`src/board.integration.test.ts` and `src/worker-loop.integration.test.ts`
+start a real board service in a scratch root and home on a free port, so they
+run only when `CI` is set (GitHub's runner sets it) and are skipped otherwise.
 
 The `Claude aggregator` job in `.github/workflows/tests.yml` runs the same
 checks, plus the guards on the top-level `bin/`, the vendor lists and imports.

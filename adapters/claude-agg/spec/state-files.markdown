@@ -4,7 +4,7 @@ claude-agg keeps its state in one directory, `$MYSHAPE_HOME/agg/`, beside the
 board's own `data/`, `state/` and `config/` (which it never writes). Two
 programs touch it:
 
-- **the supervisor** (a later step), the only writer of `tasks.json`,
+- **the supervisor** (`src/supervisor/`), the only writer of `tasks.json`,
   `holds.json`, `queued.json` and `ledger.jsonl`, and the only one that moves
   files into `inbox/handled/` and `answers/handled/`;
 - **`bin/agg-board.mjs`**, the program the board runs. Its `feed` and
@@ -56,7 +56,7 @@ name that does.
 {"v": 1, "tasks": {
   "billing-1": {"kind": "ship", "state": "working", "detail": "running the tests", "unstarted": false,
                 "title": "Move billing", "repo": "owner/name", "session_id": "…", "worktree": "/…/billing-1",
-                "branch": "agg/billing-1", "pr_url": null, "cost_usd_estimate": 0.42}
+                "branch": "agg/billing-1", "pr_url": null, "model": "…", "cost_usd_estimate": 0.42}
 }}
 ```
 
@@ -69,7 +69,8 @@ name that does.
 - `done` and `failed` mean the worker has ended: `direct` refuses them. Every
   other state, and `unstarted`, takes a `direct` message for the supervisor
   to pass on.
-- `title`, `repo`, `session_id`, `worktree`, `branch`, `pr_url` and
+- `title`, `repo`, `session_id`, `worktree`, `branch`, `pr_url`, `model`
+  (the model the worker's session named in its start message) and
   `cost_usd_estimate` are the supervisor's; the board program never reads
   them and never reports them.
 
