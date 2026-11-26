@@ -203,7 +203,7 @@ describe("endingOf", () => {
     expect([ending.state, ending.cleanUp, ending.summary?.kind]).toEqual([state, cleanUp, summary]);
   });
 
-  it("pauses on the quota with no summary and keeps the worktree", () => {
+  it("pauses on the quota with no summary, keeps the worktree and leaves the todos alone", () => {
     expect(endingOf({ kind: "quota", resetsAtMs: 5 })).toEqual({
       state: "paused",
       text: TEXT.quota,
@@ -211,12 +211,69 @@ describe("endingOf", () => {
       prReady: null,
       cleanUp: false,
       quota: { resetsAtMs: 5 },
+      hold: null,
+      todos: { kind: "keep" },
     });
   });
 
-  it("blocks a task whose worker handed back todos", () => {
+  it("blocks a task whose worker handed back todos, waiting on the captain's hands", () => {
     const todo = { id: "t-vpn", title: "VPN", do: "登入", cmds: ["sudo x"] };
     const ending = endingOf({ kind: "output", output: workerOutput("report", { todos: [todo] }) });
-    expect([ending.state, ending.cleanUp, ending.text]).toEqual(["blocked", false, TEXT.untreated]);
+    expect([ending.state, ending.cleanUp, ending.text, ending.hold]).toEqual([
+      "blocked",
+      false,
+      TEXT.todos(1),
+      null,
+    ]);
+    expect(ending.todos).toEqual({ kind: "sync", todos: [todo], summary: "worker report" });
+  });
+
+  const question = { title: "哪個快取？", text: "要留舊的快取嗎？", options: ["留", "不留"] };
+
+  it.each(["report", "failed"])(
+    "opens a release hold for a %s question: the work waits for the answer",
+    (outcome) => {
+      const ending = endingOf({ kind: "output", output: workerOutput(outcome, { question }) });
+      expect(ending.hold).toEqual({
+        title: "哪個快取？",
+        question: "要留舊的快取嗎？\n選項：留 | 不留",
+        onAnswer: "release",
+      });
+      expect([ending.state, ending.cleanUp, ending.text]).toEqual([
+        "blocked",
+        false,
+        TEXT.question("哪個快取？"),
+      ]);
+    },
+  );
+
+  it("opens a close hold for a question that comes with delivered work", () => {
+    const ready = workerOutput("ready", { question, pr_url: "https://github.com/o/r/pull/1" });
+    const ending = endingOf({ kind: "output", output: ready });
+    expect(ending.hold?.onAnswer).toBe("close");
+    expect([ending.state, ending.text, ending.prReady]).toEqual([
+      "done",
+      TEXT.ready,
+      "https://github.com/o/r/pull/1",
+    ]);
+    const landed = endingOf({ kind: "output", output: workerOutput("landed", { question }) });
+    expect([landed.hold?.onAnswer, landed.state, landed.cleanUp]).toEqual(["close", "done", true]);
+  });
+
+  it.each([["a\nb"], ["a | b"], [" "]])(
+    "takes no output whose option %j cannot be a button",
+    (bad) => {
+      const output = workerOutput("report", { question: { ...question, options: ["好", bad] } });
+      expect(endingOf({ kind: "output", output }).text).toBe(TEXT.invalid);
+    },
+  );
+
+  it.each([
+    [{ kind: "max_turns" }],
+    [{ kind: "refused", reason: "r" }],
+    [{ kind: "error", message: "m" }],
+    [{ kind: "output", output: undefined }],
+  ] as const)("drops the todos of a task that ended with no usable output: %j", (end) => {
+    expect(endingOf(end).todos).toEqual({ kind: "drop" });
   });
 });

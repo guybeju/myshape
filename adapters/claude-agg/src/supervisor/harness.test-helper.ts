@@ -104,14 +104,36 @@ export class Gate {
 
 export interface Call {
   options: QueryOptions;
+  /** Every user message the session took from its streaming input, in order. */
   prompts: string[];
   /** The script the session took, if one was left. */
   script: Script | undefined;
+  /** Every message the session produced: its transcript. */
+  transcript: object[];
+  /** The tool calls the session tried, and whether its rules or hook let them run. */
+  tools: {
+    tool: string;
+    input: Record<string, unknown>;
+    ran: boolean;
+    /** The deny rule that matched, or undefined. */
+    rule: string | undefined;
+    /** The hook's refusal, or undefined; the hook is asked even when a rule matched. */
+    hook: string | undefined;
+  }[];
 }
+
+/** A tool call a scripted session tries; the double checks it as the SDK would, never runs it. */
+export interface ToolAttempt {
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+/** A step of a script: a message the session yields, or a tool call it tries. */
+export type Step = object | { attempt: ToolAttempt };
 
 /** What one session does: its first message (the start), then the rest once its gate opens. */
 export interface Script {
-  messages: object[];
+  messages: Step[];
   gate?: Gate;
   /** Thrown after the messages. */
   error?: Error;
@@ -135,11 +157,59 @@ export class ScriptedQuery {
   readonly query: QueryFn = ({ prompt, options }) => {
     const queue = options.cwd === this.root ? this.planner : this.worker;
     const script = queue.shift();
-    const call: Call = { options, prompts: [], script };
+    const call: Call = { options, prompts: [], script, transcript: [], tools: [] };
     this.calls.push(call);
     options.abortController.signal.addEventListener("abort", () => (this.aborted += 1));
     return run(script, prompt, call, this.active);
   };
+}
+
+/** Whether a `Tool(pattern)` rule of `disallowedTools` names this Bash command, `*` matching anything. */
+function ruleDenies(rule: string, attempt: ToolAttempt): boolean {
+  const match = /^(\w+)\((.*)\)$/s.exec(rule);
+  if (match === null || match[1] !== attempt.tool || attempt.tool !== "Bash") return false;
+  const pattern = (match[2] ?? "")
+    .split("*")
+    .map((part) => part.replaceAll(/[.+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`^${pattern.join(".*")}$`, "s").test(String(attempt.input["command"]));
+}
+
+/**
+ * Checks a tool call against the session's deny rules and its PreToolUse
+ * hooks. The SDK stops at whichever denies first; the double asks both, so a
+ * test sees each layer's answer.
+ */
+async function tryTool(attempt: ToolAttempt, call: Call): Promise<object[]> {
+  const id = `toolu_${call.tools.length + 1}`;
+  const rule = call.options.disallowedTools.find((each) => ruleDenies(each, attempt));
+  let hook: string | undefined;
+  for (const matcher of call.options.hooks.PreToolUse) {
+    for (const each of matcher.hooks) {
+      const input = {
+        hook_event_name: "PreToolUse",
+        tool_name: attempt.tool,
+        tool_input: attempt.input,
+        cwd: call.options.cwd,
+      };
+      const out = await each(input, id, { signal: new AbortController().signal });
+      const decision = out.hookSpecificOutput;
+      if (decision?.permissionDecision === "deny") hook ??= decision.permissionDecisionReason;
+    }
+  }
+  const ran = rule === undefined && hook === undefined;
+  call.tools.push({ ...attempt, ran, rule, hook });
+  const reason = rule === undefined ? (hook ?? "ok") : `denied by rule ${rule}`;
+  const use = { type: "tool_use", id, name: attempt.tool, input: attempt.input };
+  const answer = { type: "tool_result", tool_use_id: id, is_error: !ran, content: reason };
+  return [
+    { type: "assistant", message: { role: "assistant", content: [use] } },
+    { type: "user", message: { role: "user", content: [answer] } },
+  ];
+}
+
+/** Takes every user message from the stream as the SDK does, recording each. */
+async function readPrompts(prompt: AsyncIterable<UserMessage>, call: Call): Promise<void> {
+  for await (const message of prompt) call.prompts.push(message.message.content);
 }
 
 async function* run(
@@ -153,14 +223,24 @@ async function* run(
     const reader = prompt[Symbol.asyncIterator]();
     const first = await reader.next();
     if (!first.done) call.prompts.push(first.value.message.content);
+    void readPrompts({ [Symbol.asyncIterator]: () => reader }, call);
     if (script === undefined) throw new Error("no script left for this session");
     const [start, ...rest] = script.messages;
-    if (start !== undefined) yield start;
+    for (const step of start === undefined ? [] : [start]) yield* emit(step, call);
     await script.gate?.opened;
-    for (const message of rest) yield message;
+    for (const step of rest) yield* emit(step, call);
     if (script.error !== undefined) throw script.error;
   } finally {
     active.delete(call);
+  }
+}
+
+async function* emit(step: Step, call: Call) {
+  const messages =
+    "attempt" in step ? await tryTool((step as { attempt: ToolAttempt }).attempt, call) : [step];
+  for (const message of messages) {
+    call.transcript.push(message);
+    yield message;
   }
 }
 

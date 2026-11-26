@@ -137,6 +137,11 @@ export interface WorkerSession {
   mainCheckout: string;
   /** The session to resume, or undefined for a new one. */
   resume: string | undefined;
+  /**
+   * A scout task only reports: it may push nothing and start no subagent
+   * (plan section 4.3).
+   */
+  scout?: boolean;
 }
 
 export interface SessionContext {
@@ -153,12 +158,14 @@ export interface SessionContext {
 
 /** The options of one worker's `query()` (plan sections 4.3 and 5.3). */
 export function workerOptions(session: WorkerSession, ctx: SessionContext): QueryOptions {
+  const guard = session.scout === true ? { ...ctx.guard, defaultBranch: null } : ctx.guard;
+  const deny = denyRules(guard.home, guard.port, guard.defaultBranch);
   const options: QueryOptions = {
     cwd: session.worktree,
     permissionMode: "auto",
     permissionPrompts: "none",
-    disallowedTools: denyRules(ctx.guard.home, ctx.guard.port, ctx.guard.defaultBranch),
-    hooks: { PreToolUse: [{ hooks: [preToolUseHook(ctx.guard)], onFailure: "block" }] },
+    disallowedTools: session.scout === true ? [...deny, "Agent"] : deny,
+    hooks: { PreToolUse: [{ hooks: [preToolUseHook(guard)], onFailure: "block" }] },
     settingSources: ["project"],
     projectConfigRoot: session.mainCheckout,
     strictMcpConfig: true,

@@ -38,6 +38,27 @@ order new work is handed out in (`dispatch-order.ts`), and then:
 - **writes** the ledger (`task.dispatched`, `task.status`, `task.pr_ready`,
   `task.merged`, `task.cleaned_up`) and summaries through the board's
   `bin/myshape.sh summary`; workers never write the board;
+- **takes the captain's actions** from `agg/inbox/` each pass, oldest first,
+  and moves each file to `inbox/handled/` once it is handed on:
+  - a worker's `question` opens a hold keyed by its task, its options as the
+    last line 「選項：A | B」; `release` (the work waits) unless the worker
+    delivered its work (`ready` or `landed`), then `close`. A page answer to a
+    `release` hold resumes the worker's session with the answer; one to a
+    `close` hold only closes it;
+  - a `message` for a topic goes into the topic's running worker session, or
+    else to the planner together with the topic's tasks, which may plan a new
+    task; a `direct` goes into the running session, or resumes a stopped
+    worker's session; one that lands after its worker ended is logged and
+    dropped (`deliver` refuses one for a worker already ended);
+  - a worker's `todos` go on the board with `todo add` (item ids under the
+    task id, the task id as `--ref`); once the captain claimed or dropped
+    every open item of a task, the worker's session is resumed to check, and
+    the supervisor runs `todo done` for an item it no longer lists, `todo
+    failed --reason` for one it lists again, and `todo obsolete` for an item
+    no longer needed or left when the task ends;
+  - a topic whose tasks have all landed gets `close-propose`;
+  - every resume goes through the same scheduler (2 sessions, 1 per topic),
+    and the captain's text reaches a session only inside a data frame;
 - **cleans up** a worktree with `git worktree remove` once its task ended
   (after the PR merged or closed, for a PR), never with `--force`, and records
   `blocked` with 「worktree 還有沒推的提交」 instead when it holds commits no remote
@@ -51,6 +72,14 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   `tasks.json` only, worktrees git no longer lists are dropped from
   `tasks.json`, and a lock in the worktree root keeps a second supervisor
   away.
+
+`src/supervisor/hashtags.ts` holds the guarded hashtag operation: it puts one
+hashtag on a topic or takes it off through `bin/myshape.sh hashtag`, only
+when the name is a hashtag name and the captain's `aggregator_may_tag`,
+`aggregator_may_create`, lock, per-topic, board-wide and hourly limits (read
+from `hashtags.json` and `events.jsonl`) allow it. Nothing calls it yet: which
+output may ask for a hashtag change comes with the board's tag list. The
+agent creates no topic and no schedule.
 
 The model is the user's setting, passed to every session unchanged; with no
 setting, sessions get no model option. The subscription token is read from a

@@ -167,18 +167,38 @@ export class StateStore {
   }
 
   /** The answer the captain gave to `task`'s hold, as deliver landed it, or undefined. */
-  readAnswer(task: string): { id: string; answer: string; label: string } | undefined {
+  readAnswer(
+    task: string,
+  ): { id: string; answer: string; label: string; questionSha256: string } | undefined {
     const path = join(this.agg, "answers", `${task}.json`);
     if (!existsSync(path)) return undefined;
     const landed = JSON.parse(readFileSync(path, "utf8")) as {
-      record?: { id?: unknown; answer?: unknown; label?: unknown };
+      record?: { id?: unknown; answer?: unknown; label?: unknown; question_sha256?: unknown };
     };
     const record = landed.record ?? {};
     return {
       id: String(record.id),
       answer: String(record.answer ?? ""),
       label: String(record.label ?? ""),
+      questionSha256: String(record.question_sha256 ?? ""),
     };
+  }
+
+  /** Each file deliver landed in inbox/ and the supervisor has not handled yet, with its text. */
+  readInbox(): { file: string; text: string }[] {
+    const dir = join(this.agg, "inbox");
+    const files: { file: string; text: string }[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || !entry.isFile() || !entry.name.endsWith(".json")) continue;
+      files.push({ file: entry.name, text: readFileSync(join(dir, entry.name), "utf8") });
+    }
+    return files;
+  }
+
+  /** Moves inbox/<file> to inbox/handled/<file>; a file already moved is left as it is. */
+  retireInbox(file: string): void {
+    const from = join(this.agg, "inbox", file);
+    if (existsSync(from)) renameSync(from, join(this.agg, "inbox", "handled", file));
   }
 
   /** Moves answers/<task>.json to answers/handled/<task>.<write-id>.json. */

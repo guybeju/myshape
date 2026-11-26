@@ -184,3 +184,71 @@ describe("spawnCommand", () => {
     );
   });
 });
+
+describe("BoardCommand's board writes", () => {
+  const board = (run: RunCommand) => new BoardCommand(run, BOARD, "/srv/home", ENV);
+
+  it("puts an item on with todo add, one --cmd per command, the task as --ref, nothing on stdin", async () => {
+    const { run, calls } = scripted(ok());
+    const item = {
+      id: "b-1-vpn",
+      title: "登入 VPN",
+      topic: "b",
+      do: "登入",
+      cmds: ["sudo a", "-x b"],
+      ref: "b-1",
+    };
+    expect(await board(run).todoAdd(item)).toBeUndefined();
+    expect(calls).toEqual([
+      {
+        file: BOARD,
+        args: [
+          "todo",
+          "add",
+          "b-1-vpn",
+          "登入 VPN",
+          "--topic",
+          "b",
+          "--do",
+          "登入",
+          "--cmd",
+          "sudo a",
+          "--cmd",
+          "-x b",
+          "--ref",
+          "b-1",
+        ],
+        env: { MYSHAPE_HOME: "/srv/home", ...ENV },
+      },
+    ]);
+  });
+
+  it("closes, rejects and drops items, proposes a close and changes hashtags", async () => {
+    const { run, calls } = scripted();
+    const b = board(run);
+    await b.todoDone("i");
+    await b.todoFailed("i", "還沒好");
+    await b.todoObsolete("i", "不需要");
+    await b.closePropose("t", "都落地了");
+    await b.hashtag("t", "add", "AI");
+    await b.hashtag("t", "remove", "AI");
+    expect(calls.map((call) => call.args)).toEqual([
+      ["todo", "done", "i"],
+      ["todo", "failed", "i", "--reason", "還沒好"],
+      ["todo", "obsolete", "i", "--reason", "不需要"],
+      ["close-propose", "t", "--reason", "都落地了"],
+      ["hashtag", "t", "+AI"],
+      ["hashtag", "t", "--remove", "AI"],
+    ]);
+    expect(calls.every((call) => call.input === undefined)).toBe(true);
+  });
+
+  it("repeats a write once on exit 3 and names the command in a refusal", async () => {
+    const { run, calls } = scripted(
+      { status: 3, stdout: "", stderr: "" },
+      { status: 1, stdout: "", stderr: "沒有這個項目" },
+    );
+    expect(await board(run).todoDone("i")).toBe("myshape.sh todo done exited 1: 沒有這個項目");
+    expect(calls).toHaveLength(2);
+  });
+});

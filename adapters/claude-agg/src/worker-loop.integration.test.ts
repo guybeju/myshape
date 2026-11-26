@@ -1,6 +1,10 @@
 // Step 3's acceptance on a real board: a topic gets a task, its light goes
 // from in progress to done, its summary appears under the topic, and its
-// worktree is removed so `git worktree list` matches tasks.json. The board is
+// worktree is removed so `git worktree list` matches tasks.json. Steps 5 and
+// 6 on the same board: a worker's question answered on the page in two
+// steps, its 要你動手 item claimed on the page and verified, a direct to the
+// ended worker refused, the close proposal, and the guarded hashtag
+// operation with the captain's settings. The board is
 // a scratch board-only root and home on a free port that is never the live
 // board's 47819, started with the root's bin/myshape.sh open and stopped with
 // bin/myshape.sh stop; no test sends a signal. The program is confirmed on
@@ -16,6 +20,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -42,6 +47,8 @@ import {
   ScriptedQuery,
   workerOutput,
 } from "./supervisor/harness.test-helper.js";
+import { BoardCommand } from "./supervisor/commands.js";
+import { HASHTAG_REASON, Tagger } from "./supervisor/hashtags.js";
 import { Supervisor } from "./supervisor/supervisor.js";
 import { REPO_ROOT } from "./test-home.js";
 
@@ -264,6 +271,66 @@ async function setUp(): Promise<void> {
   started = true;
 }
 
+let confirmed = false;
+
+/** Opens the scratch board and confirms the program on the page, once. */
+async function openBoard(): Promise<void> {
+  expect(scratch.port).not.toBe(LIVE_BOARD_PORT);
+  const open = myshape("open");
+  expect(open.status, open.stderr).toBe(0);
+  if (confirmed) return;
+  const first = await http("POST", "programs/confirm", { role: "feed" });
+  const reply = await http("POST", "programs/confirm", { role: "feed", confirm: first["confirm"] });
+  expect(reply["ok"], JSON.stringify(reply)).toBe(true);
+  confirmed = true;
+}
+
+/** A page action that takes two steps: the first answers a code, the second sends it. */
+async function twoStep(route: string, body: Json): Promise<Json> {
+  const first = await http("POST", route, body);
+  if (typeof first["confirm"] !== "string")
+    throw new Error(`no code from ${route}: ${JSON.stringify(first)}`);
+  return http("POST", route, { ...body, confirm: first["confirm"] });
+}
+
+async function writeState(id: unknown): Promise<{ state?: string; error?: string } | undefined> {
+  const writes = (await http("GET", "state"))["writes"] as {
+    id: string;
+    state: string;
+    error?: string;
+  }[];
+  return writes.find((write) => write.id === id);
+}
+
+function boardFile(path: string): string {
+  const file = join(scratch.home, path);
+  return existsSync(file) ? readFileSync(file, "utf8") : "";
+}
+
+function startSupervisor(query: ScriptedQuery, fake: FakeCommands): Promise<Supervisor> {
+  return Supervisor.start(
+    {
+      home: scratch.home,
+      worktreeRoot: scratch.work,
+      boardCommand: join(scratch.root, "bin", "myshape.sh"),
+      port: scratch.port,
+      repos: { app: { path: scratch.main, base: "origin/main", defaultBranch: "main" } },
+      model: undefined,
+    },
+    {
+      query: query.query,
+      run: runner(fake),
+      token: CANARY,
+      env: scratch.env,
+      nowMs: () => Date.now(),
+      log: (line) => logs.push(line),
+      realPath: existingRealPath,
+      pid: process.pid,
+      isAlive: () => false,
+    },
+  );
+}
+
 /** The supervisor's runner: the scratch root's real myshape.sh, real git in the scratch directory, gh in memory. */
 function runner(fake: FakeCommands): RunCommand {
   const board = join(scratch.root, "bin", "myshape.sh");
@@ -300,15 +367,7 @@ describe.skipIf(!IN_CI)(
     it(
       "takes a topic to a task, a done light, a summary under the topic, and no worktree left",
       async () => {
-        expect(scratch.port).not.toBe(LIVE_BOARD_PORT);
-        const open = myshape("open");
-        expect(open.status, open.stderr).toBe(0);
-        const first = await http("POST", "programs/confirm", { role: "feed" });
-        const confirmed = await http("POST", "programs/confirm", {
-          role: "feed",
-          confirm: first["confirm"],
-        });
-        expect(confirmed["ok"], JSON.stringify(confirmed)).toBe(true);
+        await openBoard();
         const made = myshape("create", "建置", "--goal", "把看板接上", "--id", "build");
         expect(made.status, made.stderr).toBe(0);
 
@@ -325,27 +384,7 @@ describe.skipIf(!IN_CI)(
           messages: [init("w"), result(workerOutput("ready", { pr_url: PR }), 0.3)],
           gate,
         });
-        const supervisor = await Supervisor.start(
-          {
-            home: scratch.home,
-            worktreeRoot: scratch.work,
-            boardCommand: join(scratch.root, "bin", "myshape.sh"),
-            port: scratch.port,
-            repos: { app: { path: scratch.main, base: "origin/main", defaultBranch: "main" } },
-            model: undefined,
-          },
-          {
-            query: query.query,
-            run: runner(fake),
-            token: CANARY,
-            env: scratch.env,
-            nowMs: () => Date.now(),
-            log: (line) => logs.push(line),
-            realPath: existingRealPath,
-            pid: process.pid,
-            isAlive: () => false,
-          },
-        );
+        const supervisor = await startSupervisor(query, fake);
         supervisor.tick();
         await waitFor("the worker to start", () => query.active.size === 1);
         await waitFor(
@@ -389,10 +428,170 @@ describe.skipIf(!IN_CI)(
         ]) {
           expect(readFileSync(join(scratch.home, file), "utf8"), file).not.toContain(CANARY);
         }
-        expect(logs, serviceLog()).toEqual([]);
+        expect(proposed("build")).toBe(true);
+        expect(
+          logs.filter((line) => !line.startsWith("proposed closing topic build")),
+          serviceLog(),
+        ).toEqual([]);
+        supervisor.close();
+      },
+      STEP_MS,
+    );
+
+    it(
+      "takes a question, a two-step answer, a todo claim, a refused direct and hashtags through the board",
+      async () => {
+        await openBoard();
+        logs.length = 0;
+        const made = myshape("create", "問答", "--goal", "要 captain 決定", "--id", "ask");
+        expect(made.status, made.stderr).toBe(0);
+        const fake = new FakeCommands("/nowhere/myshape.sh");
+        const query = new ScriptedQuery(scratch.work);
+        const work = plan([{ title: "問", repo: "app", kind: "scout", prompt: "先問" }]);
+        query.planner.push({ messages: [init("p2", "dontAsk"), result(work)] });
+        const command = `${join(scratch.root, "bin", "myshape.sh")} todo done ask-1-vpn`;
+        const tryBoard = { attempt: { tool: "Bash", input: { command } } };
+        const question = { title: "要留快取嗎", text: "舊的快取要留嗎？", options: ["留", "不留"] };
+        const vpn = { id: "vpn", title: "登入 VPN", do: "用公司帳號登入", cmds: ["sudo true"] };
+        query.worker.push({
+          messages: [
+            init("w2"),
+            tryBoard,
+            result(workerOutput("report", { question, todos: [vpn] })),
+          ],
+        });
+        query.worker.push({
+          messages: [init("w2"), tryBoard, result(workerOutput("report", { todos: [vpn] }))],
+        });
+        query.worker.push({ messages: [init("w2"), result(workerOutput("report"))] });
+        const supervisor = await startSupervisor(query, fake);
+        supervisor.tick();
+        await supervisor.idle();
+        await waitFor(
+          "a light waiting for the captain",
+          async () => (await light("ask-1")) === "ask:decide",
+        );
+        expect(boardItems()).toEqual(["ask-1-vpn"]);
+
+        const answer = await twoStep("holds/answer", {
+          home: "main",
+          task: "ask-1",
+          answer: "不留",
+          label: "不留",
+        });
+        await waitFor(
+          "the answer",
+          async () => (await writeState(answer["write_id"]))?.state === "delivered",
+        );
+        supervisor.tick();
+        await supervisor.idle();
+        expect(query.calls.at(-1)?.options.resume).toBe("w2");
+        expect(query.calls.at(-1)?.prompts[0]).toContain('"answer": "不留"');
+        await waitFor("a stuck light", async () => (await light("ask-1")) === "ask:stuck");
+
+        const claim = await http("POST", "todos/claim", { task: "ask-1-vpn" });
+        expect(claim["ok"], JSON.stringify(claim)).toBe(true);
+        await waitFor("the claim's notice", () => hasNotice("todo.claimed"));
+        supervisor.tick();
+        await supervisor.idle();
+        await waitFor("the item closed", () => !boardItems().includes("ask-1-vpn"));
+        expect(records("todo.done").map((record) => record["by"])).toEqual(["aggregator"]);
+        await waitFor("a done light", async () => (await light("ask-1")) === "ask:done");
+        await waitFor("the close proposal", () => proposed("ask"));
+
+        const direct = await http("POST", "direct", {
+          home: "main",
+          task: "ask-1",
+          text: "還在嗎",
+        });
+        await waitFor(
+          "the direct",
+          async () => (await writeState(direct["write_id"]))?.state === "failed",
+        );
+        expect((await writeState(direct["write_id"]))?.error).toContain(
+          "這個 worker 已經結束，訊息沒有送出。",
+        );
+
+        const boardCommand = join(scratch.root, "bin", "myshape.sh");
+        const sent: string[][] = [];
+        const recording: RunCommand = async (call) => {
+          if (call.file === boardCommand) sent.push([...call.args]);
+          return runner(fake)(call);
+        };
+        const board = new BoardCommand(recording, boardCommand, scratch.home, scratch.env);
+        const tagger = new Tagger(scratch.home, board, () => Date.now());
+        expect(await tagger.change("ask", "add", "AGG_TEST")).toEqual({ sent: true });
+        expect(records("hashtag.added").map((record) => [record["by"], record["topic"]])).toEqual([
+          ["aggregator", "ask"],
+        ]);
+        const hourly = await http("POST", "hashtags/settings", { aggregator_hourly_max: 1 });
+        expect(hourly["ok"], JSON.stringify(hourly)).toBe(true);
+        expect(await tagger.change("ask", "add", "AGG_MORE")).toEqual({
+          sent: false,
+          reason: HASHTAG_REASON.hourly(1, 1),
+        });
+        const off = await http("POST", "hashtags/settings", {
+          aggregator_may_tag: false,
+          aggregator_hourly_max: 20,
+        });
+        expect(off["ok"], JSON.stringify(off)).toBe(true);
+        expect(await tagger.change("ask", "remove", "AGG_TEST")).toEqual({
+          sent: false,
+          reason: HASHTAG_REASON.mayTag,
+        });
+        expect(sent).toEqual([["hashtag", "ask", "+AGG_TEST"]]);
+        expect(records("hashtag.removed")).toEqual([]);
+
+        for (const call of query.calls) {
+          expect(call.tools.filter((tool) => tool.ran)).toEqual([]);
+        }
+        expect(boardFile("data/myshape/events.jsonl")).not.toContain(CANARY);
+        expect(
+          logs.filter((line) => !/^(proposed closing|task ask-1: (the captain|passed))/.test(line)),
+          serviceLog(),
+        ).toEqual([]);
         supervisor.close();
       },
       STEP_MS,
     );
   },
 );
+
+/** Whether an inbox file (waiting or handled) holds a notice with this event. */
+function hasNotice(event: string): boolean {
+  for (const dir of ["inbox", "inbox/handled"]) {
+    const path = join(scratch.home, "agg", dir);
+    if (!existsSync(path)) continue;
+    for (const name of readdirSync(path)) {
+      if (
+        name.endsWith(".json") &&
+        readFileSync(join(path, name), "utf8").includes(`"event":"${event}"`)
+      )
+        return true;
+    }
+  }
+  return false;
+}
+
+/** The board's system records of this kind in data/myshape/events.jsonl. */
+function records(kind: string): Json[] {
+  return boardFile("data/myshape/events.jsonl")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Json)
+    .filter((record) => record["kind"] === kind);
+}
+
+/** The ids of the items on the board's 要你動手 list (todos.json `items`; its outbox names closed ones too). */
+function boardItems(): string[] {
+  const doc = JSON.parse(boardFile("data/myshape/todos.json") || "{}") as { items?: Json };
+  return Object.keys(doc.items ?? {});
+}
+
+/** Whether the topic carries a close proposal in data/topics.json. */
+function proposed(topic: string): boolean {
+  const doc = JSON.parse(boardFile("data/topics.json") || "{}") as {
+    topics?: Record<string, { close_proposal?: unknown }>;
+  };
+  return doc.topics?.[topic]?.close_proposal !== undefined;
+}

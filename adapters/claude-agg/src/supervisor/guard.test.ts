@@ -19,6 +19,7 @@ const CTX: GuardContext = {
   port: 47_829,
   defaultBranch: "main",
   realPath: (path) => path,
+  userHome: "/srv",
 };
 
 function bash(command: string, ctx = CTX) {
@@ -259,5 +260,50 @@ describe("existingRealPath", () => {
       join(dir, "home", "state", "token"),
     );
     expect(existingRealPath("/")).toBe("/");
+  });
+});
+
+describe("the hardening of this step", () => {
+  it.each([
+    "cat ~/agg-home/agg/tasks.json",
+    "cat $HOME/agg-home/agg/answers/t-1.json",
+    'echo x > "${HOME}/agg-home/agg/answers/t-1.json"',
+    "cd ~ && cat agg-home/agg/holds.json; cat ~/agg-home/x",
+    "F=~/agg-home/agg/tasks.json",
+  ])("refuses the board home spelled with ~ or $HOME: %s", (command) => {
+    expect(bash(command)).toEqual(denied(REASONS.home));
+  });
+
+  it("refuses a path tool given the board home with ~", () => {
+    expect(guardToolUse("Read", { file_path: "~/agg-home/agg/tasks.json" }, CWD, CTX)).toEqual(
+      denied(REASONS.home),
+    );
+  });
+
+  it("lets ~ and $HOME elsewhere through", () => {
+    expect(bash("cat ~/.gitconfig")).toEqual({ allow: true });
+    expect(bash("ls $HOMEDIR/agg-home")).toEqual({ allow: true });
+    expect(bash("git log --format=%an~1")).toEqual({ allow: true });
+  });
+
+  it.each(["git push origin @", "git push origin +@"])("refuses %s like HEAD", (command) => {
+    expect(bash(command)).toEqual(denied(REASONS.pushUnnamed));
+  });
+
+  it("refuses @ pushed onto the default branch", () => {
+    expect(bash("git push origin @:main")).toEqual(denied(REASONS.pushDefault));
+    expect(bash("git push origin @:agg/t-1")).toEqual({ allow: true });
+  });
+
+  it.each([
+    `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`,
+    "gh api graphql -F query=@m.graphql -f q=enablePullRequestAutoMerge",
+    'gh api graphql -f query="mutation{mergeBranch(input:{}){clientMutationId}}"',
+  ])("refuses a GraphQL merge: %s", (command) => {
+    expect(bash(command)).toEqual(denied(REASONS.merge));
+  });
+
+  it("lets a GraphQL read through", () => {
+    expect(bash("gh api graphql -f query='{ viewer { login } }'")).toEqual({ allow: true });
   });
 });

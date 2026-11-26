@@ -4,14 +4,37 @@
 
 import type { InitMessage, QueryRun, ResultMessage, UserMessage } from "./sdk.js";
 
-/** The streaming input: one prompt now, closed when the session has answered. */
+/**
+ * The streaming input: one prompt now, more pushed while the session runs,
+ * closed when the session has answered. A pushed message counts as handed on
+ * once the session has taken it from the stream; one still waiting when the
+ * stream closes was not, and its `onTaken` never runs.
+ */
 export class PromptStream implements AsyncIterable<UserMessage> {
-  private readonly pending: UserMessage[] = [];
+  private readonly pending: { message: UserMessage; onTaken: () => void }[] = [];
   private wake: (() => void) | undefined;
   private closed = false;
 
   constructor(first: string) {
-    this.pending.push(userMessage(first));
+    this.pending.push({ message: userMessage(first), onTaken: () => {} });
+  }
+
+  /** Whether the stream still takes messages. */
+  get open(): boolean {
+    return !this.closed;
+  }
+
+  /**
+   * Queues `content` for the session.
+   *
+   * Returns:
+   *   false when the stream is closed and nothing was queued.
+   */
+  push(content: string, onTaken: () => void): boolean {
+    if (this.closed) return false;
+    this.pending.push({ message: userMessage(content), onTaken });
+    this.wake?.();
+    return true;
   }
 
   close(): void {
@@ -21,12 +44,13 @@ export class PromptStream implements AsyncIterable<UserMessage> {
 
   async *[Symbol.asyncIterator](): AsyncIterator<UserMessage> {
     for (;;) {
+      if (this.closed) return;
       const next = this.pending.shift();
       if (next !== undefined) {
-        yield next;
+        next.onTaken();
+        yield next.message;
         continue;
       }
-      if (this.closed) return;
       await new Promise<void>((resolve) => (this.wake = resolve));
       this.wake = undefined;
     }

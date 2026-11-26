@@ -18,6 +18,7 @@ const guard = {
   port: 47_829,
   defaultBranch: "main",
   realPath: (p: string) => p,
+  userHome: ENV.HOME,
 };
 const CTX: SessionContext = {
   model: undefined,
@@ -100,6 +101,28 @@ describe("workerOptions", () => {
     );
     expect(options.model).toBe("users-choice");
     expect(options.resume).toBe("sess-1");
+  });
+
+  it("lets a scout push nothing and start no subagent", async () => {
+    const options = workerOptions({ ...SESSION, scout: true }, CTX);
+    const pushes = RULES.filter((rule) => rule.startsWith("Bash(git push"));
+    const rest = RULES.filter((rule) => !pushes.includes(rule));
+    expect(options.disallowedTools).toEqual([
+      ...rest.slice(0, 5),
+      "Bash(git push*)",
+      ...rest.slice(5),
+      "Agent",
+    ]);
+    const [hook] = options.hooks.PreToolUse[0]?.hooks ?? [];
+    const input = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "git push origin agg/t-1" },
+      cwd: "/work/t-1",
+    };
+    const out = await hook?.(input, "u", { signal: abort.signal });
+    expect(out?.hookSpecificOutput?.permissionDecisionReason).toBe(REASONS.noPush);
+    expect(workerOptions(SESSION, CTX).disallowedTools).not.toContain("Agent");
   });
 
   it("names no model when the user set none", () => {

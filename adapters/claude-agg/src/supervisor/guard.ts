@@ -2,10 +2,12 @@
 // behind the `disallowedTools` rules (plan section 5.3). It refuses
 //   - running myshape.sh (only the supervisor writes the board),
 //   - touching the board home, including state/myshape/** and the agent's own
-//     state files, by path or by naming it in a command,
-//   - merging a pull request,
+//     state files, by path or by naming it in a command (also as ~/…,
+//     $HOME/… or ${HOME}/…),
+//   - merging a pull request (gh pr merge, the REST merge route, or a GraphQL
+//     merge mutation),
 //   - pushing to the repository's default branch, or a push that does not
-//     name its branch,
+//     name its branch (HEAD and @ alike),
 //   - requests to the board's port.
 // A shell command can be written in more ways than any check can follow, so
 // this is a guard rail, not a boundary. Anything it cannot read is refused.
@@ -27,6 +29,8 @@ export interface GuardContext {
   defaultBranch: string | null;
   /** An absolute path with every symbolic link in it resolved, as far as it exists. */
   realPath: (path: string) => string;
+  /** The session's HOME, which `~` and `$HOME` stand for in a command or path. */
+  userHome: string;
 }
 
 export type GuardDecision = { allow: true } | { allow: false; reason: string };
@@ -96,6 +100,13 @@ function normalize(command: string): string {
   return command.replaceAll(/["'\\`]/g, "").replaceAll(/\s+/g, " ");
 }
 
+/** `text` with a leading ~ and every $HOME or ${HOME} spelled out as the session's HOME. */
+function expandHome(text: string, userHome: string): string {
+  return text
+    .replaceAll(/\$\{HOME\}|\$HOME(?![A-Za-z0-9_])/g, userHome)
+    .replaceAll(/(^|[\s=:])~(?=\/|$)/g, `$1${userHome}`);
+}
+
 function checkPaths(tool: string, input: Record<string, unknown>, cwd: string, ctx: GuardContext) {
   const fields = PATH_TOOLS[tool] ?? [];
   const paths = [cwd];
@@ -103,7 +114,8 @@ function checkPaths(tool: string, input: Record<string, unknown>, cwd: string, c
     const value = input[field];
     if (value === undefined) continue;
     if (typeof value !== "string") return deny(REASONS.unreadable);
-    paths.push(field === "pattern" ? globBase(value, input["path"]) : value);
+    const path = expandHome(value, ctx.userHome);
+    paths.push(field === "pattern" ? globBase(path, input["path"]) : path);
   }
   for (const path of paths) {
     if (inside(ctx.realPath(resolve(cwd, path)), ctx.home)) return deny(REASONS.home);
@@ -148,8 +160,10 @@ function pushes(words: readonly string[]): string[][] {
   return found;
 }
 
+/** A ref as a branch name; `@` is git's other spelling of HEAD. */
 function refName(ref: string): string {
-  return ref.replace(/^\+/, "").replace(/^refs\/heads\//, "");
+  const name = ref.replace(/^\+/, "").replace(/^refs\/heads\//, "");
+  return name === "@" ? "HEAD" : name;
 }
 
 function checkPush(args: readonly string[], defaultBranch: string | null): GuardDecision {
@@ -175,13 +189,25 @@ function checkPush(args: readonly string[], defaultBranch: string | null): Guard
   return ALLOW;
 }
 
+/** GraphQL mutations that merge a pull request or set it to merge by itself. */
+const MERGE_MUTATION =
+  /mergePullRequest|enablePullRequestAutoMerge|mergeBranch|enqueuePullRequest/i;
+
+function namesHome(plain: string, ctx: GuardContext): boolean {
+  const expanded = expandHome(plain, ctx.realPath(ctx.userHome));
+  return [plain, expandHome(plain, ctx.userHome), expanded].some((text) => text.includes(ctx.home));
+}
+
 function checkCommand(command: string, ctx: GuardContext): GuardDecision {
   const plain = normalize(command);
   if (/myshape(-lib)?\.sh/.test(plain)) return deny(REASONS.board);
-  if (plain.includes(ctx.home) || /MYSHAPE_|state\/myshape/.test(plain)) {
+  if (namesHome(plain, ctx) || /MYSHAPE_|state\/myshape/.test(plain)) {
     return deny(REASONS.home);
   }
   if (/\bgh pr merge\b/.test(plain) || /\bgh api\b.*\/merge\b/.test(plain)) {
+    return deny(REASONS.merge);
+  }
+  if (/\bgh api\b/.test(plain) && /\bgraphql\b/.test(plain) && MERGE_MUTATION.test(plain)) {
     return deny(REASONS.merge);
   }
   if (new RegExp(`:${ctx.port}(?!\\d)`).test(plain)) return deny(REASONS.port);
