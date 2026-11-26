@@ -1,9 +1,9 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import { BoardFileError, readBoard } from "./board-files.js";
+import { BoardFileError, HASHTAG_DEFAULTS, readBoard, readTodos } from "./board-files.js";
 import { boardPath, removeHomes, writeHome } from "./fixtures.test-helper.js";
 import type { HomeFiles } from "./fixtures.test-helper.js";
 
@@ -155,5 +155,83 @@ describe("readBoard", () => {
         },
       ],
     ]);
+  });
+});
+
+describe("what the intervention reads", () => {
+  it("names the topics that carry a close proposal", () => {
+    const board = readBoard(
+      writeHome({
+        topics: {
+          topics: {
+            a: { name: "A", close_proposal: { at: "2026-11-27T00:00:00Z", reason: "r" } },
+            b: { name: "B" },
+            c: { name: "C", close_proposal: "x" },
+          },
+        },
+      }),
+    );
+    expect([...board.topics.proposed]).toEqual(["a"]);
+  });
+
+  it("reads the hashtag settings, at their defaults when missing or out of range", () => {
+    const defaults = readBoard(writeHome({ hashtags: {} })).hashtags.settings;
+    expect(defaults).toEqual(HASHTAG_DEFAULTS);
+    const set = readBoard(
+      writeHome({
+        hashtags: {
+          settings: {
+            aggregator_may_tag: false,
+            aggregator_may_create: "no",
+            per_topic_max: 33,
+            board_max: 500,
+            aggregator_hourly_max: 0,
+          },
+        },
+      }),
+    ).hashtags.settings;
+    expect(set).toEqual({
+      aggregator_may_tag: false,
+      aggregator_may_create: true,
+      per_topic_max: 8,
+      board_max: 500,
+      aggregator_hourly_max: 0,
+    });
+    const low = readBoard(
+      writeHome({
+        hashtags: { settings: { per_topic_max: 0, board_max: 1.5, aggregator_hourly_max: 1001 } },
+      }),
+    ).hashtags.settings;
+    expect([low.per_topic_max, low.board_max, low.aggregator_hourly_max]).toEqual([8, 50, 20]);
+  });
+
+  it("reads which hashtags are locked, by key", () => {
+    const board = readBoard(
+      writeHome({
+        hashtags: { hashtags: { AI: { key: "ai", locked: true }, B: { key: "b", locked: "yes" } } },
+      }),
+    );
+    expect([...board.hashtags.locked]).toEqual(["ai"]);
+  });
+
+  it("reads the board's todo items, skipping those it cannot use", () => {
+    const home = writeHome({});
+    writeFileSync(
+      join(home, "data", "myshape", "todos.json"),
+      JSON.stringify({
+        v: 1,
+        items: {
+          a: { state: "claimed", ref: "t-1", title: "A" },
+          b: { state: "open" },
+          c: { state: "gone", ref: "t-1" },
+          d: "x",
+        },
+      }),
+    );
+    expect([...readTodos(home)]).toEqual([
+      ["a", { state: "claimed", ref: "t-1", title: "A" }],
+      ["b", { state: "open", ref: "", title: "" }],
+    ]);
+    expect(readTodos(join(home, "missing")).size).toBe(0);
   });
 });
