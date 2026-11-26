@@ -374,7 +374,86 @@ test_schedules() {
   pass "schedule commands keep a topic coming up on a timetable, held in 待辦"
 }
 
+# audit_ids <write id>: how many first lines the audit log has for that write.
+audit_ids() {
+  jq -r --arg id "$1" 'select(.write_id == $id and .sending != null) | .write_id' \
+    "$HOME_DIR/state/myshape/audit.jsonl" | wc -l | tr -d ' '
+}
+
+# The board's clock, which schedule tick runs once, against schedules.json
+# written while the board is stopped (times are relative to now): csoon is up
+# in about twelve minutes, so with its 15-minute lead its occurrence opens with
+# a coming-up notice, a few minutes late, not late enough to say so;
+# cmissed's window passed while the board was down, so it gets one missed
+# notice; ccold's open occurrence is past its closes_by, so the board ends it.
+# Every notice has its fixed id, and ticking again hands nothing over twice.
+test_schedule_tick() {
+  local times soon_hm soon gone_hm gone cold_hm cold an_hour_ago four_hours_ago two_hours_ago file
+  local pre missed key out
+  t create "Clock soon" --goal "g" --id csoon --queue later >/dev/null
+  t create "Clock missed" --goal "g" --id cmissed --queue later >/dev/null
+  t create "Clock cold" --goal "g" --id ccold --queue later >/dev/null
+  t stop >/dev/null
+  times=$(node -e '
+    const m = 60000, now = Math.floor(Date.now() / m) * m;
+    const iso = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const hm = (t) => iso(t).slice(11, 16);
+    const compact = (t) => iso(t).replace(/[-:]/g, "").slice(0, 13) + "Z";
+    const soon = now + 12 * m, gone = now - 180 * m, cold = now - 120 * m;
+    console.log([hm(soon), compact(soon), hm(gone), compact(gone), hm(cold), compact(cold),
+      iso(now - 60 * m), iso(now - 240 * m), iso(cold)].join(" "));') || fail "node could not compute the times"
+  read -r soon_hm soon gone_hm gone cold_hm cold an_hour_ago four_hours_ago two_hours_ago <<< "$times"
+  file="$HOME_DIR/data/myshape/schedules.json"
+  [ -f "$file" ] || printf '{"v":1}\n' > "$file"
+  jq --arg soon "daily $soon_hm" --arg gone "daily $gone_hm" --arg cold "daily $cold_hm" \
+    --arg hour "$an_hour_ago" --arg four "$four_hours_ago" --arg two "$two_hours_ago" \
+    --arg ckey "ccold:$cold" '
+    def daily($topic; $rule; $made): {topic: $topic, title: "old title", rule: $rule, tz: "UTC",
+      duration_min: 30, lead_min: 15, rt: "hard-rt", rt_locked: false, state: "on", locked: true,
+      by: "captain", created_at: $made};
+    .series.csoon = daily("csoon"; $soon; $hour)
+    | .series.cmissed = (daily("cmissed"; $gone; $four) + {checked_through: $four, rt: "none"})
+    | .series.ccold = daily("ccold"; $cold; $four)
+    | .occurrences[$ckey] = {series: "ccold", at: $two, state: "due", opened_at: $two,
+        closes_by: $hour}' "$file" > "$TMP_ROOT/schedules.json" || fail "could not write the schedules"
+  cp "$TMP_ROOT/schedules.json" "$file"
+
+  out=$(t schedule tick) || fail "schedule tick failed: $out"
+  assert_contains "$out" "ok schedule tick：" "schedule tick must say what the check did"
+  pre="w-s-csoon-$soon-pre"
+  missed="w-s-cmissed-$gone-missed"
+  key="csoon:$soon"
+  assert_equals "upcoming|$pre" "$(jq -r --arg k "$key" '.occurrences[$k] | "\(.state)|\(.notices.pre)"' "$file")" \
+    "an occurrence inside its window must open with its coming-up notice's fixed id"
+  assert_equals 1 "$(audit_ids "$pre")" "the coming-up notice must be handed over once, under its fixed id"
+  assert_equals "schedule.upcoming|true|false" \
+    "$(jq -r --arg id "$pre" 'select(.write_id == $id and .sending != null) | .sending.action
+      | "\(.event)|\(.text | startswith("排程「Clock soon」"))|\(.text | contains("old title"))"' \
+      "$HOME_DIR/state/myshape/audit.jsonl")" \
+    "the coming-up notice must name the topic, not the schedule's title"
+  assert_contains "$(jq -r --arg id "$pre" 'select(.write_id == $id and .sending != null) | .sending.action.text' \
+    "$HOME_DIR/state/myshape/audit.jsonl")" "（議題 csoon，這一場 $key）（hard-rt）" \
+    "the coming-up notice must carry the topic id, the occurrence key and the rt word"
+  assert_equals "missed|$missed" "$(jq -r '.recent.cmissed[-1] | "\(.outcome)|\(.notice)"' "$file")" \
+    "a window that passed while the board was down must be recorded missed with its notice's id"
+  assert_equals 1 "$(audit_ids "$missed")" "the missed notice must be handed over once"
+  assert_equals "untaken|board" "$(jq -r '.recent.ccold[-1] | "\(.outcome)|\(.by)"' "$file")" \
+    "an occurrence past its closes_by must be ended by the board"
+  assert_equals "null" "$(jq -r --arg k "ccold:$cold" '.occurrences[$k]' "$file")" \
+    "an ended occurrence must leave the open ones"
+  assert_equals "board" "$(jq -r 'select(.kind == "occurrence.opened" and .topic == "csoon") | .by' \
+    "$HOME_DIR/data/myshape/events.jsonl" | sort -u | tr -d '\n')" "the clock's records must be by the board"
+
+  out=$(t schedule tick) || fail "a second schedule tick failed: $out"
+  out=$(t schedule tick) || fail "a third schedule tick failed: $out"
+  assert_equals "1|1" "$(audit_ids "$pre")|$(audit_ids "$missed")" \
+    "ticking again must hand no notice over twice"
+  assert_equals 1 "$(jq -r 'select(.kind == "occurrence.opened" and .topic == "csoon") | .rid' \
+    "$HOME_DIR/data/myshape/events.jsonl" | wc -l | tr -d ' ')" "ticking again must open nothing twice"
+  pass "schedule tick opens, sends under fixed ids, ends and reports missed, once"
+}
+
 fm_test_run test_create test_move test_rename_goal_and_close_propose \
   test_archive_and_reopen test_merge test_hashtags test_reset_token test_confirms_leftover_proposals \
-  test_secondmate_home_cannot_create test_schedules
+  test_secondmate_home_cannot_create test_schedules test_schedule_tick
 t stop >/dev/null

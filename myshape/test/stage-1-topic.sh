@@ -216,6 +216,7 @@ SH
       'schedule rt') case_args='schedule rt parked hard-rt' ;;
       'schedule take') case_args='schedule take parked:20991130T0200Z' ;;
       'schedule close') case_args='schedule close parked:20991130T0200Z done' ;;
+      'schedule tick') case_args='schedule tick' ;;
       *) fail "myshape.sh $sub has no case here: add one, and an operation for it if it changes the board" ;;
     esac
     : > "$log"
@@ -228,7 +229,8 @@ SH
     # The client turns hashtag +NAME into the hashtag-add operation.
     [ "$op" != hashtag ] || op=hashtag-add
     case "$sub" in
-      open | status | stop | restart | reset-token | summary | retract | which | find) ;;
+      # schedule tick runs the board's own clock check; it is no operation of the table.
+      open | status | stop | restart | reset-token | summary | retract | which | find | 'schedule tick') ;;
       *) printf '%s\n' "$ops" | grep -qxF "$op" || fail "myshape.sh $sub changes the board but $op is not an operation in OPERATIONS" ;;
     esac
   done <<< "$subs"

@@ -522,7 +522,85 @@ test_closed_item_is_only_a_note() {
   pass "a closed hands-on item is a note for the captain's close and nothing for the aggregator's, adopted or not"
 }
 
+# schedule_notice <id> <event> <text>: the contract's notice record as the
+# board's schedule clock sends it, under a fixed id, with an occurrence.
+schedule_notice() {
+  jq -c --arg id "$1" --arg event "$2" --arg text "$3" '.id = $id | .event = $event | .text = $text
+    | .occurrence = {key: "weekly-sync:20261130T0200Z", at: "2026-11-30T02:00:00Z",
+        local: "2026-11-30T10:00+08:00", phase: "pre", late_min: 0, rt: "hard-rt",
+        expires_at: "2026-11-30T02:00:00Z"}' "$CONTRACT/action-notice.json"
+}
+
+# A notice whose event this side does not know is an ordinary note: its exact
+# text under request id tb-<id>, and nothing else is run, whatever else the
+# record carries. The board's schedule clock sends such events.
+test_unknown_notice_event_is_a_note() {
+  local text='排程「週會」11-30（一）10:00 開始，還有 15 分鐘（議題 billing，這一場 weekly-sync:20261130T0200Z）（hard-rt）'
+  local missed='排程「看信」11-27（五）06:00 錯過了：看板當時沒在跑，這一場沒有通知（議題 billing，這一場 mail-0600:20261126T2200Z）（soft-rt）'
+  fresh
+  assert_equals "$DELIVERED" \
+    "$(deliver "$(schedule_notice w-s-weekly-sync-20261130T0200Z-pre schedule.upcoming "$text")")" \
+    "a notice with an unknown event must be delivered"
+  assert_equals "$(line fm-inbox.sh 'note|--request-id|tb-w-s-weekly-sync-20261130T0200Z-pre|-|' "$MAIN" "$text")" \
+    "$(cat "$TB_LOG")" "an unknown event must run only fm-inbox.sh note, with request id tb-<id>"
+  raw_is fm-inbox.sh "$text" "an unknown event's note body must be its exact text, without the occurrence"
+  fresh
+  assert_equals "$DELIVERED" \
+    "$(deliver "$(schedule_notice w-s-mail-0600-20261126T2200Z-missed schedule.missed "$missed" | jq -c '.by = "aggregator"')")" \
+    "an unknown event that names the aggregator must still be delivered"
+  assert_equals "$(line fm-inbox.sh 'note|--request-id|tb-w-s-mail-0600-20261126T2200Z-missed|-|' "$MAIN" "$missed")" \
+    "$(cat "$TB_LOG")" "only todo.closed skips the note for the aggregator's own act"
+  pass "a notice with an event this side does not know is its text as a note, under tb-<id>"
+}
+
+# notes_for <home> <request id>: the notes the real inbox holds under that request id, waiting or handled.
+notes_for() {
+  grep -rlxF --include='*.note' "request_id=$2" "$1/state/inbox" 2>/dev/null || true
+}
+
+# The same notices against the real fm-inbox.sh in a scratch home: the inbox
+# accepts the fixed ids' request ids, up to the longest a 64-character schedule
+# id gives (93 characters), keeps exactly one note per id however often it is
+# delivered, and keeps the text as its body. Whether the wake step succeeds
+# under the fake root is not asserted: a note saved but not announced is a
+# retry, which the board repeats under the same id.
+test_schedule_notice_with_the_real_inbox() {
+  local root home id long note body outcome out
+  [ -x "$ROOT/bin/fm-inbox.sh" ] || { pass "skip: no fm-inbox.sh in this root"; return 0; }
+  root="$TMP_ROOT/real-inbox-root"
+  tb_make_fake_root "$root"
+  fronts "$root"
+  rm "$root/bin/fm-inbox.sh"
+  ln -s "$ROOT/bin/fm-inbox.sh" "$root/bin/fm-inbox.sh"
+  home=$MAIN
+  id=w-s-weekly-sync-20261130T0200Z-pre
+  long="w-s-$(printf 'a%.0s' $(seq 1 64))-20261130T0200Z-missed"
+  assert_equals 93 "$(printf 'tb-%s' "$long" | wc -c | tr -d ' ')" "the longest fixed id's request id is 93 characters"
+  for outcome in first again; do
+    fresh
+    out=$(deliver_with "$root" "$(schedule_notice "$id" schedule.upcoming '排程「週會」11-30（一）10:00 開始')"$'\n')
+    case "$out" in
+      "$DELIVERED" | '{"outcome":"retry",'*) ;;
+      *) fail "the real inbox must take a schedule notice ($outcome), got: $out" ;;
+    esac
+  done
+  assert_equals 1 "$(notes_for "$home" "tb-$id" | wc -l | tr -d ' ')" \
+    "the real inbox must keep exactly one note for a fixed id delivered twice"
+  note=$(notes_for "$home" "tb-$id")
+  body=$(sed '1,/^--$/d' "$note")
+  assert_equals '排程「週會」11-30（一）10:00 開始' "$body" "the note's body must be the notice's text"
+  out=$(deliver_with "$root" "$(schedule_notice "$long" schedule.missed '排程「看信」錯過了')"$'\n')
+  case "$out" in
+    "$DELIVERED" | '{"outcome":"retry",'*) ;;
+    *) fail "the real inbox must take the longest fixed id, got: $out" ;;
+  esac
+  assert_equals 1 "$(notes_for "$home" "tb-$long" | wc -l | tr -d ' ')" \
+    "the real inbox must keep the longest fixed id's note"
+  pass "the real fm-inbox.sh keeps one note per schedule notice id, the longest included"
+}
+
 fm_test_run test_message_and_notice_become_notes test_note_outcomes test_direct_runs_fm_send \
   test_direct_outcomes test_answer_runs_the_hold_tool_then_a_note test_answer_outcomes \
   test_tag_runs_fm_board_tag test_tag_outcomes test_remote_tag_sends_the_copy_first test_malformed_records_fail \
-  test_answer_with_the_real_hold_tool test_closed_item_is_only_a_note
+  test_answer_with_the_real_hold_tool test_closed_item_is_only_a_note \
+  test_unknown_notice_event_is_a_note test_schedule_notice_with_the_real_inbox
