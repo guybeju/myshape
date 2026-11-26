@@ -89,8 +89,11 @@ order new work is handed out in (`dispatch-order.ts`), and then:
     saying it was missed, filed under the topic;
   - an occurrence's tasks are named after it (`<schedule>-at-<UTC>-<n>`, a
     make-up `<schedule>-at-<UTC>-makeup-<n>`, the missed report's carrier
-    `<schedule>-at-<UTC>-missed`), so a restart finds which task works for which
-    occurrence. A restart never takes an occurrence the file already says is
+    `<schedule>-at-<UTC>-missed`, at most 64 characters, with a long schedule
+    id cut and a SHA-256 prefix added), so a restart finds which task works for
+    which occurrence. The carrier is a summary-only id: it has a tag so the
+    board files the report under the topic, but no task and no ledger line, and
+    a repeated missed notice writes no second tag line or summary. A restart never takes an occurrence the file already says is
     taken, and starts and closes one it took before;
   - a topic with a schedule is never proposed closed;
 - **reconciles** at start: a worker of the last run that was still working is
