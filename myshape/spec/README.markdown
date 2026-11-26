@@ -14,6 +14,7 @@
 | [stage-3-data](stage-3-data.markdown) | 第三段：輪詢、帳本事件、燈號、待決、摘要 |
 | [stage-4-writes](stage-4-writes.markdown) | 第四段：寫入、稽核紀錄、重試 |
 | [stage-5-browser](stage-5-browser.markdown) | 第五段：瀏覽器通道與頁面 |
+| [drag-under-filter](drag-under-filter.markdown) | 設計紀錄：篩選中拖曳議題怎麼排 |
 | [stage-6-rules](stage-6-rules.markdown) | 第六段：`install-rules` 與規則範本 |
 | [rollout](../../fm-board/spec/rollout.markdown) | 上線的前提與步驟（fork 這一側的，放在 `fm-board/spec/`） |
 | [verification](verification.markdown) | 哪些事實測過、哪些只讀過原始碼、哪些還沒驗 |

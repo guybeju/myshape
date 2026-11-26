@@ -39,7 +39,7 @@
 | --- | --- | --- |
 | `GET /api/state?v=<boot_id>:<n>` | — | 看板狀態。沒變回 `{"changed":false}`；`boot_id` 不同回全量。每次呼叫都算「有人在看」，維持輪詢 |
 | `POST /api/refresh` | `{}` | 立刻更新 |
-| `POST /api/topics/move` | `{id, queue, before?}` 或 `{id, queue, first: true}` | 拖曳的落點；`before` 與 `first` 都省略就是尾端 |
+| `POST /api/topics/move` | `{id, queue, before?}`、`{id, queue, after}` 或 `{id, queue, first: true}` | 拖曳的落點；`before`、`after` 與 `first` 都省略就是尾端。`after` 是篩選中的落點：排在那個議題正後面，只有頁面能送，socket 的 `move` 不讀它（[篩選中拖曳](drag-under-filter.markdown)） |
 | `POST /api/topics/rename`、`/goal` | `{id, value}` | 改名、改目標 |
 | `POST /api/topics/archive`、`/reopen` | `{id, queue?}` | 封存、重開 |
 | `POST /api/topics/keep` | `{id}` | 對提議關閉按「先不關」：清掉 `close_proposal` |
@@ -106,6 +106,7 @@
 - 拖的當下就更新順序：卡片跟著游標插到新位置，其他卡片即時讓開；放開才送 `/api/topics/move`；按 Esc 回到原位。
 - 用瀏覽器原生的拖放。拖曳中的卡片用虛線框與淡色標示。空的佇列在拖曳中顯示落點提示，拖曳結束就消失（原型的小瑕疵在這裡修掉）。
 - 卡片上沒有移動用的選單，拖曳是頁面上唯一的移法（C55）。
+- 篩選中（hashtag、關鍵字或視圖）只在看得到的卡片之間排：放在一張卡下面就排在完整佇列裡那張卡的正後面，放在最上面就排在第一張看得到的卡前面，被篩掉的議題位置不變；落點提示寫明正在篩選。決定、理由與邊界情形見[篩選中拖曳](drag-under-filter.markdown)。
 - 放開後右下角出一則回饋，6 秒後自動消失，點一下也會關掉：
   - 從待辦拖出：倒數 30 秒，寫明時間到會通知 first mate、拖回去就不通知；倒數結束前不消失。
   - 其他順序調整：「first mate 下次重新評估派工時才會照新順序，不會馬上開工」。
