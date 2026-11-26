@@ -56,6 +56,8 @@ export interface BoardPaths {
   binding: string;
   /** The captain's confirmations of programs the board runs. */
   confirmations: string;
+  /** The hashtags on topics, the captain's saved views and hashtag settings. */
+  hashtags: string;
 }
 
 export function boardPaths(config: Pick<BoardConfig, "state" | "data" | "config">): BoardPaths {
@@ -82,6 +84,7 @@ export function boardPaths(config: Pick<BoardConfig, "state" | "data" | "config"
     decisions: path.join(boardDataDir, "decisions.json"),
     binding: path.join(config.config, BINDING_NAME),
     confirmations: path.join(boardDataDir, "confirmations.json"),
+    hashtags: path.join(boardDataDir, "hashtags.json"),
   };
 }
 

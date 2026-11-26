@@ -27,6 +27,7 @@ export function boardPaths(config) {
         decisions: path.join(boardDataDir, "decisions.json"),
         binding: path.join(config.config, BINDING_NAME),
         confirmations: path.join(boardDataDir, "confirmations.json"),
+        hashtags: path.join(boardDataDir, "hashtags.json"),
     };
 }
 const CONFIG_FLAGS = [

@@ -70,3 +70,18 @@ details>summary{cursor:pointer;color:var(--mute)}
 details.closed{margin:4px 0 4px 12px}
 details.closed>summary{color:var(--ink)}
 details.closed>summary .t{color:var(--mute);font-size:12px;margin-right:6px}
+.tag{display:inline-block;border-radius:10px;padding:0 7px;font-size:12px;border:1px solid #0002;white-space:nowrap;color:var(--ink)}
+.tag.c1{background:#e3ecfa}.tag.c2{background:#e1f3e7}.tag.c3{background:#fdf0d5}.tag.c4{background:#fbe2e0}
+.tag.c5{background:#ece3f8}.tag.c6{background:#dcf2f3}.tag.c7{background:#f6e3ef}.tag.c8{background:#e9e9e4}
+.tag.on{outline:2px solid var(--accent)}
+.tag.not{text-decoration:line-through;opacity:.75}
+.tag .new{background:var(--red);color:#fff;border-radius:8px;padding:0 4px;margin-left:4px;font-size:11px}
+button.chip{text-decoration:none}
+.filterbar{background:#fff;border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.filterbar .btns{margin-top:4px}
+.owed{margin:6px 0 0;font-size:13px}
+.owed.red button.link{color:var(--red);font-weight:600}
+.matched{margin-top:2px}
+table.settings{border-collapse:collapse;width:100%;font-size:13px}
+table.settings th,table.settings td{padding:3px 6px;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle}
+table.settings input[type=text]{width:7em}

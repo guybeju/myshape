@@ -320,7 +320,42 @@ test_asks_for_board_input_when_the_snapshot_offers_it() {
   pass "order reads the backlog through --board-input when the snapshot's parser offers it, else --json"
 }
 
-fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
+# order --hashtag keeps every heading and only the lines whose topic carries
+# the hashtag in the board's hashtags.json; a merged topic's count for the
+# topic it went into. A secondmate home, whose queues may be a copy without
+# hashtags, refuses it.
+test_lists_only_a_hashtag_when_asked() {
+  local home out sm rc=0
+  home=$(tb_make_home order-tag)
+  tb_write_topics "$home"
+  write_backlog "$home"
+  write_tags "$home"
+  mkdir -p "$home/data/myshape"
+  printf '%s\n' '{"v":1,"hashtags":{"AI_INFRA":{"key":"ai_infra"},"OTHER":{"key":"other"}},
+    "topics":{"old-billing":["AI_INFRA"],"parked":["AI_INFRA"],"t2":["OTHER"]},"views":{},"settings":{}}' \
+    > "$home/data/myshape/hashtags.json"
+  out=$(tb_run "$home" "$PLAN" order --hashtag ＡＩ_infra) || fail "order --hashtag failed"
+  assert_contains "$out" "只列議題貼著 #ＡＩ_infra 的項目。" "the answer must say it is filtered"
+  assert_equals "h1 h2 r1 " "$(section "$out" "可派：")" "only items of topics with the hashtag may be listed to dispatch"
+  assert_equals "l1 " "$(section "$out" "該 hold：")" "a parked topic with the hashtag must still be listed to hold"
+  assert_equals "l2 " "$(section "$out" "停著：")" "a held item of a topic with the hashtag must be listed as parked"
+  assert_equals "o1 b1 c1 " "$(section "$out" "先不派：")" "the items not dispatched must be filtered too"
+  assert_equals "" "$(printf '%s\n' "$out" | grep -E '^  (n1|u1|p1|d1|a1)	' || true)" \
+    "an item of a topic without the hashtag must not be listed"
+  assert_equals "只列議題貼著 #ＡＩ_infra 的項目。 可派： 該 hold： 該解除： 停著： 先不派： " \
+    "$(printf '%s\n' "$out" | grep -v '^  ' | tr '\n' ' ')" "every heading must stay"
+  out=$(tb_run "$home" "$PLAN" order --hashtag NONE) || fail "order --hashtag with an unknown name failed"
+  assert_equals "" "$(printf '%s\n' "$out" | grep '^  ' || true)" "an unknown hashtag lists no line"
+  expect_code 2 "$(tb_code "$home" "$PLAN" order --hashtag)" "order --hashtag without a name"
+  expect_code 2 "$(tb_code "$home" "$PLAN" order extra)" "order with another argument"
+  sm=$(tb_make_secondmate_home order-tag-sm sm1)
+  out=$(tb_run "$sm" "$PLAN" order --hashtag AI_INFRA 2>&1) || rc=$?
+  expect_code 1 "$rc" "order --hashtag in a secondmate home"
+  assert_contains "$out" "只在主 home 用" "the refusal must say where it runs"
+  pass "order --hashtag lists only the lines of topics with the hashtag, in the main home"
+}
+
+fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check test_lists_only_a_hashtag_when_asked \
   test_falls_open_without_a_usable_topic_file test_ranks_an_untagged_item_by_its_topic_line \
   test_resolves_archived_blockers_and_lists_every_item \
   test_falls_open_when_the_snapshot_fails test_asks_for_board_input_when_the_snapshot_offers_it

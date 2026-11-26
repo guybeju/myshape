@@ -1,7 +1,7 @@
 // Loads the board's state files and is their only writer. A change and its
-// records are saved together: commitChange renames the change's one commit
-// file (topics.json, todos.json or confirmations.json) with the records in
-// its `outbox`, then appends them to events.jsonl,
+// records are saved together: commitChange renames the change's commit file
+// (topics.json, todos.json, confirmations.json or hashtags.json) with the
+// records in its `outbox`, then appends them to events.jsonl,
 // and every later commit (and every start) first saves any outbox record the
 // journal still lacks.
 import fs from "node:fs";
@@ -40,6 +40,8 @@ import type {
 import { emptyConfirmations } from "./confirmations.js";
 import type { Confirmation, ConfirmationStore } from "./confirmations.js";
 import { carryMarks, emptyTodos, isValidItemId, withProjection } from "./todos.js";
+import { emptyHashtags, parseHashtags, reconcile } from "./hashtags.js";
+import type { HashtagStore } from "./hashtags.js";
 import type { ItemState, TodoItem, TodoStore } from "./todos.js";
 
 const FILE_MODE = 0o644;
@@ -263,14 +265,15 @@ function parseOutbox(raw: unknown): StoredRecord[] {
   });
 }
 
-/** The three files a change can commit through; each holds the records of its last commit. */
-export type CommitFile = "topics" | "todos" | "confirmations";
+/** The files a change can commit through; each holds the records of its last commit. */
+export type CommitFile = "topics" | "todos" | "confirmations" | "hashtags";
 
 /** What the board keeps on disk, as the service holds it. */
 export interface StoredBoard {
   topics: Frozen<TopicState>;
   todos: Frozen<TodoStore>;
   confirmations: Frozen<ConfirmationStore>;
+  hashtags: Frozen<HashtagStore>;
   outbox: Readonly<Record<CommitFile, readonly StoredRecord[]>>;
 }
 
@@ -289,11 +292,22 @@ export interface CommitTarget {
   nowSeconds: () => number;
 }
 
-/** One change: its commit file, the next state of that file's family, and its records. */
+/** A topic change's follow-up in hashtags.json: what a merge, split or create does to hashtags. */
+export interface HashtagFollow {
+  next: Frozen<HashtagStore>;
+  records: Records;
+}
+
+/**
+ * One change: its commit file, the next state of that file's family, and its
+ * records. A topic change may carry a follow-up in hashtags.json, saved right
+ * after topics.json.
+ */
 export type Change =
-  | { file: "topics"; next: Frozen<TopicState>; records: Records }
+  | { file: "topics"; next: Frozen<TopicState>; records: Records; hashtags?: HashtagFollow }
   | { file: "todos"; next: Frozen<TodoStore>; records: Records }
-  | { file: "confirmations"; next: Frozen<ConfirmationStore>; records: Records };
+  | { file: "confirmations"; next: Frozen<ConfirmationStore>; records: Records }
+  | { file: "hashtags"; next: Frozen<HashtagStore>; records: Records };
 
 export type Committed =
   | {
@@ -323,7 +337,8 @@ const EMPTY_DOC = serialize({ ...emptyState().doc, outbox: [] });
 
 /** Appends every outbox record the journal lacks; returns why it could not, or null. */
 function flushOutbox(sink: RecordSink, outbox: StoredBoard["outbox"]): string | null {
-  for (const record of [...outbox.topics, ...outbox.todos, ...outbox.confirmations]) {
+  const waiting = [...outbox.topics, ...outbox.todos, ...outbox.confirmations, ...outbox.hashtags];
+  for (const record of waiting) {
     if (sink.has(record.rid)) continue;
     try {
       sink.append(record);
@@ -378,14 +393,69 @@ function writeTodos(
   return topics;
 }
 
-/** Writes the captain's confirmations; confirmations.json is its own commit point. */
-function writeConfirmations(
+/**
+ * Writes a file that is its own commit point: the captain's confirmations, or
+ * the hashtags. A topic change with a follow-up in hashtags.json writes it
+ * after topics.json, so a crash between the two leaves the topic change made
+ * and recorded and the follow-up neither: a topic without its hashtags, never
+ * a hashtag on a topic that is not there.
+ */
+function writeOwnFile(
   paths: BoardPaths,
-  next: Frozen<ConfirmationStore>,
+  file: "confirmations" | "hashtags",
+  next: Frozen<ConfirmationStore> | Frozen<HashtagStore>,
   outbox: readonly StoredRecord[],
 ): void {
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
-  writeFileAtomic(paths.confirmations, serialize({ ...next, outbox }), FILE_MODE);
+  writeFileAtomic(paths[file], serialize({ ...next, outbox }), FILE_MODE);
+}
+
+/** The board after a change was written, and the records it saved. */
+interface Written {
+  board: StoredBoard;
+  records: StoredRecord[];
+}
+
+/** Saves a change's files and returns the board after it. */
+function writeChange(
+  paths: BoardPaths,
+  board: StoredBoard,
+  change: Change,
+  stamp: (records: Records) => StoredRecord[],
+): Written {
+  const records = stamp(change.records);
+  if (change.file === "todos") {
+    const topics = writeTodos(paths, board, change.next, records);
+    return {
+      board: { ...board, topics, todos: change.next, outbox: { ...board.outbox, todos: records } },
+      records,
+    };
+  }
+  if (change.file === "confirmations") {
+    writeOwnFile(paths, "confirmations", change.next, records);
+    const outbox = { ...board.outbox, confirmations: records };
+    return { board: { ...board, confirmations: change.next, outbox }, records };
+  }
+  if (change.file === "hashtags") {
+    writeOwnFile(paths, "hashtags", change.next, records);
+    return {
+      board: { ...board, hashtags: change.next, outbox: { ...board.outbox, hashtags: records } },
+      records,
+    };
+  }
+  writeTopics(paths, board.topics, change.next, records);
+  const next = { ...board, topics: change.next, outbox: { ...board.outbox, topics: records } };
+  if (change.hashtags === undefined) return { board: next, records };
+  const follow = stamp(change.hashtags.records);
+  writeOwnFile(paths, "hashtags", change.hashtags.next, follow);
+  return {
+    board: {
+      ...next,
+      hashtags: change.hashtags.next,
+      outbox: { ...next.outbox, hashtags: follow },
+    },
+    records: [...records, ...follow],
+  };
 }
 
 /**
@@ -406,26 +476,22 @@ export function commitChange(
   if (unsaved !== null)
     return { ok: false, line: `看板寫不進紀錄（${unsaved}），這次的修改沒有做` };
   const ts = target.nowSeconds();
-  const records = change.records.map((draft: Draft) =>
-    stampRecord(draft, actor, target.nextRid(), ts),
-  );
+  const stamp = (drafts: Records): StoredRecord[] =>
+    drafts.map((draft: Draft) => stampRecord(draft, actor, target.nextRid(), ts));
   fs.mkdirSync(target.paths.dataDir, { recursive: true });
-  let next: StoredBoard;
-  if (change.file === "topics") {
-    writeTopics(target.paths, board.topics, change.next, records);
-    next = { ...board, topics: change.next, outbox: { ...board.outbox, topics: records } };
-  } else if (change.file === "todos") {
-    const topics = writeTodos(target.paths, board, change.next, records);
-    next = { ...board, topics, todos: change.next, outbox: { ...board.outbox, todos: records } };
-  } else {
-    writeConfirmations(target.paths, change.next, records);
-    next = {
-      ...board,
-      confirmations: change.next,
-      outbox: { ...board.outbox, confirmations: records },
-    };
-  }
-  return { ok: true, board: next, records, appendError: flushOutbox(target.sink, next.outbox) };
+  const saved = writeChange(target.paths, board, change, stamp);
+  return {
+    ok: true,
+    board: saved.board,
+    records: saved.records,
+    appendError: flushOutbox(target.sink, saved.board.outbox),
+  };
+}
+
+/** The hashtags as they apply to the topics read with them; none when the file is missing. */
+function readHashtags(paths: BoardPaths, raw: unknown, state: TopicState): HashtagStore {
+  if (raw === null) return emptyHashtags();
+  return reconcile(parseFile(paths.hashtags, raw, parseHashtags), state);
 }
 
 export interface ReadBoard {
@@ -443,7 +509,8 @@ export interface ReadBoard {
  * writes of an archive or reopen can leave a topic in both topic files; the
  * live copy wins (an interrupted archive is simply redone, an interrupted
  * reopen is already complete). topics.json's marks are rebuilt from
- * todos.json when it exists.
+ * todos.json when it exists. Hashtags follow merges and are dropped from
+ * topics the board no longer has (hashtags.ts reconcile).
  */
 export function readBoard(paths: BoardPaths): ReadBoard {
   const empty = emptyState();
@@ -451,6 +518,7 @@ export function readBoard(paths: BoardPaths): ReadBoard {
   const rawArchive = readFile(paths.archive);
   const rawTodos = readFile(paths.todos);
   const rawConfirmations = readFile(paths.confirmations);
+  const rawHashtags = readFile(paths.hashtags);
   const live =
     rawTopics === null
       ? { doc: empty.doc, confirmed: [] }
@@ -473,10 +541,12 @@ export function readBoard(paths: BoardPaths): ReadBoard {
       topics: store === null ? state : withProjection(state, store),
       todos: store ?? emptyTodos(),
       confirmations,
+      hashtags: readHashtags(paths, rawHashtags, state),
       outbox: {
         topics: parseOutbox(rawTopics),
         todos: parseOutbox(rawTodos),
         confirmations: parseOutbox(rawConfirmations),
+        hashtags: parseOutbox(rawHashtags),
       },
     },
     hasTodos: store !== null,

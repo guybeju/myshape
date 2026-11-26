@@ -20,6 +20,7 @@ import {
 } from "./parts.js";
 import type { ClosedEntry } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
+import { topicTagEditor } from "./tags.js";
 import type { Actions, Page, View } from "./state.js";
 
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
@@ -138,6 +139,7 @@ function header(page: Page, view: View, actions: Actions, id: string): Child {
       menu(page, actions),
     ),
     h("div", { class: "titleline" }, editable(page, actions, id, "goal", topic.goal)),
+    topic.status === "archived" ? null : topicTagEditor(page, view, actions, id),
     panels(page, view, actions, id),
   ];
 }

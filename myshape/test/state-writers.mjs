@@ -2,10 +2,11 @@
 // under myshape/src (tests excluded) with the scanner of the TypeScript the
 // board builds with, so a comment or a string is never code, and prints one
 // line per problem:
-//   - topics.json, the archive, todos.json and confirmations.json are written
-//     (writeFileAtomic or writeIfChanged) only in store.ts's writeTopics,
-//     writeTodos, writeConfirmations and writeIfChanged, and those three
-//     writers are called only from commitChange;
+//   - topics.json, the archive, todos.json, confirmations.json and
+//     hashtags.json are written (writeFileAtomic or writeIfChanged) only in
+//     store.ts's writeTopics, writeTodos, writeOwnFile and writeIfChanged,
+//     and those three writers are called only from commitChange and the
+//     writeChange it calls;
 //   - a record reaches the journal only through store.ts's flushOutbox (the
 //     sink's append) and the one sink, commitTarget in board-server.ts;
 //   - store.ts exports no function but readBoard, loadBoard and commitChange;
@@ -13,10 +14,11 @@
 //     written only in decisions.ts (DecisionStore), and the decision records
 //     that read leaves are saved only through board-server.ts saveRecords,
 //     which commits them with commitChange;
-//   - no file but topics.ts, todos.ts, confirmations.ts and store.ts assigns
-//     into, deletes from or pushes onto the board's state (doc, archive, items,
-//     marks, closed, outbox, queues, merged, history, confirmations, entries),
-//     which a cast past the read-only types would otherwise allow.
+//   - no file but topics.ts, todos.ts, confirmations.ts, hashtags.ts and
+//     store.ts assigns into, deletes from or pushes onto the board's state
+//     (doc, archive, items, marks, closed, outbox, queues, merged, history,
+//     confirmations, entries, hashtags, views, settings), which a cast past
+//     the read-only types would otherwise allow.
 //
 // Usage: node state-writers.mjs <typescript-package-dir> <src-dir>
 import fs from "node:fs";
@@ -27,11 +29,12 @@ const { SyntaxKind: K } = await import(path.join(typescript, "dist/ast/index.js"
 const { createScanner } = await import(path.join(typescript, "dist/ast/scanner.js"));
 
 const STATE_FIELDS = new Set(["doc", "archive", "items", "marks", "closed", "outbox", "queues", "merged", "history",
-  "confirmations", "entries"]);
-const STATE_OWNERS = new Set(["topics.ts", "todos.ts", "confirmations.ts", "store.ts"]);
-const STATE_PATHS = new Set(["topics", "archive", "todos", "confirmations"]);
+  "confirmations", "entries", "hashtags", "views", "settings"]);
+const STATE_OWNERS = new Set(["topics.ts", "todos.ts", "confirmations.ts", "hashtags.ts", "store.ts"]);
+const STATE_PATHS = new Set(["topics", "archive", "todos", "confirmations", "hashtags"]);
 const STORE_EXPORTS = new Set(["readBoard", "loadBoard", "commitChange"]);
-const WRITERS = new Set(["writeTopics", "writeTodos", "writeConfirmations", "writeIfChanged"]);
+const WRITERS = new Set(["writeTopics", "writeTodos", "writeOwnFile", "writeIfChanged"]);
+const WRITER_CALLERS = new Set(["commitChange", "writeChange"]);
 const ASSIGN = new Set([K.EqualsToken, K.PlusEqualsToken, K.MinusEqualsToken, K.AsteriskEqualsToken,
   K.SlashEqualsToken, K.BarBarEqualsToken, K.AmpersandAmpersandEqualsToken, K.QuestionQuestionEqualsToken,
   K.PlusPlusToken, K.MinusMinusToken]);
@@ -42,7 +45,7 @@ const BEFORE_REGEX = new Set([K.OpenParenToken, K.CommaToken, K.EqualsToken, K.C
   K.QuestionQuestionToken, K.EqualsGreaterThanToken, K.PlusToken, K.MinusToken]);
 // A cast to one of these drops the read-only type of the board's state.
 const MUTABLE_STATE = new Set(["TopicState", "TopicsDoc", "ArchiveDoc", "Topic", "TodoStore", "TodoItem", "StoredBoard",
-  "ConfirmationStore", "Confirmation"]);
+  "ConfirmationStore", "Confirmation", "HashtagStore", "HashtagEntry", "SavedView", "HashtagSettings"]);
 const MUTATORS = new Set(["push", "pop", "splice", "shift", "unshift", "sort", "reverse", "fill"]);
 
 /** Every code token of `text` with the top-level function it is in. */
@@ -141,7 +144,7 @@ for (const file of files) {
       if (statePath && !allowed) problems.push(`${where(token)}: a state file written outside store.ts's writers (${args.join("")})`);
       if (args.includes("decisions") && base !== "decisions.ts") problems.push(`${where(token)}: decisions.json written outside decisions.ts (${args.join("")})`);
     }
-    if (call && WRITERS.has(token.value) && token.value !== "writeIfChanged" && !(base === "store.ts" && token.fn === "commitChange"))
+    if (call && WRITERS.has(token.value) && token.value !== "writeIfChanged" && !(base === "store.ts" && WRITER_CALLERS.has(token.fn)))
       problems.push(`${where(token)}: ${token.value} called outside commitChange`);
     if (call && token.value === "writeIfChanged" && !(base === "store.ts" && WRITERS.has(token.fn)))
       problems.push(`${where(token)}: writeIfChanged called outside store.ts's writers`);

@@ -48,6 +48,10 @@ export interface BoardEvent {
   key?: string;
   answer?: string;
   source?: string;
+  /** A change the captain may take back: what it changed from and to, and the record a revert undid. */
+  before?: string;
+  after?: string;
+  ref?: string;
 }
 
 const OPTIONAL_BOARD_FIELDS = [
@@ -60,6 +64,9 @@ const OPTIONAL_BOARD_FIELDS = [
   "key",
   "answer",
   "source",
+  "before",
+  "after",
+  "ref",
 ] as const;
 
 export type JournalEvent = LedgerEvent | BoardEvent;

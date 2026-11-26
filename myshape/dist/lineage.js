@@ -112,6 +112,15 @@ function taskLine(state, entry, everything) {
     const path = steps.length === 0 ? "沒有標過議題" : steps.join("→ ");
     return `task ${entry.home}/${entry.task}：${path}`;
 }
+function hashtagLines(state, tagged, everything) {
+    const shown = everything ? tagged.topics : tagged.topics.slice(0, MAX_TOPICS);
+    const more = tagged.topics.length - shown.length;
+    return [
+        `hashtag #${tagged.name}：${tagged.topics.length} 個議題`,
+        ...shown.map((id) => `  ${header(state, id)}`),
+        ...(more > 0 ? [`  還有 ${more} 個，加 --all 看全部`] : []),
+    ];
+}
 /**
  * Answers "where is this now, and what happened to it" for a query.
  *
@@ -122,16 +131,20 @@ function taskLine(state, entry, everything) {
  *   tasks: Tag files of the tasks whose id is the query, already looked up.
  *   everything: Print every matching topic and every history entry, with
  *     exact times, instead of the bounded answer.
+ *   tagged: The hashtag the query names, when it names one, with the topics
+ *     that carry it.
  *
  * Returns:
- *   A few lines for firstmate: one per task, then each matching topic under
- *   its current id with its history. Never empty.
+ *   A few lines for firstmate: the hashtag and its topics, one line per task,
+ *   then each matching topic under its current id with its history. Never
+ *   empty.
  */
-export function findLines(state, query, tasks, everything = false) {
+export function findLines(state, query, tasks, everything = false, tagged = null) {
     const needle = query.trim().toLowerCase();
     const ids = matchingTopics(state, needle);
     const shown = everything ? ids : ids.slice(0, MAX_TOPICS);
     const lines = [
+        ...(tagged === null ? [] : hashtagLines(state, tagged, everything)),
         ...tasks.map((entry) => taskLine(state, entry, everything)),
         ...shown.flatMap((id) => topicLines(state, id, everything)),
     ];

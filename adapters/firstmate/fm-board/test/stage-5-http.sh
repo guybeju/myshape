@@ -332,8 +332,8 @@ test_every_change_leaves_a_record() {
   local covered_ops covered_routes ops routes id
   ops=$(node --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.entries(m.OPERATIONS).filter(([, op]) => op.channel !== 'page').map(([name]) => name).sort().join(' ')))")
   routes=$(node --input-type=module -e "import('$ROOT/myshape/dist/api.js').then((m) => console.log(Object.keys(m.ROUTES).sort().join('|')))")
-  covered_ops="archive close-propose create goal merge move rename reopen split todo-add todo-done todo-failed todo-obsolete"
-  covered_routes="GET state|POST agents/tag|POST direct|POST holds/answer|POST messages|POST programs/confirm|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST writes/ignore|POST writes/resend"
+  covered_ops="archive close-propose create goal hashtag-add hashtag-remove merge move rename reopen split todo-add todo-done todo-failed todo-obsolete"
+  covered_routes="GET state|POST agents/tag|POST direct|POST hashtags/add|POST hashtags/color|POST hashtags/delete|POST hashtags/lock|POST hashtags/merge|POST hashtags/remove|POST hashtags/rename|POST hashtags/revert|POST hashtags/seen|POST hashtags/settings|POST holds/answer|POST messages|POST programs/confirm|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST views/delete|POST views/save|POST writes/ignore|POST writes/resend"
   assert_equals "$covered_ops" "$ops" "every socket operation needs a case here"
   assert_equals "$covered_routes" "$routes" "every page route needs a case here"
 
@@ -362,6 +362,22 @@ test_every_change_leaves_a_record() {
   records_after topic.archived "topics/archive" api topics/archive '{"id":"recpart"}'
   records_after topic.reopened "topics/reopen" api topics/reopen '{"id":"recpart"}'
   records_after topic.merged "topics/merge" two_step topics/merge '{"from":"recpart","into":"rec"}'
+  records_after hashtag.added "hashtag +" t hashtag rec +AI_INFRA
+  records_after "topic.created hashtag.added" "create --hashtag" t create "Tagged" --goal "g" --id tagged --hashtag AI_INFRA --hashtag URGENT
+  records_after hashtag.removed "hashtag --remove" t hashtag tagged --remove urgent
+  records_after hashtag.added "hashtags/add" api hashtags/add '{"id":"rec","name":"URGENT"}'
+  records_after hashtag.removed "hashtags/remove" api hashtags/remove '{"id":"rec","name":"URGENT"}'
+  id=$(jq -r 'select(.src == "board" and .kind == "hashtag.added" and .by == "aggregator") | .rid' "$MAIN/data/myshape/events.jsonl" | head -n 1)
+  records_after hashtag.reverted "hashtags/revert" api hashtags/revert "{\"rid\":\"$id\"}"
+  records_after hashtag.lock_changed "hashtags/lock" api hashtags/lock '{"name":"AI_INFRA","locked":true}'
+  records_after hashtag.color_changed "hashtags/color" api hashtags/color '{"name":"AI_INFRA","color":"c4"}'
+  records_after hashtag.settings_changed "hashtags/settings" api hashtags/settings '{"per_topic_max":7}'
+  records_after hashtag.view_saved "views/save" api views/save '{"name":"工作","none":["AI_INFRA"]}'
+  records_after hashtag.view_deleted "views/delete" api views/delete '{"id":"v1"}'
+  records_after hashtag.seen "hashtags/seen" api hashtags/seen '{}'
+  records_after hashtag.renamed "hashtags/rename" two_step hashtags/rename '{"name":"URGENT","to":"SOON"}'
+  records_after hashtag.merged "hashtags/merge" two_step hashtags/merge '{"name":"SOON","into":"AI_INFRA"}'
+  records_after hashtag.deleted "hashtags/delete" two_step hashtags/delete '{"name":"AI_INFRA"}'
   t todo add it4 "Item four" --topic rec --do "do it" >/dev/null
   records_after todo.claimed "todos/claim" api todos/claim '{"task":"it4"}'
   t todo add it5 "Item five" --topic rec --do "do it" >/dev/null

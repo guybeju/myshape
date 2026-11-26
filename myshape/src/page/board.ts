@@ -5,6 +5,8 @@ import { getJson, postJson, takeToken } from "./api.js";
 import type { Reply } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
 import { frame } from "./frame.js";
+import { NO_FILTER, filterHash, parseFilterHash, viewFilter } from "./filter.js";
+import type { Filter } from "./filter.js";
 import { QUEUES, agentName, setAgentLabel } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
@@ -25,7 +27,11 @@ const page: Page = {
   editing: new Set(),
   panel: null,
   notice: null,
+  filter: parseFilterHash(location.hash) ?? NO_FILTER,
+  tagPanel: null,
 };
+/** Whether the page has applied a filter yet: the URL's, or the default view once the board names it. */
+let filterChosen = parseFilterHash(location.hash) !== null;
 let failures = 0;
 /** The code the board ran when this page first heard from it. */
 let loadedCommit: string | null = null;
@@ -97,6 +103,13 @@ function accept(view: View): void {
     page.notice = "看板服務重啟過，進行到一半的確認已作廢，請重做一次。";
   }
   page.view = view;
+  if (!filterChosen) {
+    // The board's default view applies once, when the page opens without a filter of its own.
+    filterChosen = true;
+    const { views, settings } = view.hashtags;
+    const saved = views.find((entry) => entry.id === settings.default_view);
+    if (saved !== undefined) keepFilter(viewFilter(saved));
+  }
 }
 
 /** One failed poll; after a few in a row the page says the board is not answering. */
@@ -151,6 +164,23 @@ async function post(
   return reply.status === 200 ? reply.data : null;
 }
 
+function currentTopicHash(): string | null {
+  return location.hash.startsWith("#/topic/") ? location.hash : null;
+}
+
+/** Shows the home page under `filter` and keeps it in the URL fragment, without a scroll or a history entry. */
+/** Keeps `filter`, and puts it in the home page's URL fragment without a scroll or a history entry. */
+function keepFilter(filter: Filter): void {
+  page.filter = filter;
+  if (currentTopicHash() === null)
+    history.replaceState(null, "", `${location.pathname}${filterHash(filter)}`);
+}
+
+function setFilter(filter: Filter): void {
+  keepFilter(filter);
+  render();
+}
+
 function queueOf(topic: string): Queue | null {
   return QUEUES.find((queue) => page.view?.queues[queue].includes(topic)) ?? null;
 }
@@ -179,7 +209,8 @@ async function sendDraft(path: string, body: Record<string, unknown>, key: strin
 
 const actions: Actions = {
   open: (topic) => {
-    location.hash = topic === null ? "" : `#/topic/${encodeURIComponent(topic)}`;
+    location.hash =
+      topic === null ? filterHash(page.filter) : `#/topic/${encodeURIComponent(topic)}`;
   },
   refresh: () => void post("refresh", {}),
   draft: (key, value) => {
@@ -222,6 +253,7 @@ const actions: Actions = {
         body,
         confirm: data["confirm"],
         expiresAt: Number(data["expires_at"]),
+        data,
       });
       render();
     });
@@ -252,6 +284,12 @@ const actions: Actions = {
     else void post("writes/resend", { write_id: write.id });
   },
   ignore: (write) => void post("writes/ignore", { write_id: write.id }),
+  send: (path, body) => void post(path, body),
+  setFilter,
+  setTagPanel: (panel) => {
+    page.tagPanel = panel;
+    render();
+  },
 };
 
 function topicCardAt(event: Event): HTMLElement | null {
@@ -307,6 +345,9 @@ app.addEventListener("dragend", () => {
 
 window.addEventListener("hashchange", () => {
   page.panel = null;
+  const filter = parseFilterHash(location.hash);
+  if (filter !== null) page.filter = filter;
+  else if (location.hash === "") page.filter = NO_FILTER;
   render();
   window.scrollTo(0, 0);
 });

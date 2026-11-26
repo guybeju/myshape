@@ -1,6 +1,7 @@
-<!-- myshape:begin v11（由 fm-board.sh install-rules 維護，要改請改範本） -->
+<!-- myshape:begin v12（由 fm-board.sh install-rules 維護，要改請改範本） -->
 ## 議題看板（主 home）
 - 新工作先用 `myshape.sh list` 找它的議題 id；沒有合適的就跑 `myshape.sh create <名稱> --goal <一行>` 建一個再 `fm-board.sh tag`；我指定佇列才加 `--queue`。議題要窄：一件具體的事一個議題，不開什麼都能裝的大議題。
+- hashtag 你可自己貼撕，事後說明；開新的特別點出。
 - 你判斷某個議題的目標已經達成時，跑 `myshape.sh close-propose <議題 id> --reason <一句話>`，由我決定要不要關。
 - 重新評估排隊中的工作前先跑 `fm-dispatch-plan.sh order`：先照「該 hold」「該解除」執行，再照「可派」的順序派。停著的項目不派、不轉交；我明講要做的，解除 hold 再派。議題進了待辦或封存，已經在跑的 worker 不要停。看板通知議題可派時也重新評估，並請手上有那個議題項目的 secondmate 也跑 order。
 - 我問起某個議題或 task 後來怎樣了，或你用的議題 id 被拒絕、找不到時：跑 `myshape.sh find <關鍵字>`，照它印的回答（要查清楚一個議題出過什麼事，加 `--all`）；平常不用記議題的合併、拆分、改名。

@@ -900,6 +900,7 @@ function api(
   overrides: {
     topicOp?: (op: string, args: Record<string, unknown>) => BoardResponse;
     programToConfirm?: (role: Role) => ProgramToConfirm | string;
+    tagged?: Record<string, string[]>;
   } = {},
 ) {
   const confirm = new ConfirmStore();
@@ -924,6 +925,7 @@ function api(
     confirm,
     programToConfirm: overrides.programToConfirm ?? (() => "這支程式不需要確認。"),
     programConfirmed: () => seen.push("confirmed"),
+    hashtagTopics: (name) => overrides.tagged?.[name] ?? [],
   });
   const call = (route: string, body: Record<string, unknown> = {}, query = "") =>
     handler(
@@ -1054,6 +1056,42 @@ describe("api", () => {
       body: { ok: true, line: "ok merge" },
     });
     expect(seen).toEqual(['merge:{"from":"a","into":"b"}']);
+  });
+
+  it("renames, merges or deletes a whole hashtag only on the second request, for the same topics", async () => {
+    const tagged: Record<string, string[]> = { AI_INFRA: ["a", "b"], URGENT: ["c"] };
+    const h = harness();
+    const { call, seen } = api(h, { tagged });
+    const first = await call("POST hashtags/delete", { name: "AI_INFRA" });
+    expect(first.body).toMatchObject({ ok: true, topics: ["a", "b"], confirm: expect.any(String) });
+    expect(seen).toEqual([]);
+    tagged["AI_INFRA"] = ["a", "b", "c"];
+    const stale = await call("POST hashtags/delete", {
+      name: "AI_INFRA",
+      confirm: first.body["confirm"],
+    });
+    expect(stale.body["error"]).toBe("confirm");
+    const again = await call("POST hashtags/delete", { name: "AI_INFRA" });
+    expect(again.body["topics"]).toEqual(["a", "b", "c"]);
+    await call("POST hashtags/delete", { name: "AI_INFRA", confirm: again.body["confirm"] });
+    const merge = await call("POST hashtags/merge", { name: "URGENT", into: "AI_INFRA" });
+    tagged["AI_INFRA"] = ["a"];
+    const moved = await call("POST hashtags/merge", {
+      name: "URGENT",
+      into: "AI_INFRA",
+      confirm: merge.body["confirm"],
+    });
+    expect(moved.body["error"]).toBe("confirm");
+    const rename = await call("POST hashtags/rename", { name: "URGENT", to: "SOON" });
+    await call("POST hashtags/rename", {
+      name: "URGENT",
+      to: "SOON",
+      confirm: rename.body["confirm"],
+    });
+    expect(seen).toEqual([
+      'hashtag-delete:{"name":"AI_INFRA"}',
+      'hashtag-rename:{"name":"URGENT","to":"SOON"}',
+    ]);
   });
 
   it("answers a hold only on the second request, the way the hold recorded", async () => {

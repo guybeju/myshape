@@ -2,7 +2,7 @@
 # fm-dispatch-plan.sh - firstmate's dispatch plan from the topic board's queues.
 #
 # Usage:
-#   fm-dispatch-plan.sh order
+#   fm-dispatch-plan.sh order [--hashtag <name>]
 #   fm-dispatch-plan.sh queues-in -
 #   fm-dispatch-plan.sh queues-push [--check | --to <secondmate-id>]
 #
@@ -34,6 +34,13 @@
 #        minutes old or more (it is still ranked by); or why there is none, and
 #        then the backlog is listed in its own order. 等你驗證 is never listed
 #        in a secondmate home: the main home's todos name the main home's tasks.
+#        --hashtag <name> keeps every heading but lists only the lines whose
+#        topic carries that hashtag in the board's data/myshape/hashtags.json
+#        (a merged topic's hashtags count for the topic it went into; the
+#        name matches its stored spelling and case and full-width variants).
+#        It is a view only and still read-only. It runs in the main home
+#        only: a secondmate home's queues may come from the pushed copy,
+#        which has no hashtags, so there it is refused with exit 1.
 #
 # queues-in -
 #        In a secondmate home: reads one fm-dispatch-queues.v1 copy (at most
@@ -213,10 +220,18 @@ order_source_root() {
 }
 
 cmd_order() {
-  local snapshot tags sm=0 todos=/dev/null
-  [ "$#" -eq 0 ] || usage_error "order 不收參數"
+  local snapshot tags sm=0 todos=/dev/null hashtag='' hashtags=/dev/null filtered=false
+  if [ "$#" -gt 0 ]; then
+    [ "$#" -eq 2 ] && [ "$1" = --hashtag ] && [ -n "$2" ] ||
+      usage_error "order 只收 --hashtag <名稱>"
+    hashtag=$2 filtered=true
+  fi
   require_jq order
   ! in_secondmate_home || sm=1
+  if [ "$filtered" = true ] && [ "$sm" -eq 1 ]; then
+    tb_die 1 "order --hashtag 只在主 home 用：secondmate home 的佇列副本沒有 hashtag。要看貼著 #${hashtag#\#} 的項目，請在主 home 跑。"
+  fi
+  [ "$filtered" = false ] || [ ! -f "$DATA/myshape/hashtags.json" ] || hashtags=$DATA/myshape/hashtags.json
   order_source
   if ! snapshot=$(order_snapshot) || [ -z "$snapshot" ]; then
     printf '%s\n' "讀不到 backlog，照平常的方式派工。"
@@ -227,9 +242,13 @@ cmd_order() {
     todos=$DATA/myshape/todos.json
   fi
   printf '%s' "$snapshot" | jq -r --arg note "$ORDER_NOTE" --arg tags "$tags" --arg own "$OWN_HOLD_PREFIX" \
-    --slurpfile live "$ORDER_TOPICS" --slurpfile gone "$ORDER_ARCHIVE" --slurpfile todos "$todos" '
+    --slurpfile live "$ORDER_TOPICS" --slurpfile gone "$ORDER_ARCHIVE" --slurpfile todos "$todos" \
+    --slurpfile hashtags "$hashtags" --arg hashtag "$hashtag" --argjson filtered "$filtered" "$(tb_hashtag_fold_jq)
+$(tb_hashtag_topics_jq)"'
     ($live[0] // null) as $doc
-    | ($gone[0].topics // $doc.archived // {}) as $archived
+    | (if $filtered then hashtag_topics($hashtags[0] // {}; $doc // {}; $hashtag) else null end) as $tagged
+    | def shown: $tagged == null or (.topic as $t | $t != null and any($tagged[]; . == $t));
+      ($gone[0].topics // $doc.archived // {}) as $archived
     | ($tags | split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]})
        | from_entries) as $tag
     | def resolve: {id: ., hops: 0}
@@ -260,7 +279,7 @@ cmd_order() {
            captain_hold: ($r.hold_kind == "captain"),
            waits: ($r.unresolved_blocker_ids // []),
            blocked: (($r.unresolved_blocker_ids // []) | length > 0),
-           parked: ($p.queue == "later" or $p.queue == "archived")} ] as $items
+           parked: ($p.queue == "later" or $p.queue == "archived")} | select(shown) ] as $items
     | def line: "  \(.id)\t\(.name)\t\(.queue | queue_name)";
       def rank: {high: 0, normal: 1, none: 2}[.queue];
       ($items | map(select((.parked | not) and (.other_hold | not) and (.blocked | not)
@@ -282,6 +301,7 @@ cmd_order() {
            | if length > 0 then "找不到它等的 \(join("、"))（不在 backlog，也不在封存檔）" else empty end) ]
         | join("；");
       (if $note != "" then $note else empty end),
+      (if $filtered then "只列議題貼著 #\($hashtag | ltrimstr("#")) 的項目。" else empty end),
       "可派：",
       ($ready[] | line
         + (if .own_hold then "\t← 還被看板的 hold 擋著，先照「該解除」解除" else "" end)
@@ -297,7 +317,7 @@ cmd_order() {
       ([ ($todos[0].items // {}) | to_entries[] | select(.value.state == "claimed")
          | (.value.topic | if . == null then null else resolve end) as $topic
          | place($topic) as $p
-         | {id: .key, name: ($p.name // "（未分類）"), queue: $p.queue} ] as $claimed
+         | {id: .key, topic: $topic, name: ($p.name // "（未分類）"), queue: $p.queue} | select(shown) ] as $claimed
        | if ($claimed | length) == 0 then empty
          else "等你驗證：",
               ($claimed[] | line + "\t← 使用者說做完了；驗證後跑 bin/myshape.sh todo done \(.id)，沒成功就跑 bin/myshape.sh todo failed \(.id) --reason <一行>")

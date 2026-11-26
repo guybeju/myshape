@@ -121,8 +121,10 @@ export type TopicResult =
       records: Records;
       // Ids of topics that just became dispatchable (left "later" or were reopened).
       dispatchable: string[];
+      /** The topic a create or split made or found, for what the caller does with it next. */
+      subject?: string;
     }
-  | { ok: true; changed: false; state: Frozen<TopicState>; line: string }
+  | { ok: true; changed: false; state: Frozen<TopicState>; line: string; subject?: string }
   | { ok: false; code: "refused"; line: string };
 
 export const NAME_MAX = 80;
@@ -182,6 +184,11 @@ function changed(
   dispatchable: string[] = [],
 ): TopicResult {
   return { ok: true, changed: true, state, line, records, dispatchable };
+}
+
+/** A change that made the topic `subject` (a create or a split). */
+function made(state: TopicState, line: string, subject: string, record: TopicRecord): TopicResult {
+  return { ok: true, changed: true, state, line, records: [record], dispatchable: [], subject };
 }
 
 function clone(state: Frozen<TopicState>): TopicState {
@@ -283,7 +290,13 @@ export function create(state: Frozen<TopicState>, input: CreateInput, now: strin
     const [id] = existing;
     const queue = queueOf(state.doc, id);
     const place = queue === undefined ? "沒有排進佇列" : `在「${QUEUE_LABEL[queue]}」`;
-    return unchanged(state, `ok ${id} 本來就有這個議題，${place}`);
+    return {
+      ok: true,
+      changed: false,
+      state,
+      line: `ok ${id} 本來就有這個議題，${place}`,
+      subject: id,
+    };
   }
   const next = clone(state);
   const id = chooseId(next, name, input.id);
@@ -292,9 +305,11 @@ export function create(state: Frozen<TopicState>, input: CreateInput, now: strin
   next.doc.topics[id] = { name, goal, status: "confirmed", created_at: now };
   next.doc.queues[queue].push(id);
   const placed = `排在「${QUEUE_LABEL[queue]}」最後`;
-  return changed(next, `ok ${id} 已建立，${placed}`, [
-    { kind: "topic.created", topic: id, text: `議題「${name}」已建立，${placed}` },
-  ]);
+  return made(next, `ok ${id} 已建立，${placed}`, id, {
+    kind: "topic.created",
+    topic: id,
+    text: `議題「${name}」已建立，${placed}`,
+  });
 }
 
 /** Why a topic that is not live cannot be acted on: it is archived, or it does not exist. */
@@ -403,9 +418,11 @@ export function split(state: Frozen<TopicState>, input: SplitInput, now: string)
     from_name: found.topic.name,
     ...why,
   });
-  return changed(next, `ok ${id} 已從 ${found.id} 拆出，放進「${QUEUE_LABEL[queue]}」`, [
-    { kind: "topic.split", topic: id, text: `從議題「${found.topic.name}」拆出「${name}」` },
-  ]);
+  return made(next, `ok ${id} 已從 ${found.id} 拆出，放進「${QUEUE_LABEL[queue]}」`, id, {
+    kind: "topic.split",
+    topic: id,
+    text: `從議題「${found.topic.name}」拆出「${name}」`,
+  });
 }
 
 function liveTopic(

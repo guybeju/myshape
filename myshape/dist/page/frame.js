@@ -93,7 +93,7 @@ export function frame(page, actions) {
         view === null
             ? h("main", {}, h("p", { class: "note" }, page.tokenBad || page.down ? "" : "載入中…"))
             : h("main", {}, topic === null
-                ? h("div", { class: "side" }, sidebar(view, actions), h("div", {}, home(page, view, actions)))
+                ? h("div", { class: "side" }, sidebar(page, view, actions), h("div", {}, home(page, view, actions)))
                 : topicPage(page, view, actions, topic)),
     ];
 }

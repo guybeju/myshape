@@ -15,7 +15,7 @@
 | `bin/fm-board-lib.sh` | 找同機 secondmate 的 home、在那個 home 執行指令，彙整腳本讀之前的能力檢查 `tb_capability_gap`（第 3.1 節）；`fm-board.sh` 與 `fm-topic-board-read.sh` source 它 |
 | `bin/fm-board-vendor.sh` | 把看板與這一側從 guybeju/myshape 的一個 commit 複製進 fork（`vendor <commit>`），或檢查 fork 裡的副本與 `myshape.lock` 記的 commit 相同（`--check`）；不 source 任何檔，用法寫在檔頭 |
 | `bin/fm-queue-source-lib.sh` | second mate 的 home 去哪裡讀主 home 的議題清單、副本能不能用；`fm-dispatch-plan.sh` 與 `fm-board.sh tag`（只在 subshell 裡）source 它 |
-| `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，其餘的列在「先不派」並附原因，在每個 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
+| `bin/fm-dispatch-plan.sh` | `order`：照看板的佇列排出該派、該 hold、該解除的 backlog 項目，其餘的列在「先不派」並附原因，在每個 home；`order --hashtag <名稱>` 只列議題貼著那個 hashtag 的行，只在主 home；`queues-in`、`queues-push`：把佇列副本送到遠端的 second mate（[dispatch-plan](../../dispatch-plan/spec/dispatch-plan.markdown)） |
 | `bin/fm-backlog-archive-lib.sh` | tasks-axi 的 Done 保留把完成的項目搬去的封存檔在哪裡、裡面有哪些完成的 id；上游的 `fm-fleet-snapshot.sh` source 它（見下面）。它是 fork 自己的檔，不在這個 repo、不在 `fm-board/vendor-files`，vendor 不會帶來 |
 | `fm-board/rules/` | 三個規則範本，副檔名 `.md.tmpl`（fork 不能新增追蹤的 `.md`） |
 | `fm-board/vendor-files` | fork 要 vendor 的這一側的檔，一行一個 fork 裡的路徑，來源是 myshape 的 `adapters/firstmate/<那一行>`；看板的檔列在 `myshape/vendor-files` |

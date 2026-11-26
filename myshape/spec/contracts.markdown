@@ -8,6 +8,8 @@
 
 - **議題**：看板上的一張卡。有名稱、一行目標、所在佇列與順序。一建立就排在佇列最後，不等誰確認（C52）。可以沒有任何 agent。
 - **議題 id**：議題成立時給的穩定識別碼，改名不變。所有指向議題的地方都用它。
+- **hashtag**：有人刻意貼在議題上的標記，只描述議題的內容（例如 `AI_INFRA` 表示這是 AI 基礎設施的事）。一個議題零到多個；task 不另存 hashtag，算它所屬議題的。hashtag 不改任何議題的佇列、順序或派工，看板也不因 hashtag 送任何通知或交付。存在 `data/myshape/hashtags.json`（第 3.8 節）。
+- **視圖**：頁面上的一組篩選（hashtag 按鈕、關鍵字、「（沒標）」），只改頁面上看到什麼；使用者可以把它存成有名字的視圖（第 3.8 節）。
 - **task**：firstmate 原意，一個 worker 跑的一件事。**agent** 是執行某個 task 的 worker，一個 agent 只屬於一個議題。
   home 還有紀錄的 task 照它的 `kind` 判斷（secondmate 自己不是 agent）；home 已經沒有的 task，只有帳本記過它的 worker 生命週期（`task.dispatched`、`task.pr_ready`、`task.merged`、`task.cleaned_up` 任一筆），而且最近一次派工不是 secondmate 時，才算已經結束的 agent。
   所以退役 secondmate 自己的事件、遠端 secondmate 的回報通道（`parent-replies`，只有狀態行）都不是 agent；它們的事件仍在更新裡，有標記就歸那個議題（C53）。
@@ -43,6 +45,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 | `data/myshape/aggregator.json` | 0644 | 最近一次根 home 回報裡的 `aggregator`，讓看板在下一次讀到之前寫的字也用對名字 | 只有看板服務 |
 | `data/myshape/todos.json` | 0644 | 要你動手的項目（第 3.6 節） | 只有看板服務 |
 | `data/myshape/decisions.json` | 0644 | 每個 home 上一次讀到的待決事項與已關的待決事項的游標（第 3.7 節） | 只有看板服務 |
+| `data/myshape/hashtags.json` | 0644 | hashtag、每個議題貼了哪些、命名視圖與 hashtag 設定（第 3.8 節） | 只有看板服務 |
 | `data/myshape/confirmations.json` | 0644 | 使用者在頁面上確認過的程式：每支程式一筆，完整路徑、程式內容與設定檔內容的 SHA-256、時間，加上一次改動的 `outbox`（第 7 節） | 只有看板服務，只在頁面上的確認動作 |
 | `data/<task-id>/topic` | 0644 | 議題標記，每個 home 各自一份 | `fm-board.sh tag`（first mate 這一側；看板經 feed 讀） |
 | `state/myshape/` | 0700 | 下面這些檔的目錄 | 服務 |
@@ -57,7 +60,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 | `config/myshape-aggregator.json` | 0644，別的帳號不能寫 | 看板接哪個 aggregator：名稱與 feed、deliver 兩支程式的路徑（第 7 節）；看板只讀 | 使用者，或 aggregator 照使用者的意思寫（first mate 是 `fm-board.sh setup`、`bind` 與 session start） |
 | `config/fleet-ledger` | — | 上游的帳本旗標，每個 home 各一 | `fm-board.sh setup`（first mate 這一側） |
 
-每次改寫整個檔（`topics.json`、`topics-archive.json`、`offsets.json`、`notify-pending.json`、`aggregator.json`、`todos.json`、`decisions.json`、`confirmations.json`、`token`、`port`、`pid`）都用同目錄的暫存檔 `<檔名>.tmp-<pid>` 加 rename。
+每次改寫整個檔（`topics.json`、`topics-archive.json`、`offsets.json`、`notify-pending.json`、`aggregator.json`、`todos.json`、`decisions.json`、`confirmations.json`、`hashtags.json`、`token`、`port`、`pid`）都用同目錄的暫存檔 `<檔名>.tmp-<pid>` 加 rename。
 
 ### 3.1 `data/topics.json`
 
@@ -110,6 +113,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 
 - 帳本事件：`{"src":"ledger","home":"<home>","raw":"<上游帳本的那一行，原樣的字串>"}`。存原始字串而不是解析後的物件，重啟後才能用同樣的位元組去重。上游的事件有 `v`、`ts`（epoch 秒）、`event`、`task`，五種 `event`：`task.dispatched`、`task.status`、`task.pr_ready`、`task.merged`、`task.cleaned_up`。
 - 系統紀錄（`ts` 也是 epoch 秒）：`{"src":"board","rid":"r-<boot_id>-<n>","ts":…,"kind":"…","topic":"<id>","home":…,"task":…,"by":"captain|aggregator|board","label":"<當時 aggregator 的名稱>","text":"<顯示用的一行>"}`。議題層級的紀錄沒有 `home` 與 `task`。
+  使用者可能要看或撤回的改動另帶 `before` 與 `after`（改之前與之後，第 3.8 節），撤回另一筆的紀錄帶 `ref`（被撤回那一筆的 `rid`）。
   `rid` 是這筆紀錄的 id，補寫時用它去重；`by` 是看板能證明的做的人：`captain` 是頁面上拿著 token 的人做的，`aggregator` 是經 socket 的指令做的，`board` 是看板啟動時自己做的。這兩個欄位之前寫下的紀錄沒有。
   議題的 `kind`：`topic.created`、`topic.confirmed`、`topic.merged`、`topic.split`、`topic.close_proposed`、`topic.kept`（使用者按了先不關）、`topic.archived`、`topic.reopened`、`topic.moved`、`topic.renamed`、`topic.goal_changed`。頁面上做的 `text` 結尾是「（你在頁面上）」，指令做的是「（<aggregator 的名稱> 用指令）」。
   頁面上的寫入送到之後：`agent.tagged`（歸併）、`hold.answered`（在看板作答，`outcome` 是答案的選項）；作答時那個待決事項已經在別處結束（結果是 `handled_elsewhere`）寫 `hold.closed`，`outcome` 是 `elsewhere`。
@@ -119,6 +123,8 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
   較早的看板還寫過 `todo.adopted`（從看板存項目之前的紀錄搬上來）、`outcome` 是 `elsewhere` 的 `todo.taken_down`（搬上來的項目的 hold 已在別處關掉），與沒有議題的 `todo.forgotten`、`todo.settled`；存下的這些紀錄照樣讀、照樣顯示它們的 `text`。
   `text` 例：「要你動手「登入 VPN」已關：做完了，first mate 已驗證（first mate 用指令）」、「要你動手「登入 VPN」：你按了做完了（你在頁面上）」。
   `topic.confirmed` 只在看板啟動時確認舊版留下的提議時寫，封存檔裡的也寫（第 3.1 節）；更早寫下的照樣顯示。
+- hashtag 的每一個改動都寫一筆系統紀錄（第 3.8 節），帶 `before` 與 `after`。在一個議題上的帶那個議題的 `topic`，`before`、`after` 是那個議題改前改後的 hashtag，用一個空白隔開：`hashtag.added`（貼上；開了新的 hashtag 另帶 `outcome: "created"`）、`hashtag.removed`（撕掉）、`hashtag.carried`（議題合併或拆分時帶過來的）、`hashtag.reverted`（使用者撤回 aggregator 的一筆改動，帶 `ref`）。整個 hashtag 的沒有議題：`hashtag.renamed`、`hashtag.merged`、`hashtag.deleted`（`before` 與 `after` 是名稱，刪掉的 `after` 是空字串）、`hashtag.lock_changed`、`hashtag.color_changed`、`hashtag.settings_changed`（`before` 與 `after` 是設定的 JSON）、`hashtag.view_saved`、`hashtag.view_deleted`（視圖的 JSON），與沒有 `before`、`after` 的 `hashtag.seen`（使用者按了「看過了」）。
+  `text` 例：「議題「GPU 叢集」貼上 #AI_INFRA（新開的 hashtag：#AI_INFRA）（first mate 用指令）」、「hashtag #AI_INFA 併入 #AI_INFRA（2 個議題）（你在頁面上）」。
 - 看板接上 aggregator 的兩種紀錄，都沒有議題，`home` 與 `task` 是 `null`（第 7 節）：`program.confirmed`（使用者在頁面上確認看板可以執行一支程式，`by` 是 `captain`，`text` 寫出完整路徑、角色與 SHA-256，例如「確認看板可以執行 /opt/agg/plain（feed、deliver；SHA-256 …）（你在頁面上）」），與 `writes.released`（等著的寫入交給 deliver 的程式之前，`by` 是 `board`，`text` 寫出依序放行的 id，例如「接上 plain，依序送出等著的 2 筆：w-…、w-…」）。
 - 待決事項從讀取資料記下的開與關（C59），`by` 是 `board`，在待決事項的議題底下（它自己的標記，沒有就是來源 task 的），帶 `home` 與 `task`：
   - `hold.opened`：一次讀取的 `holds[]` 裡有、上一次讀取沒有的 hold。同一個 `code_commit` 之間以 task 與 `hold_set` 認一個 hold；`code_commit` 換了的那一次只以 task 認，因為不同的讀取程式可能把同一個 hold 寫成不同的樣子（較舊的沒有 `hold_set`），而且只有 `hold_set` 是確切時間、不早於那個 home 的 `seen_at`（第 3.7 節）的才寫開啟：比那更早的 hold 本來就開著，只是新的讀取程式才報出來（例如不再略過主 home 的 `動手：` hold）。`ts` 是它的 `hold_set`；`hold_set` 只有日期或沒有時是這次讀取的時間，`text` 結尾加「（最晚 MM-DD HH:mm）」。`closed_holds[]` 裡一個上一次讀取時還沒開的、帶 `opened_at` 的待決事項，也先寫一筆，`ts` 是 `opened_at`。
@@ -126,7 +132,8 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
   - 兩種都帶 `key`：`hold.opened\t<home>\t<task>\t<hold_set>`（從 `closed_holds[]` 先寫的是 `…\t#<digest>`）與 `hold.closed\t<home>\t<task>\t<digest>`。看板啟動時從這個檔重建 key 的集合，同一個 key 只寫一次。
   - 從什麼時候開始看：看板第一次讀到一個 home 的那一次不寫開啟；那個 home 的回報還沒給過 `closed_cursor`，或看板還沒交給它游標的那一次，不寫關閉。那時已經開著、已經關掉的都不補記。`code_commit` 換了（每一次更新程式都是）不是重新開始：看板接著上一次成功讀取時記下的比，所以更新前最後一次讀取之後、更新後第一次讀取之前開的待決事項有它的開啟，之前就開著的不再寫一次。照舊不寫開啟的情形：同一個 task 在那段空檔裡關掉又重新 hold（新的那一輪只以 task 認，當成已經看過）；`hold_set` 不是確切時間的 hold；看板記下的那一筆是較舊的看板寫的、沒有 `seen_at` 的那一次（換上這一版的那次更新就是）。讀取失敗、回 4、版本不對或不是合法的回報時什麼都不寫，也不當成每個待決事項都關了。
   `text` 例：「待決事項「NAS 兩步驗證」已開：NAS 要不要開兩步驗證？」、「待決事項「NAS 兩步驗證」已回答：要（經聊天）」、「待決事項「X」已回答並放行，工作繼續：好（經聊天）」、「待決事項「X」已對帳結束，不必再答：…」、「待決事項「X」隨 PR 結束而關閉」。
-- 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`，確認程式是 `data/myshape/confirmations.json`；只存紀錄的改動（例如 `writes.released`）經 `topics.json`。看板先把三個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
+- 每一個改動都有一個存它的檔：議題的改動是 `topics.json`，要你動手的改動是 `data/myshape/todos.json`，確認程式是 `data/myshape/confirmations.json`，hashtag 的改動是 `data/myshape/hashtags.json`；只存紀錄的改動（例如 `writes.released`）經 `topics.json`。看板先把四個檔 `outbox` 裡 `events.jsonl` 還沒有的紀錄補寫進去（寫不進去就拒絕這次改動，回「看板寫不進紀錄（原因），這次的修改沒有做」），再把改動和它的紀錄一起寫進那個檔的 `outbox`、用同一次改名存下，然後把紀錄追加到這裡並 fsync。追加失敗時改動已經生效，紀錄留在 `outbox`，下一次改動或下一次啟動補寫；啟動時補寫不進去，看板就不啟動。
+  建立帶 hashtag 的議題、合併與拆分議題，是一個議題的改動加上它在 `hashtags.json` 的後續：`topics.json`（帶議題的紀錄）先存，`hashtags.json`（帶 hashtag 的紀錄）緊接著存，所以中途當掉時議題的改動已經生效並有紀錄，hashtag 的後續沒做也沒有紀錄：只會有一個少了 hashtag 的議題，不會有貼在不存在的議題上的 hashtag。
   封存時封存檔先寫、`topics.json` 後寫，重開時反過來，所以中途當掉時議題留在 `topics.json`、沒有紀錄，或兩邊都有、`topics.json` 為準、紀錄由 `outbox` 補寫。要你動手的改動先寫 `topics.json` 的 `todos`，再寫 `todos.json`；看板啟動時從 `todos.json` 重算 `todos`。
 
 帳本事件去重的鍵是 (home, 帳本那一行的原始位元組)，系統紀錄的是 `rid`。啟動時讀完整個檔重建兩個去重集合；最後一行沒有換行字元就截掉。
@@ -186,6 +193,47 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 - 每個 home 上一次讀取成功時看到的：回報的 `code_commit`（下一次回報的不同時，開著的 hold 只以 task 比對，第 3.3 節）、`seen_at`（最後一次改了這一筆的那次讀取開始的時間，epoch 秒；這一筆沒變時不動，所以檔不會每讀一次就重寫；較舊的看板寫的沒有）、`closed_cursor` 的 `to_offset` 與 `to_prefix_sha256`（回報沒有時是 `null`）、每個開著的 hold（`<task>\t<hold_set>`）、每個已關的待決事項（`<task>\t<digest>`）。
 - 看板寫完一次讀取的紀錄之後才寫這個檔，中途當掉時下一次讀同一段，紀錄的 `key` 讓它只記一次（第 3.3 節）。讀取失敗、回報不合法時不動它。
 - 沒有這個檔、讀不懂，就當成每個 home 都還沒看過；一個 home 用帶游標的讀取回 2（不認得這些參數）時，看板忘掉那個 home 的這一筆，下一次不帶游標讀。
+
+### 3.8 `data/myshape/hashtags.json`
+
+```json
+{
+  "v": 1,
+  "hashtags": {
+    "AI_INFRA": { "key": "ai_infra", "created_at": "2026-11-26T02:00:00Z", "created_by": "aggregator",
+                  "color": "c3", "locked": false }
+  },
+  "topics": { "quota-routing": ["AI_INFRA", "URGENT"] },
+  "views": { "work": { "name": "工作", "any": [], "none": ["AI_INFRA"], "text": "", "untagged": false } },
+  "settings": { "aggregator_may_tag": true, "aggregator_may_create": true, "per_topic_max": 8,
+                "board_max": 50, "aggregator_hourly_max": 20, "default_view": "all" }
+}
+```
+
+- 另開一個檔，不放在 `topics.json`：看板讀 `topics.json` 時只照已知的欄位重建議題，退回舊版時下一次存檔會丟掉新欄位；舊版不讀這個檔，也不會去動它。
+- `hashtags` 的鍵是 hashtag 第一次建立時的寫法，就是顯示的寫法。名稱是文字（任何文字，含中文與組合記號）、數字與底線，1 到 32 個碼位，開頭的 `#` 不算；沒有保留字。`key` 是名稱先做 NFKC 再轉小寫，用來判斷是不是同一個 hashtag，所以 `AI_INFRA`、`ai_infra`、全形的 `ＡＩ_INFRA` 是同一個，顯示 `AI_INFRA`。讀的一方沒有 NFKC 時比對 `key` 就好。同一個 `key` 出現兩次時留建立得最早的那一個。
+  `created_by` 是 `captain` 或 `aggregator`；`color` 是 `c1` 到 `c8`，頁面上是固定色票的 class（第 6.2 節的 CSP 擋 `style` 屬性）；`locked` 的 hashtag 只有使用者能在頁面上貼撕。
+- `topics` 是議題 id 到它貼的 hashtag（顯示的寫法，照貼上的順序）。合併掉的議題 id 的 hashtag 算在它併進去的議題上（較舊的看板合併時就是這樣留下的），看板不認得的議題 id 讀的時候就丟掉，所以沒有貼在不存在的議題上的 hashtag；封存的議題留著它的 hashtag，重開時還在。
+- `views` 是使用者存下的命名視圖，鍵是視圖 id（議題 id 的文法，`all` 留給「全部」）：`any` 是有其中任何一個（空的是不限），`none` 是一個都沒有，`text` 是關鍵字，`untagged` 是只要沒有任何 hashtag 的議題；四者用「而且」合起來。
+- `settings` 是使用者在頁面「hashtag 設定」調的值，沒有或不合法的項目用預設：
+
+  | 設定 | 預設 | 範圍與意思 |
+  | --- | --- | --- |
+  | `aggregator_may_tag` | `true` | aggregator 可以在議題上貼撕 hashtag |
+  | `aggregator_may_create` | `true` | aggregator 可以開新的 hashtag；新開的在頁面上標「新」，直到使用者按「看過了」 |
+  | `per_topic_max` | 8 | 1 到 32。一個議題最多幾個，使用者也受它管。合併取聯集可以超過，頁面標出，減到上限以下之前誰都不能再貼新的 |
+  | `board_max` | 50 | 1 到 500。aggregator 開新的時整個看板最多幾個；使用者在頁面上仍可開 |
+  | `aggregator_hourly_max` | 20 | 0 到 1000。aggregator 一小時內最多改幾次（`hashtag.added`、`hashtag.removed` 的紀錄，從 `events.jsonl` 算），超過的拒絕並說使用者可以在頁面上調高 |
+  | `default_view` | `"all"` | 打開看板預設看哪個視圖：`all` 或一個視圖 id |
+
+  單一 hashtag 的鎖預設不鎖（`locked: false`）。
+- `outbox` 是最後一次 hashtag 改動寫的系統紀錄，和 `topics.json` 的一樣（第 3.3 節）。
+- 誰能做什麼：在一個議題上貼、撕（`hashtag-add`、`hashtag-remove`）兩條通道都能用，socket 上一次只動一個議題；第一次用到的名稱就開新的 hashtag。改名、合併兩個 hashtag、刪掉整個 hashtag（都要兩步確認，第 8 節）、改設定、上鎖解鎖、換顏色、撤回 aggregator 的改動、「看過了」與存、刪視圖只在頁面上（第 6.1 節）。
+  拆分議題時新議題複製來源的 hashtag；合併議題時取聯集，第二步確認畫面寫出會多哪些。這兩種是議題操作的後續，不算 aggregator 的 hashtag 改動，不受鎖與每小時上限管。
+- 撤回：頁面列出 aggregator 在上一次「看過了」之後的 `hashtag.added`、`hashtag.removed`，每一筆可以撤回一次：它貼上的撕掉、撕掉的貼回去，它新開、現在沒有議題貼著、使用者還沒看過的 hashtag 一起拿掉；它撕掉的 hashtag 已經不在（改名、合併或刪掉了）就拒絕。
+- 這些鎖、上限與只在頁面上的操作，是防 aggregator 一時不小心或被誤導的護欄，不是界線：socket 不驗證身分（第 6.1 節），瀏覽器的 token 是同一個帳號的一個檔，同一個帳號下存心的程式擋不住，和確認紀錄（第 7 節）一樣。
+- 讀的一方：aggregator 可以直接讀這個檔（設定與鎖也在裡面，才不會白送會被拒絕的要求），但只經 socket 的操作改它。`myshape.sh list --hashtag` 用 jq 讀它，服務沒在跑也能用。
+- `v` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位。沒有這個檔時當成沒有任何 hashtag，第一次改 hashtag 時才建立。
 
 ## 4. 讀取契約（feed）
 
@@ -279,9 +327,9 @@ first mate 這一側怎麼產生這份回報（`fm-topic-board-read.sh` 讀 back
 
 `state/myshape/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`reset-token`。
+`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`hashtag-add`、`hashtag-remove`、`reset-token`。`create` 另收 `hashtags`（名稱的清單）。
 改動看板的操作全部列在一張表裡（`myshape/src/ops.ts` 的 `OPERATIONS`）：哪條通道可以用、經哪個檔存（第 3.3 節）。socket 與頁面都只經這張表改看板，每一個改動都至少寫一筆系統紀錄，沒有紀錄的改動編譯不過。
-`keep`（頁面的「先不關」）、`todo-claim`（「做完了」）、`todo-drop`（「不做了」）與 `todo-takedown`（「好，撤下」）是使用者自己按的，socket 收到就拒絕，什麼都不改；它們只在頁面的 API 上。
+`keep`（頁面的「先不關」）、`todo-claim`（「做完了」）、`todo-drop`（「不做了」）與 `todo-takedown`（「好，撤下」）是使用者自己按的，socket 收到就拒絕，什麼都不改；它們只在頁面的 API 上。hashtag 的 `hashtag-rename`、`hashtag-merge`、`hashtag-delete`、`hashtag-settings`、`hashtag-lock`、`hashtag-color`、`hashtag-revert`、`hashtag-seen`、`view-save`、`view-delete` 也是（第 3.8 節）。
 `todo-*` 的操作不等讀取：aggregator 可能正是在看板讀它的時候送來的。
 socket 上改議題的操作寫進議題更新的紀錄都註明「<aggregator 的名稱> 用指令」，頁面做的註明「你在頁面上」；`move`、`rename`、`goal` 也寫紀錄，`move` 與 `goal` 另記進來歷（第 3.1 節）。`open` 與 `restart` 由 client 用 `health` 與 `stop` 組出來。另有只給測試用的 `dump`、`test-write`、`test-resend`、`test-ignore`，只在服務的環境變數 `MYSHAPE_TEST=1` 時註冊，平常送這些 `op` 會得到「不認得的 op」。
 
@@ -431,6 +479,7 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 議題併進另一個議題 | (舊 id, 新 id) |
 | 重送一筆「結果不明」的寫入 | write id |
 | 要你動手的「不做了」「好，撤下」 | (動作, 項目 id) |
+| 改名、合併、刪掉整個 hashtag（第 3.8 節） | (動作, 名稱, 另一個名稱, 會動到的議題 id；合併另加併進去的那個 hashtag 的議題 id)，議題清單由服務當下讀出，第一步回給頁面顯示 |
 | 讓看板執行一支要確認的程式（第 7 節） | (程式的完整路徑, 程式內容的 SHA-256, 設定檔內容的 SHA-256)，兩步都由服務當下讀檔算出，請求只說是 feed 還是 deliver |
 
 作答一律兩步（採建議 C12）：答案送出就會關掉或解除那個 hold，不能收回。

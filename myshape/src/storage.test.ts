@@ -10,6 +10,7 @@ import type { BoardPaths } from "./layout.js";
 import type { StoredRecord } from "./records.js";
 import { commitChange, loadBoard, readBoard } from "./store.js";
 import type { CommitTarget, StoredBoard } from "./store.js";
+import { addHashtags, emptyHashtags } from "./hashtags.js";
 import { addItem, claimItem, emptyTodos, withProjection } from "./todos.js";
 import { archive, create, emptyState, reopen } from "./topics.js";
 import type { TopicResult, TopicState } from "./topics.js";
@@ -52,7 +53,8 @@ function boardOf(state: TopicState): StoredBoard {
     topics: state,
     todos: emptyTodos(),
     confirmations: emptyConfirmations(),
-    outbox: { topics: [], todos: [], confirmations: [] },
+    hashtags: emptyHashtags(),
+    outbox: { topics: [], todos: [], confirmations: [], hashtags: [] },
   };
 }
 
@@ -170,6 +172,7 @@ describe("layout", () => {
       decisions: "/d/myshape/decisions.json",
       binding: "/c/myshape-aggregator.json",
       confirmations: "/d/myshape/confirmations.json",
+      hashtags: "/d/myshape/hashtags.json",
     });
   });
 
@@ -818,6 +821,43 @@ describe("a change and its record survive a crash between them", () => {
     expect(commit.board.topics).toEqual(state);
     return commit.board;
   }
+
+  it("a crash between topics.json and hashtags.json leaves the topic without its hashtag", () => {
+    const board = liveBoard();
+    const made = create(board.topics, { name: "B", goal: "g", id: "b" }, "T2");
+    if (!made.ok || !made.changed) throw new Error("expected a change");
+    const tagged = addHashtags(
+      {
+        store: board.hashtags,
+        topics: made.state,
+        by: "captain",
+        records: [],
+        now: "2026-11-26T00:00:00Z",
+      },
+      "b",
+      ["AI_INFRA"],
+    );
+    if (!tagged.ok || !tagged.changed) throw new Error("expected a change");
+    fs.mkdirSync(paths.hashtags, { recursive: true });
+    expect(() =>
+      commitChange(
+        target,
+        board,
+        {
+          file: "topics",
+          next: made.state,
+          records: made.records,
+          hashtags: { next: tagged.store, records: tagged.records },
+        },
+        ACTOR,
+      ),
+    ).toThrow();
+    fs.rmSync(paths.hashtags, { recursive: true });
+    const after = restart();
+    expect(after.topics.doc.topics["b"]).toBeDefined();
+    expect(after.hashtags.topics).toEqual({});
+    expect(boardLines().map((line) => line.kind)).toEqual(["topic.created", "topic.created"]);
+  });
 
   it("nothing renamed: no change and no new record", () => {
     const board = liveBoard();

@@ -2,6 +2,7 @@ import { h } from "./dom.js";
 import { mergeConfirm, mergeMenu } from "./home.js";
 import { closedFold, closedTodoEntries, draftInput, holdCard, light, liveTodos, todoCard, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
+import { topicTagEditor } from "./tags.js";
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
 const MAX_UPDATES = 200;
 /** A line of text with an edit button that swaps it for an input in place. */
@@ -65,6 +66,7 @@ function header(page, view, actions, id) {
     return [
         h("div", { class: "titleline" }, editable(page, actions, id, "name", topic.name), h("span", { class: "pill" }, place), menu(page, actions)),
         h("div", { class: "titleline" }, editable(page, actions, id, "goal", topic.goal)),
+        topic.status === "archived" ? null : topicTagEditor(page, view, actions, id),
         panels(page, view, actions, id),
     ];
 }

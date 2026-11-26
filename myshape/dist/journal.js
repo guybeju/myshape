@@ -15,6 +15,9 @@ const OPTIONAL_BOARD_FIELDS = [
     "key",
     "answer",
     "source",
+    "before",
+    "after",
+    "ref",
 ];
 function parseLedgerLine(home, raw) {
     let line;
