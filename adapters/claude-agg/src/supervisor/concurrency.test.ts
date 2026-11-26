@@ -57,6 +57,11 @@ describe("the semaphore", () => {
     supervisor.tick();
     await settle();
     expect(running(world)).toEqual(["a-1", "b-1"]);
+    expect(world.tasks()["a-1"]).toMatchObject({
+      state: "working",
+      model: "test-model",
+      session_id: "s0",
+    });
     expect(world.queued().map((entry) => [entry.id, entry.hold])).toEqual([
       ["c-1", WAIT.full],
       ["d-1", WAIT.full],

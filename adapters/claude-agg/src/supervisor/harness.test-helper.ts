@@ -109,7 +109,7 @@ export interface Call {
   script: Script | undefined;
 }
 
-/** What one session does: the messages it sends, after waiting on its gate. */
+/** What one session does: its first message (the start), then the rest once its gate opens. */
 export interface Script {
   messages: object[];
   gate?: Gate;
@@ -154,8 +154,10 @@ async function* run(
     const first = await reader.next();
     if (!first.done) call.prompts.push(first.value.message.content);
     if (script === undefined) throw new Error("no script left for this session");
+    const [start, ...rest] = script.messages;
+    if (start !== undefined) yield start;
     await script.gate?.opened;
-    for (const message of script.messages) yield message;
+    for (const message of rest) yield message;
     if (script.error !== undefined) throw script.error;
   } finally {
     active.delete(call);

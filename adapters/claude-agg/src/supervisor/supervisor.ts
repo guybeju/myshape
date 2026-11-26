@@ -285,11 +285,21 @@ export class Supervisor {
     if (changed) this.store.writeQueued(this.queued);
   }
 
+  /**
+   * Starts one candidate. One whose topic has no entry in the dispatch order
+   * is skipped, not started: starting it would end at once and start the next
+   * pass, again and again.
+   */
   private launch(candidate: Candidate, entries: ReadonlyMap<string, OrderEntry>): void {
     const entry = entries.get(candidate.topic);
+    if (entry === undefined) {
+      this.log(
+        `${candidate.id}: its topic ${candidate.topic} is not in the dispatch order; not started`,
+      );
+      return;
+    }
     let done: Promise<void>;
     if (candidate.id.startsWith(PLAN_PREFIX)) {
-      if (entry === undefined) return;
       this.planned.add(candidate.topic);
       done = this.plan(entry);
     } else if (this.tasks.has(candidate.id)) {
@@ -399,9 +409,9 @@ export class Supervisor {
   }
 
   /** Claims a planned task: tasks.json and its tag first, then queued.json, then the worktree. */
-  private async dispatch(id: string, topic: string, entry: OrderEntry | undefined): Promise<void> {
+  private async dispatch(id: string, topic: string, entry: OrderEntry): Promise<void> {
     const planned = this.queued.find((item) => item.id === id);
-    if (planned === undefined || entry === undefined) return;
+    if (planned === undefined) return;
     const repo = this.settings.repos[planned.repo];
     if (repo === undefined) {
       this.log(`task ${id}: repo ${planned.repo} is not in the settings; taken off the queue`);
