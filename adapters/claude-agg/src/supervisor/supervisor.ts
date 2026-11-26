@@ -387,7 +387,9 @@ export class Supervisor {
       this.log(`task ${item.task}: the captain answered ${answer.label || answer.answer}`);
     }
     this.store.retireInbox(item.file);
-    void this.proposeClose(item.task);
+    this.proposeClose(item.task).catch((error: unknown) =>
+      this.log(`task ${item.task}: no close proposal: ${(error as Error).message}`),
+    );
   }
 
   /** Hands a message or direct to the running session; the inbox file goes once it is taken. */
@@ -395,8 +397,12 @@ export class Supervisor {
     const stream = this.streams.get(task);
     const taken = () => {
       this.pushed.delete(item.file);
-      this.store.retireInbox(item.file);
       this.log(`task ${task}: passed the captain's ${item.kind} on to its running session`);
+      try {
+        this.store.retireInbox(item.file);
+      } catch (error) {
+        this.log(`inbox/${item.file} was passed on but not moved: ${(error as Error).message}`);
+      }
     };
     this.pushed.set(item.file, task);
     if (stream?.push(livePrompt(item.kind, item.text), taken) !== true)
@@ -410,36 +416,34 @@ export class Supervisor {
 
   /** What the captain did that resumes `id`'s session now, or undefined. */
   private resumeOf(id: string): Resume | undefined {
-    const task = this.tasks.get(id);
-    if (
-      task === undefined ||
-      this.live.has(id) ||
-      task.state === "done" ||
-      task.state === "failed"
-    ) {
-      return undefined;
-    }
+    const task = this.stopped(id);
+    if (task === undefined) return undefined;
     const files = this.sorted.inputs.get(id) ?? [];
-    const answerItem = files.find((item) => item.kind === "answer");
-    const answer = answerItem === undefined ? undefined : this.store.readAnswer(id);
+    const answer = this.answerOf(id, files);
     const directs = files.flatMap((item) => (item.kind === "direct" ? [item.text] : []));
+    const input: ResumeInput = { quota: this.resumable(id), directs };
     const todos = this.todoInput(id, task, files);
-    const quota = this.resumable(id);
-    if (!quota && answer === undefined && directs.length === 0 && todos === undefined) {
-      return undefined;
-    }
-    const input: ResumeInput = { quota, directs };
-    const hold = this.holds.get(id);
-    if (answer !== undefined && hold !== undefined) {
-      input.answer = {
-        title: hold.title,
-        question: hold.question,
-        answer: answer.answer,
-        label: answer.label,
-      };
-    }
+    if (answer !== undefined) input.answer = answer.text;
     if (todos !== undefined) input.todos = todos;
-    return { input, detail: resumeDetail(input), files, answerId: answer?.id };
+    const detail = resumeDetail(input);
+    return detail === undefined ? undefined : { input, detail, files, answerId: answer?.id };
+  }
+
+  /** The task when it has a session that is not running and has not ended, else undefined. */
+  private stopped(id: string): TaskEntry | undefined {
+    const task = this.tasks.get(id);
+    if (task === undefined || this.live.has(id)) return undefined;
+    return task.state === "done" || task.state === "failed" ? undefined : task;
+  }
+
+  /** The captain's answer to the task's open hold, when an answer among `files` is waiting. */
+  private answerOf(id: string, files: readonly InboxItem[]) {
+    const hold = this.holds.get(id);
+    if (hold === undefined || !files.some((item) => item.kind === "answer")) return undefined;
+    const answer = this.store.readAnswer(id);
+    if (answer === undefined) return undefined;
+    const { title, question } = hold;
+    return { id: answer.id, text: { title, question, answer: answer.answer, label: answer.label } };
   }
 
   /**
@@ -962,11 +966,12 @@ export class Supervisor {
   }
 }
 
-function resumeDetail(input: ResumeInput): string {
+/** The detail of a task resumed with `input`, or undefined when nothing resumes it. */
+function resumeDetail(input: ResumeInput): string | undefined {
   if (input.answer !== undefined) return DETAIL.answered(input.answer.label || input.answer.answer);
   if (input.directs.length > 0) return DETAIL.directed;
   if (input.todos !== undefined) return DETAIL.verifying;
-  return DETAIL.resumed;
+  return input.quota ? DETAIL.resumed : undefined;
 }
 
 function endingFailed(text: string): Ending {
