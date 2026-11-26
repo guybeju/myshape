@@ -3,6 +3,7 @@
 // memory, and a scratch board home. Nothing here starts a process.
 
 import {
+  appendFileSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -11,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { CommandRequest, CommandResult, PlainEnv, RunCommand } from "./commands.js";
 import { removeHomes, writeHome } from "./fixtures.test-helper.js";
@@ -278,6 +279,10 @@ export class FakeCommands {
   summaryStatus = 0;
   /** The exit status of `schedule close` while it is not 0; the board does nothing then. */
   closeStatus = 0;
+  /** The exit status of `schedule take` while it is not 0; the board does nothing then. */
+  takeStatus = 0;
+  /** While true, running a `schedule` command throws, as a runner that cannot start it does. */
+  throwOnSchedule = false;
 
   constructor(
     private readonly boardCommand: string,
@@ -296,9 +301,13 @@ export class FakeCommands {
     const [command, task = "", kind = ""] = request.args;
     if (command === "status") return done(0, "看板服務：在跑\n");
     if (command === "open") return done(0, "http://127.0.0.1:1/\n");
+    if (command === "schedule" && this.throwOnSchedule) throw new Error("spawn failed");
     if (command === "schedule") return this.schedule(request);
     if (command === "summary" && this.summaryStatus === 0) {
       this.summaries.push({ task, kind, text: request.input ?? "" });
+      const file = `${request.env["MYSHAPE_HOME"] ?? ""}/data/myshape/summaries.jsonl`;
+      const line = { ts: 0, home: "main", task, kind, text: request.input ?? "" };
+      if (existsSync(dirname(file))) appendFileSync(file, `${JSON.stringify(line)}\n`);
     }
     return done(this.summaryStatus, "", this.summaryStatus === 0 ? "" : "refused");
   }
@@ -333,6 +342,7 @@ export class FakeCommands {
   }
 
   private take(file: ScheduleDoc, key: string, note: string): CommandResult {
+    if (this.takeStatus !== 0) return done(this.takeStatus, "", "看板拒絕了");
     const occurrence = file.occurrences[key];
     if (occurrence === undefined || !this.isOpen(file, key))
       return done(1, "", `${key} 不是開著的一場。`);

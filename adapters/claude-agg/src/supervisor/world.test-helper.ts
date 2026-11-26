@@ -10,6 +10,7 @@ import { runProgram } from "#agg/test-home.js";
 import type { LedgerEvent, TaskEntry } from "#agg/state-files.js";
 
 import { existingRealPath } from "./guard.js";
+import { keyAt } from "./occurrences.js";
 import {
   boardHome,
   CANARY,
@@ -37,12 +38,6 @@ export interface HoldView {
   on_answer: string;
   hold_set: string;
   hold_until?: string | null;
-}
-
-/** The time of an occurrence key's T (`<schedule>:YYYYMMDDTHHMMZ`), in epoch milliseconds. */
-export function keyTime(key: string): number {
-  const at = key.split(":")[1] ?? "";
-  return Date.parse(at.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z$/, "$1-$2-$3T$4:$5:00Z"));
 }
 
 export class World {
@@ -228,7 +223,7 @@ export class World {
     topic: string,
     extra: { rt?: string; expires_at?: string } = {},
   ): { outcome: string } {
-    const iso = new Date(keyTime(key)).toISOString().replace(/\.000Z$/, "Z");
+    const iso = keyAt(key);
     const phase =
       { "schedule.upcoming": "pre", "schedule.due": "start" }[event as string] ?? event.slice(9);
     return this.deliver({

@@ -10,6 +10,8 @@
 //   <schedule id>-at-<UTC>-missed      the carrier of a missed occurrence's report summary
 // A schedule id and a topic id share one grammar, so these are task ids.
 
+import { createHash } from "node:crypto";
+
 import type { Rt, SchedulesFile } from "./board-files.js";
 import { clip, NOTE_MAX } from "./commands.js";
 
@@ -30,6 +32,13 @@ export function workOf(id: string): WorkRef | undefined {
   return { key: `${match[1] ?? ""}:${match[2] ?? ""}`, makeUp: match[3] !== undefined };
 }
 
+/** T of an occurrence key (`<schedule>:YYYYMMDDTHHMMZ`) as a UTC ISO time, "" for another text. */
+export function keyAt(key: string): string {
+  const at = key.split(":")[1] ?? "";
+  const iso = at.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z$/, "$1-$2-$3T$4:$5:00Z");
+  return iso === at ? "" : iso;
+}
+
 function stem(key: string): string {
   const [series = "", at = ""] = key.split(":");
   return `${series}-at-${at}`;
@@ -40,9 +49,20 @@ export function workId(ref: WorkRef, n: number): string {
   return `${stem(ref.key)}-${ref.makeUp ? "makeup-" : ""}${String(n)}`;
 }
 
-/** The id that carries the report summary of a missed occurrence; it is never a task. */
+/** The longest id of a missed occurrence's report carrier: the board's 64-character topic id limit. */
+export const CARRIER_MAX = 64;
+
+/**
+ * The id that carries the report summary of a missed occurrence; it is never
+ * a task. A schedule id too long to fit in CARRIER_MAX keeps its first part
+ * and the start of its SHA-256, so every key gives a distinct id that fits.
+ */
 export function missedReportId(key: string): string {
-  return `${stem(key)}-missed`;
+  const [series = "", at = ""] = key.split(":");
+  const tail = `-at-${at}-missed`;
+  if (series.length + tail.length <= CARRIER_MAX) return `${series}${tail}`;
+  const hash = createHash("sha256").update(series).digest("hex").slice(0, 8);
+  return `${series.slice(0, CARRIER_MAX - tail.length - hash.length - 1)}-${hash}${tail}`;
 }
 
 /**

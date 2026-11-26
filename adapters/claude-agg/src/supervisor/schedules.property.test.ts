@@ -7,14 +7,25 @@
 // occurrence is taken or closed more than once, an occurrence's work never
 // runs before its time, and the only schedule writes are take and close done.
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterAll, describe, expect, it } from "vitest";
 
 import { generator } from "./fixtures.test-helper.js";
-import { Gate, init, plan, removeScratch, result, workerOutput } from "./harness.test-helper.js";
-import { workOf } from "./occurrences.js";
+import {
+  Gate,
+  init,
+  plan,
+  removeScratch,
+  result,
+  workerOutput,
+  type Call,
+} from "./harness.test-helper.js";
+import { keyAt, workOf } from "./occurrences.js";
 import { MAX_RUNNING } from "./scheduler.js";
 import type { Supervisor } from "./supervisor.js";
-import { keyTime, World } from "./world.test-helper.js";
+import { World } from "./world.test-helper.js";
 
 afterAll(removeScratch);
 
@@ -113,11 +124,25 @@ async function step(run: Run): Promise<void> {
   await settle();
 }
 
+/**
+ * The topic a running session works on, read apart from the supervisor: a
+ * worker's from its task's tag file, the planner's from its prompt's topic frame.
+ */
+function topicOfSession(world: World, call: Call): string {
+  if (call.options.cwd === world.root)
+    return /"id": "([^"]+)"/.exec(call.prompts[0] ?? "")?.[1] ?? "";
+  const task = call.options.cwd.split("/").at(-1) ?? "";
+  const tag = join(world.agg, "tags", task);
+  const lines = existsSync(tag) ? readFileSync(tag, "utf8").split("\n").filter(Boolean) : [];
+  return lines.at(-1)?.split(" ")[0] ?? "";
+}
+
 function check(run: Run, context: string): void {
   const { world, supervisor } = run;
   expect(world.query.active.size, context).toBeLessThanOrEqual(MAX_RUNNING);
-  const topics = supervisor.snapshot().running.map((slot) => slot.topic);
+  const topics = [...world.query.active].map((call) => topicOfSession(world, call));
   expect(new Set(topics).size, `${context}: two on one topic`).toBe(topics.length);
+  expect(supervisor.snapshot().running.length, context).toBeLessThanOrEqual(MAX_RUNNING);
   const writes = world.commands.scheduleCalls();
   for (const args of writes) {
     expect(["take", "close"], context).toContain(args[1]);
@@ -130,7 +155,9 @@ function check(run: Run, context: string): void {
   for (const call of world.query.active) {
     const ref = workOf(call.options.cwd.split("/").at(-1) ?? "");
     if (ref !== undefined && !ref.makeUp)
-      expect(keyTime(ref.key), `${context}: ${ref.key} ran early`).toBeLessThanOrEqual(world.nowMs);
+      expect(Date.parse(keyAt(ref.key)), `${context}: ${ref.key} ran early`).toBeLessThanOrEqual(
+        world.nowMs,
+      );
   }
 }
 

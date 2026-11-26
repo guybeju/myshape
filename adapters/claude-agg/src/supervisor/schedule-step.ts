@@ -32,6 +32,7 @@ export const SCHEDULE_LOG = {
   ended: (key: string) => `occurrence ${key} has ended; its notice is not acted on`,
   silent: (key: string) => `occurrence ${key}'s schedule does not ring now; not taken`,
   reported: (key: string) => `reported the missed occurrence ${key}`,
+  alreadyReported: (key: string) => `the missed occurrence ${key} was already reported`,
   notReported: (key: string, problem: string) =>
     `the missed occurrence ${key} was not reported: ${problem}`,
   expired: (key: string) =>
@@ -53,6 +54,8 @@ export interface StepHost {
   live: (topic: string) => boolean;
   /** Every task id and queued id the supervisor knows. */
   ids: () => string[];
+  /** Whether the board already stores a report summary for this id. */
+  reported: (id: string) => boolean;
 }
 
 /** A missed soft-rt occurrence waiting for its planner, under the topic it is on now. */
@@ -153,12 +156,18 @@ export class ScheduleStep {
 
   /**
    * Files the report summary under the occurrence's topic: the carrier id's
-   * topic tag first (once), then the summary, then the notice is retired.
+   * topic tag first (once), then the summary (once: not when the board
+   * already stores one for the carrier), then the notice is retired.
    */
   private report(item: ScheduleItem): void {
     const notice = item.schedule;
     const id = missedReportId(notice.key);
     const { store } = this.host;
+    if (this.host.reported(id)) {
+      this.host.log(SCHEDULE_LOG.alreadyReported(notice.key));
+      this.retire(item);
+      return;
+    }
     this.send(
       `report ${notice.key}`,
       async () => {

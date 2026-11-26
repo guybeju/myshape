@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
 
 import {
+  hasSummary,
   readBoard,
   readTodos,
   type Board,
@@ -242,6 +243,7 @@ export class Supervisor {
       current: (topic) => this.current(topic),
       live: (topic) => this.liveTopic(topic),
       ids: () => [...this.tasks.keys(), ...this.queued.map((entry) => entry.id)],
+      reported: (id) => hasSummary(settings.home, id, "report"),
     });
   }
 

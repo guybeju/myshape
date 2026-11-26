@@ -344,6 +344,14 @@ describe("a missed occurrence", () => {
       expect(world.inbox().waiting).toEqual([]);
       expect(Object.keys(world.tasks())).toEqual([]);
       supervisor.close();
+      const again = await world.start();
+      world.notice("schedule.missed", MISSED, "weekly", { rt });
+      await pass(again);
+      expect(world.commands.summaries).toHaveLength(1);
+      expect(readFileSync(tag, "utf8").split("\n").filter(Boolean)).toHaveLength(1);
+      expect(world.logs).toContain(SCHEDULE_LOG.alreadyReported(MISSED));
+      expect(world.inbox().waiting).toEqual([]);
+      again.close();
     },
   );
 });
@@ -365,6 +373,118 @@ describe("what it writes on the board for schedules", () => {
       expect(["take", "close"]).toContain(args[1]);
       if (args[1] === "close") expect(args[3]).toBe("done");
     }
+    supervisor.close();
+  });
+});
+
+describe("when something goes wrong", () => {
+  it("retires a coming-up notice the board refuses to take, with a log line", async () => {
+    const world = scheduled();
+    world.commands.takeStatus = 1;
+    const supervisor = await world.start();
+    world.notice("schedule.upcoming", KEY, "weekly");
+    await pass(supervisor);
+    expect(takes(world)).toHaveLength(1);
+    expect(world.inbox().waiting).toEqual([]);
+    expect(world.logs.some((line) => line.startsWith(`occurrence ${KEY} was not taken`))).toBe(
+      true,
+    );
+    supervisor.close();
+  });
+
+  it("keeps a notice whose take could not be run, and takes it on a later pass", async () => {
+    const world = scheduled();
+    world.commands.throwOnSchedule = true;
+    const supervisor = await world.start();
+    world.notice("schedule.upcoming", KEY, "weekly");
+    await pass(supervisor);
+    expect(world.inbox().waiting).toHaveLength(1);
+    expect(world.logs).toContain(SCHEDULE_LOG.notTaken(KEY, "spawn failed"));
+    world.commands.throwOnSchedule = false;
+    await pass(supervisor);
+    expect(world.inbox().waiting).toEqual([]);
+    expect(world.schedulesDoc().occurrences[KEY]?.["state"]).toBe("taken");
+    supervisor.close();
+  });
+
+  it("does not act on a notice whose occurrence is no longer in the file", async () => {
+    const world = scheduled();
+    world.endOccurrence(KEY);
+    const supervisor = await world.start();
+    world.notice("schedule.upcoming", KEY, "weekly");
+    await pass(supervisor);
+    expect(world.commands.scheduleCalls()).toEqual([]);
+    expect(world.logs).toContain(SCHEDULE_LOG.ended(KEY));
+    expect(world.inbox().waiting).toEqual([]);
+    supervisor.close();
+  });
+
+  it("does not make up a missed occurrence whose topic left the board", async () => {
+    const world = new World({ normal: [], later: [] });
+    world.writeSchedules({ weekly: { topic: "weekly", rt: "soft-rt" } });
+    const supervisor = await world.start();
+    const missed = "weekly:20261126T0215Z";
+    world.notice("schedule.missed", missed, "weekly", { rt: "soft-rt" });
+    await pass(supervisor);
+    expect(world.query.calls).toEqual([]);
+    expect(world.logs).toContain(SCHEDULE_LOG.noTopic(missed, "weekly"));
+    expect(world.inbox().waiting).toEqual([]);
+    supervisor.close();
+  });
+
+  it("keeps no place and closes nothing when the occurrence's planner gives no usable plan", async () => {
+    const world = scheduled("none", ["a", "b"]);
+    world.nowMs = Date.parse(AT);
+    world.seedQueued([
+      { id: "a-1", topic: "a" },
+      { id: "b-1", topic: "b" },
+    ]);
+    world.query.planner.push({ messages: [init("p", "dontAsk"), result({ wrong: true })] });
+    const gates = [new Gate(), new Gate()];
+    for (const gate of gates)
+      world.query.worker.push({ messages: [init("w"), result(workerOutput("report"))], gate });
+    const supervisor = await world.start();
+    await pass(supervisor);
+    await pass(supervisor);
+    expect(running(world)).toEqual(["a-1", "b-1"]);
+    expect(world.commands.scheduleCalls().map((args) => args[1])).toEqual(["take"]);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    for (const gate of gates) gate.open();
+    await supervisor.idle();
+    supervisor.close();
+  });
+
+  it("does not take, plan or close again after a restart while the occurrence's worker ran", async () => {
+    const world = scheduled();
+    world.nowMs = Date.parse(AT);
+    planOne(world);
+    world.query.worker.push({
+      messages: [init("w"), result(workerOutput("report"))],
+      gate: new Gate(),
+    });
+    const first = await world.start();
+    await pass(first);
+    expect(running(world)).toEqual([WORK]);
+    first.close();
+    world.query.active.clear();
+    const second = await world.start();
+    await pass(second);
+    expect(world.tasks()[WORK]?.state).toBe("paused");
+    expect(world.commands.scheduleCalls().map((args) => args[1])).toEqual(["take"]);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    second.close();
+  });
+
+  it("never takes an ordinary topic named like an occurrence's work for one", async () => {
+    const world = new World({ normal: ["x-at-20261127T0215Z"] });
+    world.writeSchedules({}, {});
+    world.seedQueued([{ id: "x-at-20261127T0215Z-1", topic: "x-at-20261127T0215Z" }]);
+    world.query.worker.push({ messages: [init("w"), result(workerOutput("report"))] });
+    const supervisor = await world.start();
+    await pass(supervisor);
+    await supervisor.idle();
+    expect(world.tasks()["x-at-20261127T0215Z-1"]?.state).toBe("done");
+    expect(world.logs.some((line) => line.includes("taken off the queue"))).toBe(false);
     supervisor.close();
   });
 });

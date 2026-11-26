@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { SchedulesFile } from "./board-files.js";
 import {
+  CARRIER_MAX,
   isOccurrenceKey,
+  keyAt,
   missedAction,
   missedReport,
   missedReportId,
@@ -90,6 +92,32 @@ describe("occurrence work ids", () => {
     ])
       expect(workOf(id), id).toBeUndefined();
     expect(missedReportId(KEY)).toBe("s-at-20261207T0200Z-missed");
+  });
+
+  it("keeps every report carrier within 64 characters and the task id grammar, one per key", () => {
+    const ids = new Set<string>();
+    const grammar = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+    for (const length of [1, 38, 39, 40, 63, 64]) {
+      for (const series of ["a".repeat(length), `b${"-".repeat(length - 1)}`]) {
+        for (const at of ["20261207T0200Z", "20261208T0200Z"]) {
+          const id = missedReportId(`${series}:${at}`);
+          expect(id.length, id).toBeLessThanOrEqual(CARRIER_MAX);
+          expect(grammar.test(id), id).toBe(true);
+          expect(id.endsWith(`-at-${at}-missed`), id).toBe(true);
+          ids.add(id);
+        }
+      }
+    }
+    expect(ids.size).toBe(24);
+    expect(missedReportId(`${"a".repeat(64)}:20261207T0200Z`)).not.toBe(
+      missedReportId(`${"a".repeat(63)}b:20261207T0200Z`),
+    );
+  });
+
+  it("reads T from a key", () => {
+    expect(keyAt(KEY)).toBe("2026-12-07T02:00:00Z");
+    expect(keyAt("s:2026")).toBe("");
+    expect(keyAt("s")).toBe("");
   });
 
   it("accepts only occurrence keys of the board's grammar", () => {

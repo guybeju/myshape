@@ -8,7 +8,8 @@
 // schedule the captain makes on the page is taken on its coming-up notice,
 // its work starts at its time though its topic is in 待辦, and it is closed
 // done when the worker ends (that test waits about three real minutes for the
-// board's clock). The board is
+// board's clock), and a missed hard-rt occurrence landed through deliver gets
+// its report summary under the topic. The board is
 // a scratch board-only root and home on a free port that is never the live
 // board's 47819, started with the root's bin/myshape.sh open and stopped with
 // bin/myshape.sh stop; no test sends a signal. The program is confirmed on
@@ -634,8 +635,24 @@ describe.skipIf(!IN_CI)(
           records("occurrence.closed").map((record) => [record["by"], record["outcome"]]),
         ).toEqual([["aggregator", "done"]]);
         expect(proposed("weekly")).toBe(false);
+
+        // A missed hard-rt occurrence, landed through the program the board runs (no clock
+        // wait): its report summary is filed under the topic, and no agent appears for it.
+        const missedUtc = `${new Date(atMs - 86_400_000).toISOString().slice(0, 16).replaceAll(/[-:]/g, "")}Z`;
+        const missed = `weekly:${missedUtc}`;
+        const carrier = `weekly-at-${missedUtc}-missed`;
+        expect(deliverNotice(missed, atMs - 86_400_000)).toBe("delivered");
+        supervisor.tick();
+        await waitFor("the missed report under its topic", async () => {
+          await http("POST", "refresh", {});
+          return (await summaries()).some(
+            (entry) =>
+              entry.task === carrier && entry.kind === "report" && entry.topic === "weekly",
+          );
+        });
+        expect(await light(carrier)).toBe("missing");
         expect(
-          logs.filter((line) => !/^(took|closed) occurrence /.test(line)),
+          logs.filter((line) => !/^((took|closed) occurrence|reported the missed) /.test(line)),
           serviceLog(),
         ).toEqual([]);
         supervisor.close();
@@ -644,6 +661,30 @@ describe.skipIf(!IN_CI)(
     );
   },
 );
+
+/** Lands a schedule.missed notice for `key` through the program's deliver, as the board does. */
+function deliverNotice(key: string, atMs: number): string {
+  const at = new Date(atMs).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const record = {
+    v: 1,
+    id: `w-s-${key.replace(":", "-")}-missed`,
+    attempt: 0,
+    kind: "notice",
+    event: "schedule.missed",
+    text: "排程「週會」錯過了：看板當時沒在跑，這一場沒有通知（hard-rt）",
+    topic: { id: "weekly", name: "週會" },
+    occurrence: { key, at, local: at.slice(0, 16) + "Z", phase: "missed", rt: "hard-rt" },
+  };
+  const program = join(scratch.root, "adapters", "claude-agg", "bin", "agg-board.mjs");
+  const out = spawnSync(process.execPath, [program, "deliver"], {
+    env: { ...scratch.env, MYSHAPE_HOME: scratch.home },
+    input: `${JSON.stringify(record)}\n`,
+    encoding: "utf8",
+  });
+  if (out.status !== 0) throw new Error(`deliver exited ${String(out.status)}: ${out.stderr}`);
+  const outcome = JSON.parse(out.stdout.trim().split("\n").at(-1) ?? "{}") as { outcome?: string };
+  return outcome.outcome ?? "";
+}
 
 /** The open occurrence `key` in the board's schedules.json, or undefined. */
 function occurrenceOf(key: string): Json | undefined {

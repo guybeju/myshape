@@ -15,7 +15,7 @@
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
 
 import { RT_VALUES, type Rt } from "./board-files.js";
-import { isOccurrenceKey, type ScheduleNotice } from "./occurrences.js";
+import { isOccurrenceKey, keyAt, type ScheduleNotice } from "./occurrences.js";
 
 type Json = Record<string, unknown>;
 
@@ -81,12 +81,22 @@ const SCHEDULE_EVENTS = [
 
 type OccurrencePart = Omit<ScheduleNotice, "event" | "topic">;
 
-/** A notice's `occurrence` object, or null when it is missing or unusable. */
+const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * A notice's `occurrence` object, or null when it is missing or unusable.
+ * Its texts may reach a planner and a summary, so each is held to its
+ * shape: `at` must be the key's own T, and a `local` time that is not one
+ * is dropped.
+ */
 function parseOccurrence(raw: unknown): OccurrencePart | null {
   if (!isRecord(raw)) return null;
-  const [key, at, local] = [textOf(raw["key"]), str(raw["at"]), textOf(raw["local"])];
+  const key = textOf(raw["key"]);
   const rt = RT_VALUES.find((value): value is Rt => value === raw["rt"]);
-  if (!isOccurrenceKey(key) || at === undefined || rt === undefined) return null;
+  if (!isOccurrenceKey(key) || rt === undefined) return null;
+  const at = keyAt(key);
+  if (timeOf(raw["at"]) !== Date.parse(at)) return null;
+  const local = LOCAL_TIME.test(textOf(raw["local"])) ? textOf(raw["local"]) : "";
   return { key, at, local, rt, expiresAtMs: timeOf(raw["expires_at"]) };
 }
 

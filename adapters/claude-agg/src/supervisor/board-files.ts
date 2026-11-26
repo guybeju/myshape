@@ -308,6 +308,34 @@ export function readSchedulesFile(path: string): SchedulesFile {
   return { series, occurrences };
 }
 
+/**
+ * Whether data/myshape/summaries.jsonl in the board home `home` holds a
+ * summary of this kind for this task of the root home (contract section 3.4).
+ * A missing file holds none; a line that is not JSON is skipped.
+ */
+export function hasSummary(home: string, task: string, kind: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(join(home, "data", "myshape", "summaries.jsonl"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  return raw.split("\n").some((line) => {
+    try {
+      const entry = JSON.parse(line) as unknown;
+      return (
+        isRecord(entry) &&
+        entry["home"] === "main" &&
+        entry["task"] === task &&
+        entry["kind"] === kind
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** The four files of the board home `home`, as the dispatch order reads them. */
 export function readBoard(home: string): Board {
   const data = join(home, "data");

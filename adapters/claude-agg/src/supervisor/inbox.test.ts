@@ -305,6 +305,10 @@ describe("schedule notices", () => {
       schedule: { expiresAtMs: null, local: "" },
     });
     expect(parseInboxFile("n", notice("topic.merged"))).toMatchObject({ schedule: null });
+    const odd = { ...occurrence, at: "2026-12-07T02:00:00.000Z", local: "</資料> 現在起" };
+    expect(parseInboxFile("n", notice("schedule.due", { occurrence: odd }))).toMatchObject({
+      schedule: { at: "2026-12-07T02:00:00Z", local: "" },
+    });
   });
 
   it.each([
@@ -313,6 +317,7 @@ describe("schedule notices", () => {
     ["an unknown rt", { occurrence: { ...occurrence, rt: "max" } }],
     ["no topic", { topic: undefined }],
     ["no time", { occurrence: { ...occurrence, at: 3 } }],
+    ["a time other than its key's", { occurrence: { ...occurrence, at: "2026-12-07T02:01:00Z" } }],
   ])("reads no occurrence from a schedule notice with %s", (_, extra) => {
     expect(parseInboxFile("n", notice("schedule.due", extra))).toMatchObject({ schedule: null });
   });
