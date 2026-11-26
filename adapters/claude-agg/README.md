@@ -7,8 +7,12 @@ the board's page. It is built against the board's contract only
 sections 4 and 7). It imports nothing from `myshape/` or `adapters/firstmate/`,
 and the board imports nothing from it.
 
-This directory is a skeleton for now: it holds the package, its checks and one
-source file. Nothing in it runs yet.
+This directory is a skeleton for now: it holds the package, its checks, and the
+start of the supervisor in `src/supervisor/`, which reads a board home's
+`data/topics.json`, `data/topics-archive.json`, `data/myshape/hashtags.json`
+and `data/myshape/schedules.json` and computes the order new work is handed out
+in (`dispatch-order.ts`). Nothing in it runs yet: no program here starts a
+worker, calls a model or writes to the board.
 
 ## What the board will run
 
