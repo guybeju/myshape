@@ -256,9 +256,10 @@ export class Supervisor {
     const tags = this.store.readTags();
     const rank = new Map(order.map((entry, index) => [entry.topic, index]));
     const resume = [...this.tasks]
-      .filter(([, task]) => task.state === "paused" && (task.detail ?? "").startsWith(TEXT.quota))
+      .filter(([id]) => this.resumable(id))
       .map(([id]) => ({ id, topic: current(tags.get(id) ?? "") }));
     const planned = this.queued
+      .filter((entry) => !this.tasks.has(entry.id))
       .map((entry) => ({ id: entry.id, topic: current(entry.topic_hint) }))
       .toSorted(
         (a, b) => (rank.get(a.topic) ?? order.length) - (rank.get(b.topic) ?? order.length),
@@ -272,6 +273,12 @@ export class Supervisor {
       .filter((entry) => !busy.has(entry.topic))
       .map((entry) => ({ id: `${PLAN_PREFIX}${entry.topic}`, topic: entry.topic }));
     return [...resume, ...planned, ...toPlan];
+  }
+
+  /** Whether `id` is a task the quota stopped, to resume once it clears. */
+  private resumable(id: string): boolean {
+    const task = this.tasks.get(id);
+    return task?.state === "paused" && (task.detail ?? "").startsWith(TEXT.quota);
   }
 
   private writeWaiting(waiting: ReadonlyMap<string, string>): void {
@@ -302,8 +309,11 @@ export class Supervisor {
     if (candidate.id.startsWith(PLAN_PREFIX)) {
       this.planned.add(candidate.topic);
       done = this.plan(entry);
-    } else if (this.tasks.has(candidate.id)) {
+    } else if (this.resumable(candidate.id)) {
       done = this.resume(candidate.id);
+    } else if (this.tasks.has(candidate.id)) {
+      this.log(`${candidate.id} is already a task; not started again`);
+      return;
     } else {
       done = this.dispatch(candidate.id, candidate.topic, entry);
     }
