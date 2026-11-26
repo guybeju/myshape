@@ -33,7 +33,7 @@ async function settle(): Promise<void> {
 function gated(
   world: World,
   count: number,
-  messages = (n: number) => [init(`s${n}`), result(workerOutput("report"))],
+  messages: (n: number) => object[] = (n) => [init(`s${n}`), result(workerOutput("report"))],
 ) {
   const gates = Array.from({ length: count }, () => new Gate());
   gates.forEach((gate, n) => world.query.worker.push({ messages: messages(n), gate }));

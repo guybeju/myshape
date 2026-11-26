@@ -1,8 +1,9 @@
 // The part of the Claude Agent SDK's `query()` that the supervisor uses, as
 // its own types. Every name and shape here was read from the `sdk.d.ts` of
 // @anthropic-ai/claude-agent-sdk 0.3.332 (`query`, `Options`, `SDKMessage`,
-// `SDKSystemMessage`, `SDKAssistantMessage`, `SDKRateLimitEvent`,
-// `SDKResultMessage`, `PreToolUseHookInput`, `HookCallbackMatcher`). The
+// `SDKSystemMessage`, `SDKResultMessage`, `HookCallbackMatcher`; the fields
+// of `SDKAssistantMessage`, `SDKRateLimitEvent` and `PreToolUseHookInput`
+// that are read are named where they are read). The
 // package itself is not a dependency yet: nothing here calls a model, and the
 // tests pass a double with this shape.
 
@@ -33,19 +34,6 @@ export interface InitMessage {
   cwd?: string;
 }
 
-export interface AssistantMessage {
-  type: "assistant";
-  session_id: string;
-  parent_tool_use_id: string | null;
-  error?: string;
-}
-
-export interface RateLimitEvent {
-  type: "rate_limit_event";
-  session_id: string;
-  rate_limit_info: { status: "allowed" | "allowed_warning" | "rejected"; resetsAt?: number };
-}
-
 export interface ResultMessage {
   type: "result";
   subtype:
@@ -64,16 +52,6 @@ export interface ResultMessage {
   errors?: string[];
 }
 
-export type SdkMessage = InitMessage | AssistantMessage | RateLimitEvent | ResultMessage;
-
-export interface PreToolUseInput {
-  hook_event_name: "PreToolUse";
-  tool_name: string;
-  tool_input: unknown;
-  cwd: string;
-  session_id: string;
-}
-
 export interface PreToolUseOutput {
   hookSpecificOutput?: {
     hookEventName: "PreToolUse";
@@ -82,8 +60,11 @@ export interface PreToolUseOutput {
   };
 }
 
+/** What a hook is called with: outside data, read field by field. */
+export type HookInput = { hook_event_name: string } & Record<string, unknown>;
+
 export type PreToolUseHook = (
-  input: { hook_event_name: string } & Partial<PreToolUseInput>,
+  input: HookInput,
   toolUseId: string | undefined,
   options: { signal: AbortSignal },
 ) => Promise<PreToolUseOutput>;
@@ -122,8 +103,8 @@ export interface QueryOptions {
 
 /**
  * A running query: the session's messages, in order. They are outside data:
- * the supervisor parses each one into a `SdkMessage` and skips the kinds it
- * does not use.
+ * the supervisor reads the start message, assistant errors, rate-limit
+ * events and the result from them, and skips every other kind.
  */
 export type QueryRun = AsyncIterable<object>;
 

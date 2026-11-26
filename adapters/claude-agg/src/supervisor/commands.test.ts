@@ -5,6 +5,7 @@ import {
   clip,
   Git,
   pullRequestState,
+  spawnCommand,
   type CommandRequest,
   type CommandResult,
   type RunCommand,
@@ -140,5 +141,46 @@ describe("pullRequestState", () => {
       "--json",
       "state",
     ]);
+  });
+});
+
+describe("spawnCommand", () => {
+  const node = process.execPath;
+
+  it("passes stdin and exactly the given environment", async () => {
+    const script =
+      "process.stdout.write(require('fs').readFileSync(0,'utf8') + Object.keys(process.env).sort().join(','))";
+    const out = await spawnCommand({
+      file: node,
+      args: ["-e", script],
+      env: { ONLY: "1" },
+      input: "hi ",
+    });
+    expect(out).toEqual({ status: 0, stdout: "hi ONLY", stderr: "" });
+  });
+
+  it("gives the exit status of a program that ends before reading its input", async () => {
+    const out = await spawnCommand({
+      file: node,
+      args: ["-e", "process.exit(3)"],
+      env: {},
+      input: "x".repeat(4_000_000),
+    });
+    expect(out.status).toBe(3);
+  });
+
+  it("gives a program with no input no stdin", async () => {
+    const out = await spawnCommand({
+      file: node,
+      args: ["-e", "process.stdout.write(String(require('fs').fstatSync(0).isFIFO()))"],
+      env: {},
+    });
+    expect(out.stdout).toBe("false");
+  });
+
+  it("rejects a program that does not exist", async () => {
+    await expect(spawnCommand({ file: "/no/such/program", args: [], env: {} })).rejects.toThrow(
+      "ENOENT",
+    );
   });
 });

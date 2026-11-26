@@ -24,20 +24,27 @@ export interface CommandRequest {
 /** Runs one program, no shell, and resolves with how it ended. */
 export type RunCommand = (request: CommandRequest) => Promise<CommandResult>;
 
-/** The production runner: `spawn` with exactly the given environment. */
+/**
+ * The production runner: `spawn` with exactly the given environment. stdin is
+ * a pipe only when there is input; a program that exits before reading it
+ * (EPIPE) is not an error, its exit status says how it went.
+ */
 export const spawnCommand: RunCommand = (request) =>
   new Promise((resolve, reject) => {
     const child = spawn(request.file, [...request.args], {
       env: request.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: [request.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     child.on("error", reject);
     child.on("close", (status) => resolve({ status, stdout, stderr }));
-    child.stdin.end(request.input ?? "");
+    child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
+    child.stdin?.end(request.input);
   });
 
 /** The few names every command's environment is built from. */

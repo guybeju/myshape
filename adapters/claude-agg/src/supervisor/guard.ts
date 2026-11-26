@@ -13,7 +13,7 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PreToolUseHook, PreToolUseInput, PreToolUseOutput } from "./sdk.js";
+import type { PreToolUseHook, PreToolUseOutput } from "./sdk.js";
 
 export interface GuardContext {
   /** The board home, as an absolute path with symbolic links resolved. */
@@ -219,7 +219,7 @@ export function guardToolUse(
 export function preToolUseHook(ctx: GuardContext): PreToolUseHook {
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
-    const { tool_name: tool, tool_input: toolInput, cwd } = input as Partial<PreToolUseInput>;
+    const { tool_name: tool, tool_input: toolInput, cwd } = input;
     const decision =
       typeof tool === "string" && typeof cwd === "string" && isAbsolute(cwd)
         ? guardToolUse(tool, toolInput, cwd, ctx)
