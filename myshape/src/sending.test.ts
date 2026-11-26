@@ -7,13 +7,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as actions from "./actions.js";
 import type { ActionContext, ActionResult } from "./actions.js";
-import { createApi } from "./api.js";
+import { ROUTES, createApi } from "./api.js";
 import type { ProgramToConfirm } from "./api.js";
 import type { Role } from "./binding.js";
 import type { AllowedCommand, CommandResult } from "./commands.js";
 import { ConfirmStore } from "./confirm.js";
 import type { ApiHandler } from "./http.js";
 import type { BoardResponse } from "./protocol.js";
+import { OPERATIONS } from "./ops.js";
 import type { HomeReport, ReportHold } from "./report.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
@@ -907,6 +908,7 @@ function api(
     topicOp?: (op: string, args: Record<string, unknown>) => BoardResponse;
     programToConfirm?: (role: Role) => ProgramToConfirm | string;
     tagged?: Record<string, string[]>;
+    scheduled?: Record<string, string>;
   } = {},
 ) {
   const confirm = new ConfirmStore();
@@ -932,6 +934,7 @@ function api(
     programToConfirm: overrides.programToConfirm ?? (() => "這支程式不需要確認。"),
     programConfirmed: () => seen.push("confirmed"),
     hashtagTopics: (name) => overrides.tagged?.[name] ?? [],
+    scheduleOf: (topic) => overrides.scheduled?.[topic] ?? null,
   });
   const call = (route: string, body: Record<string, unknown> = {}, query = "") =>
     handler(
@@ -1098,6 +1101,106 @@ describe("api", () => {
       'hashtag-delete:{"name":"AI_INFRA"}',
       'hashtag-rename:{"name":"URGENT","to":"SOON"}',
     ]);
+  });
+
+  it("passes each schedule route to its operation, and none to an operation only the socket may run", async () => {
+    const h = harness();
+    const { call, seen } = api(h, { scheduled: { sync: "sync" } });
+    const routes = Object.keys(ROUTES).filter((route) => route.startsWith("POST schedules/"));
+    for (const route of routes) {
+      if (route === "POST schedules/delete") continue;
+      expect((await call(route, { topic: "sync" })).status).toBe(200);
+    }
+    const ops = seen.map((entry) => entry.slice(0, entry.indexOf(":")));
+    expect(ops).toEqual([
+      "schedule-add",
+      "schedule-edit",
+      "schedule-pause",
+      "schedule-resume",
+      "schedule-skip",
+      "schedule-rt",
+      "schedule-close",
+      "schedule-settings",
+      "schedule-lock",
+      "schedule-pause-all",
+      "schedule-revert",
+      "schedule-seen",
+    ]);
+    for (const op of ops)
+      expect(OPERATIONS[op as keyof typeof OPERATIONS].channel).not.toBe("socket");
+    const pageOnly = Object.entries(OPERATIONS)
+      .filter(([name, operation]) => name.startsWith("schedule-") && operation.channel === "page")
+      .map(([name]) => name);
+    expect(ops).toEqual(expect.arrayContaining(pageOnly));
+    // Taking an occurrence is the aggregator's report, and the clock is the service's own.
+    expect((await call("POST schedules/take", { key: "sync:20261130T0200Z" })).status).toBe(404);
+    expect((await call("POST schedules/tick")).status).toBe(404);
+    expect(seen).toHaveLength(12);
+  });
+
+  it("answers a schedule operation's refusal as 409 and a malformed request as 400", async () => {
+    const h = harness();
+    const refusing = api(h, {
+      topicOp: () => ({ ok: false, code: "refused", line: "先把議題移到待辦" }),
+    });
+    expect(
+      await refusing.call("POST schedules/add", { topic: "a", daily: true, at: "06:00" }),
+    ).toEqual({
+      status: 409,
+      body: { error: "refused", message: "先把議題移到待辦" },
+    });
+    const malformed = api(h, {
+      topicOp: () => ({ ok: false, code: "usage", line: "--at 要是 HH:MM，例如 06:00" }),
+    });
+    expect((await malformed.call("POST schedules/edit", { topic: "a", at: "6" })).status).toBe(400);
+    expect((await malformed.call("POST schedules/settings", { lead_min: 999 })).status).toBe(400);
+  });
+
+  it("deletes the captain's schedule only on the second request, for the same schedule", async () => {
+    const scheduled: Record<string, string> = { sync: "sync" };
+    const h = harness();
+    const { call, seen } = api(h, { scheduled });
+    expect(await call("POST schedules/delete", { topic: "none" })).toEqual({
+      status: 409,
+      body: { error: "refused", message: "議題 none 沒有排程。" },
+    });
+    const first = await call("POST schedules/delete", { topic: "sync" });
+    expect(first.body).toMatchObject({
+      ok: true,
+      confirm: expect.stringMatching(/^[0-9a-f]{32}$/),
+    });
+    expect(seen).toEqual([]);
+    expect(
+      (await call("POST schedules/delete", { topic: "sync", confirm: "0".repeat(32) })).body[
+        "error"
+      ],
+    ).toBe("confirm");
+    expect((await call("POST schedules/delete", { topic: "sync", confirm: 7 })).body["error"]).toBe(
+      "confirm",
+    );
+    // Deleted and made again between the two steps: another schedule, so the code no longer fits.
+    scheduled["sync"] = "sync-2";
+    const stale = await call("POST schedules/delete", {
+      topic: "sync",
+      confirm: first.body["confirm"],
+    });
+    expect(stale).toEqual({
+      status: 409,
+      body: { error: "confirm", message: "確認已失效或對象變了，請重新操作一次。" },
+    });
+    const again = (await call("POST schedules/delete", { topic: "sync" })).body["confirm"];
+    expect(await call("POST schedules/delete", { topic: "sync", confirm: again })).toEqual({
+      status: 200,
+      body: { ok: true, line: "ok schedule-delete" },
+    });
+    expect((await call("POST schedules/delete", { topic: "sync", confirm: again })).status).toBe(
+      409,
+    );
+    delete scheduled["sync"];
+    expect(
+      (await call("POST schedules/delete", { topic: "sync", confirm: again })).body["error"],
+    ).toBe("refused");
+    expect(seen).toEqual(['schedule-delete:{"topic":"sync"}']);
   });
 
   it("answers a hold only on the second request, the way the hold recorded", async () => {

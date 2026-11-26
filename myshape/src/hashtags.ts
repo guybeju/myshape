@@ -5,7 +5,7 @@
 // order, or sends anything. Pure: no I/O, no clock.
 import { isRecord } from "./files.js";
 import * as oversight from "./oversight.js";
-import type { WatchedRecord } from "./oversight.js";
+import type { RecentChange, WatchedRecord } from "./oversight.js";
 import type { Draft, Frozen, Records } from "./records.js";
 import { isValidTopicId, oneLine, resolveTopicId } from "./topics.js";
 import type { TopicState } from "./topics.js";
@@ -862,14 +862,6 @@ export function carrySplit(
 // ---- what the page shows ----
 
 /** One aggregator change the captain has not marked seen, for the list with a revert next to each. */
-export interface RecentChange {
-  rid: string;
-  ts: number;
-  topic: string | null;
-  text: string;
-  reverted: boolean;
-}
-
 export interface HashtagView {
   /** Every hashtag, by key; `topics` are the ids that carry it. */
   hashtags: {
@@ -921,24 +913,6 @@ export function hashtagView(
     over: Object.entries(store.topics)
       .filter(([, names]) => names.length > max)
       .map(([id]) => id),
-    recent: recentChanges(records),
+    recent: oversight.recentChanges(records, WATCHED),
   };
-}
-
-/** The aggregator's changes since the last seen mark, newest first. */
-function recentChanges(records: readonly (HashtagRecord & { text?: string })[]): RecentChange[] {
-  const recent: RecentChange[] = [];
-  for (const record of oversight.unseenChanges(records, WATCHED)) {
-    // Every saved record has a rid; only lines from before records had one lack it.
-    if (record.rid === undefined) continue;
-    const reverted = oversight.isReverted(records, WATCHED, record.rid);
-    recent.unshift({
-      rid: record.rid,
-      ts: record.ts,
-      topic: record.topic ?? null,
-      text: record.text ?? "",
-      reverted,
-    });
-  }
-  return recent;
 }
