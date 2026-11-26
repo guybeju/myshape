@@ -105,6 +105,8 @@ export class Gate {
 export interface Call {
   options: QueryOptions;
   prompts: string[];
+  /** The script the session took, if one was left. */
+  script: Script | undefined;
 }
 
 /** What one session does: the messages it sends, after waiting on its gate. */
@@ -131,10 +133,10 @@ export class ScriptedQuery {
   constructor(private readonly root: string) {}
 
   readonly query: QueryFn = ({ prompt, options }) => {
-    const call: Call = { options, prompts: [] };
-    this.calls.push(call);
     const queue = options.cwd === this.root ? this.planner : this.worker;
     const script = queue.shift();
+    const call: Call = { options, prompts: [], script };
+    this.calls.push(call);
     options.abortController.signal.addEventListener("abort", () => (this.aborted += 1));
     return run(script, prompt, call, this.active);
   };

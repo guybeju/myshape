@@ -4,7 +4,7 @@ claude-agg keeps its state in one directory, `$MYSHAPE_HOME/agg/`, beside the
 board's own `data/`, `state/` and `config/` (which it never writes). Two
 programs touch it:
 
-- **the supervisor** (a later step), the only writer of `tasks.json`,
+- **the supervisor** (`src/supervisor/`), the only writer of `tasks.json`,
   `holds.json`, `queued.json` and `ledger.jsonl`, and the only one that moves
   files into `inbox/handled/` and `answers/handled/`;
 - **`bin/agg-board.mjs`**, the program the board runs. Its `feed` and

@@ -402,6 +402,13 @@ export class Supervisor {
   private async dispatch(id: string, topic: string, entry: OrderEntry | undefined): Promise<void> {
     const planned = this.queued.find((item) => item.id === id);
     if (planned === undefined || entry === undefined) return;
+    const repo = this.settings.repos[planned.repo];
+    if (repo === undefined) {
+      this.log(`task ${id}: repo ${planned.repo} is not in the settings; taken off the queue`);
+      this.queued = this.queued.filter((item) => item.id !== id);
+      this.store.writeQueued(this.queued);
+      return;
+    }
     const worktree = join(this.settings.worktreeRoot, id);
     const branch = `agg/${id}`;
     this.tasks.set(id, {
@@ -420,7 +427,6 @@ export class Supervisor {
     this.queued = this.queued.filter((item) => item.id !== id);
     this.store.writeQueued(this.queued);
     this.store.appendLedger({ event: "task.dispatched", task: id, kind: planned.kind });
-    const repo = this.repoOf(this.task(id));
     const problem = await this.git.addWorktree(repo.path, worktree, branch, repo.base);
     if (problem !== undefined) {
       delete this.task(id).worktree;

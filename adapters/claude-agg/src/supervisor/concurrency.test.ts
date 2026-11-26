@@ -283,6 +283,23 @@ describe("the quota stop", () => {
   });
 });
 
+describe("a queued task whose repo left the settings", () => {
+  it("is taken off the queue without being claimed", async () => {
+    const world = new World({ normal: ["a"] });
+    world.seedQueued([{ id: "a-1", topic: "a" }]);
+    const queued = world.queued().map((entry) => ({ ...entry, repo: "gone" }));
+    writeFileSync(join(world.agg, "queued.json"), JSON.stringify({ v: 1, queued }));
+    world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan([]))] });
+    const supervisor = await world.start();
+    supervisor.tick();
+    await supervisor.idle();
+    expect(world.queued()).toEqual([]);
+    expect(world.tasks()).toEqual({});
+    expect(world.logs.some((line) => line.includes("repo gone is not in the settings"))).toBe(true);
+    supervisor.close();
+  });
+});
+
 describe("restart reconciliation", () => {
   it("pauses workers that are gone, drops a task queued twice and never takes one task twice", async () => {
     const world = new World({ normal: ["a", "b", "c"] });
