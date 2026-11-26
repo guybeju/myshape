@@ -329,14 +329,16 @@ two_step() {
 # the records it should, and only those; a new operation or route without a
 # case here fails.
 test_every_change_leaves_a_record() {
-  local covered_ops covered_routes ops routes id
+  local covered_ops covered_routes ops routes id day
   ops=$(node --input-type=module -e "import('$ROOT/myshape/dist/ops.js').then((m) => console.log(Object.entries(m.OPERATIONS).filter(([, op]) => op.channel !== 'page').map(([name]) => name).sort().join(' ')))")
   routes=$(node --input-type=module -e "import('$ROOT/myshape/dist/api.js').then((m) => console.log(Object.keys(m.ROUTES).sort().join('|')))")
   covered_ops="archive close-propose create goal hashtag-add hashtag-remove merge move rename reopen"
   covered_ops="$covered_ops schedule-add schedule-close schedule-delete schedule-edit schedule-pause"
   covered_ops="$covered_ops schedule-resume schedule-rt schedule-skip schedule-take split"
   covered_ops="$covered_ops todo-add todo-done todo-failed todo-obsolete"
-  covered_routes="GET state|POST agents/tag|POST direct|POST hashtags/add|POST hashtags/color|POST hashtags/delete|POST hashtags/lock|POST hashtags/merge|POST hashtags/remove|POST hashtags/rename|POST hashtags/revert|POST hashtags/seen|POST hashtags/settings|POST holds/answer|POST messages|POST programs/confirm|POST refresh|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST views/delete|POST views/save|POST writes/ignore|POST writes/resend"
+  covered_routes="GET state|POST agents/tag|POST direct|POST hashtags/add|POST hashtags/color|POST hashtags/delete|POST hashtags/lock|POST hashtags/merge|POST hashtags/remove|POST hashtags/rename|POST hashtags/revert|POST hashtags/seen|POST hashtags/settings|POST holds/answer|POST messages|POST programs/confirm|POST refresh"
+  covered_routes="$covered_routes|POST schedules/add|POST schedules/close|POST schedules/delete|POST schedules/edit|POST schedules/lock|POST schedules/pause|POST schedules/pause-all|POST schedules/resume|POST schedules/revert|POST schedules/rt|POST schedules/seen|POST schedules/settings|POST schedules/skip"
+  covered_routes="$covered_routes|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST views/delete|POST views/save|POST writes/ignore|POST writes/resend"
   assert_equals "$covered_ops" "$ops" "every socket operation needs a case here"
   assert_equals "$covered_routes" "$routes" "every page route needs a case here"
 
@@ -374,6 +376,36 @@ test_every_change_leaves_a_record() {
   records_after occurrence.taken "schedule take" t schedule take sched:20991130T0300Z
   records_after occurrence.closed "schedule close" t schedule close sched:20991130T0300Z "done"
   records_after schedule.deleted "schedule delete" t schedule delete sched
+  # The page's schedule routes. The aggregator's deletion above is the change undone here; the
+  # done occurrence in 2099 keeps the clock from opening any of sched's occurrences meanwhile.
+  id=$(jq -r 'select(.src == "board" and .kind == "schedule.deleted" and .by == "aggregator") | .rid' "$MAIN/data/myshape/events.jsonl" | tail -n 1)
+  records_after schedule.reverted "schedules/revert" api schedules/revert "{\"rid\":\"$id\"}"
+  records_after schedule.seen "schedules/seen" api schedules/seen '{}'
+  records_after schedule.locked "schedules/lock" api schedules/lock '{"topic":"sched","lock":"rt","locked":true}'
+  records_after schedule.rt_changed "schedules/rt" api schedules/rt '{"topic":"sched","rt":"soft-rt"}'
+  records_after schedule.paused "schedules/pause" api schedules/pause '{"topic":"sched"}'
+  records_after schedule.resumed "schedules/resume" api schedules/resume '{"topic":"sched"}'
+  records_after schedule.skipped "schedules/skip" api schedules/skip '{"topic":"sched"}'
+  records_after schedule.edited "schedules/edit" api schedules/edit '{"topic":"sched","at":"12:00"}'
+  records_after schedule.settings_changed "schedules/settings" api schedules/settings '{"lead_min":20}'
+  records_after schedule.all_paused "schedules/pause-all" api schedules/pause-all '{"paused":true}'
+  records_after schedule.all_paused "schedules/pause-all" api schedules/pause-all '{"paused":false}'
+  t stop >/dev/null
+  jq '.occurrences["sched:20991207T0300Z"] = {series: "sched", at: "2099-12-07T03:00:00Z", state: "due",
+      opened_at: "2099-12-07T02:45:00Z", closes_by: "2099-12-07T04:00:00Z"}' \
+    "$MAIN/data/myshape/schedules.json" > "$TMP_ROOT/schedules-page.json"
+  cp "$TMP_ROOT/schedules-page.json" "$MAIN/data/myshape/schedules.json"
+  t open >/dev/null
+  records_after occurrence.closed "schedules/close" api schedules/close '{"key":"sched:20991207T0300Z","outcome":"skipped"}'
+  records_after topic.created "create" t create "Sched two" --goal "g" --id sched2 --queue later
+  # The captain's schedule rings on time: pick a weekday three days off, so the clock stays quiet.
+  day=$(printf 'sun\nmon\ntue\nwed\nthu\nfri\nsat\n' | sed -n "$((($(date -u +%w) + 3) % 7 + 1))p")
+  records_after schedule.created "schedules/add" api schedules/add "{\"topic\":\"sched2\",\"weekly\":\"$day\",\"at\":\"12:00\",\"tz\":\"UTC\"}"
+  records_after schedule.deleted "schedules/delete" two_step schedules/delete '{"topic":"sched2"}'
+  assert_equals "" "$(jq -r '.series | keys[] | select(. == "sched2")' "$MAIN/data/myshape/schedules.json")" \
+    "the second step of schedules/delete must delete the schedule"
+  assert_equals 409 "$(curl -s -o /dev/null -w '%{http_code}' -H "$AUTH" -H "$ORIGIN" -H "$JSON" -d '{"topic":"sched2"}' "$BASE/api/schedules/delete")" \
+    "a topic without a schedule has nothing to delete"
 
   records_after topic.moved "topics/move" api topics/move '{"id":"rec","queue":"normal"}'
   records_after topic.renamed "topics/rename" api topics/rename '{"id":"rec","value":"Rec three"}'
