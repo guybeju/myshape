@@ -44,35 +44,39 @@ function parseTodoRef(value: unknown): TodoRef | null {
   return id === undefined || title === undefined || ref === undefined ? null : { id, title, ref };
 }
 
-function parseAction(record: Json): Action | undefined {
+function parseMessage(record: Json): Action | undefined {
+  const topic = isRecord(record["topic"]) ? str(record["topic"]["id"]) : undefined;
   const text = str(record["text"]);
+  return topic === undefined || text === undefined ? undefined : { kind: "message", topic, text };
+}
+
+function parseDirect(record: Json): Action | undefined {
+  const [task, text] = [str(record["task"]), str(record["text"])];
+  return task === undefined || text === undefined ? undefined : { kind: "direct", task, text };
+}
+
+function parseAnswer(record: Json): Action | undefined {
   const task = str(record["task"]);
-  switch (record["kind"]) {
-    case "message": {
-      const topic = isRecord(record["topic"]) ? str(record["topic"]["id"]) : undefined;
-      return topic === undefined || text === undefined
-        ? undefined
-        : { kind: "message", topic, text };
-    }
-    case "direct":
-      return task === undefined || text === undefined ? undefined : { kind: "direct", task, text };
-    case "answer":
-      return task === undefined ? undefined : { kind: "answer", task };
-    case "tag":
-      return { kind: "tag" };
-    case "notice": {
-      const event = str(record["event"]);
-      if (event === undefined) return undefined;
-      return {
-        kind: "notice",
-        event,
-        item: parseTodoRef(record["item"]),
-        by: str(record["by"]) ?? "",
-      };
-    }
-    default:
-      return undefined;
-  }
+  return task === undefined ? undefined : { kind: "answer", task };
+}
+
+function parseNotice(record: Json): Action | undefined {
+  const event = str(record["event"]);
+  if (event === undefined) return undefined;
+  return { kind: "notice", event, item: parseTodoRef(record["item"]), by: str(record["by"]) ?? "" };
+}
+
+const PARSERS: Readonly<Record<string, (record: Json) => Action | undefined>> = {
+  message: parseMessage,
+  direct: parseDirect,
+  answer: parseAnswer,
+  tag: () => ({ kind: "tag" }),
+  notice: parseNotice,
+};
+
+function parseAction(record: Json): Action | undefined {
+  const kind = str(record["kind"]) ?? "";
+  return Object.hasOwn(PARSERS, kind) ? PARSERS[kind]?.(record) : undefined;
 }
 
 /** The action in an inbox file's text, or undefined when it is not one `deliver` landed. */
@@ -158,26 +162,30 @@ function sortAnswer(item: InboxItem & { kind: "answer" }, view: InboxView, sorte
   }
 }
 
+function sortMessage(item: InboxItem & { kind: "message" }, view: InboxView, sorted: Sorted) {
+  const topic = view.current(item.topic);
+  const worker = view.liveWorkerOn(topic);
+  if (worker === undefined) add(sorted.messages, topic, item);
+  else sorted.push.push({ task: worker, item });
+}
+
+function sortDirect(item: InboxItem & { kind: "direct" }, view: InboxView, sorted: Sorted) {
+  const task = view.tasks.get(item.task);
+  if (task === undefined || ENDED.has(task.state)) {
+    sorted.retire.push({ item, log: INBOX_LOG.ended(item.task) });
+  } else if (view.takesInput(item.task)) {
+    sorted.push.push({ task: item.task, item });
+  } else {
+    add(sorted.inputs, item.task, item);
+  }
+}
+
 function sortOne(item: InboxItem, view: InboxView, sorted: Sorted): void {
   switch (item.kind) {
-    case "message": {
-      const topic = view.current(item.topic);
-      const worker = view.liveWorkerOn(topic);
-      if (worker === undefined) add(sorted.messages, topic, item);
-      else sorted.push.push({ task: worker, item });
-      return;
-    }
-    case "direct": {
-      const task = view.tasks.get(item.task);
-      if (task === undefined || ENDED.has(task.state)) {
-        sorted.retire.push({ item, log: INBOX_LOG.ended(item.task) });
-      } else if (view.takesInput(item.task)) {
-        sorted.push.push({ task: item.task, item });
-      } else {
-        add(sorted.inputs, item.task, item);
-      }
-      return;
-    }
+    case "message":
+      return sortMessage(item, view, sorted);
+    case "direct":
+      return sortDirect(item, view, sorted);
     case "answer":
       return sortAnswer(item, view, sorted);
     case "notice":

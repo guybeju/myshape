@@ -122,18 +122,21 @@ export function hashtagChangesInLastHour(home: string, nowSeconds: number): numb
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
     throw error;
   }
-  let count = 0;
-  for (const line of text.split("\n")) {
-    if (!line.includes("hashtag.")) continue;
-    try {
-      const record = JSON.parse(line) as { by?: unknown; kind?: unknown; ts?: unknown };
-      const recent = typeof record.ts === "number" && record.ts > nowSeconds - HOUR_SECONDS;
-      if (record.by === "aggregator" && WATCHED.has(String(record.kind)) && recent) count += 1;
-    } catch {
-      continue;
-    }
+  const since = nowSeconds - HOUR_SECONDS;
+  return text.split("\n").filter((line) => isRecentChange(line, since)).length;
+}
+
+/** Whether one events.jsonl line is a hashtag change by the aggregator saved after `since`. */
+function isRecentChange(line: string, since: number): boolean {
+  if (!line.includes("hashtag.")) return false;
+  let record: { by?: unknown; kind?: unknown; ts?: unknown };
+  try {
+    record = JSON.parse(line) as typeof record;
+  } catch {
+    return false;
   }
-  return count;
+  const recent = typeof record.ts === "number" && record.ts > since;
+  return recent && record.by === "aggregator" && WATCHED.has(String(record.kind));
 }
 
 export type HashtagOutcome = { sent: true } | { sent: false; reason: string };

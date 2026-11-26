@@ -471,7 +471,7 @@ describe.skipIf(!IN_CI)(
           "a light waiting for the captain",
           async () => (await light("ask-1")) === "ask:decide",
         );
-        expect(boardFile("data/myshape/todos.json")).toContain("ask-1-vpn");
+        expect(boardItems()).toEqual(["ask-1-vpn"]);
 
         const answer = await twoStep("holds/answer", {
           home: "main",
@@ -494,10 +494,7 @@ describe.skipIf(!IN_CI)(
         await waitFor("the claim's notice", () => hasNotice("todo.claimed"));
         supervisor.tick();
         await supervisor.idle();
-        await waitFor(
-          "the item closed",
-          () => !boardFile("data/myshape/todos.json").includes("ask-1-vpn"),
-        );
+        await waitFor("the item closed", () => !boardItems().includes("ask-1-vpn"));
         expect(records("todo.done").map((record) => record["by"])).toEqual(["aggregator"]);
         await waitFor("a done light", async () => (await light("ask-1")) === "ask:done");
         await waitFor("the close proposal", () => proposed("ask"));
@@ -583,6 +580,12 @@ function records(kind: string): Json[] {
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Json)
     .filter((record) => record["kind"] === kind);
+}
+
+/** The ids of the items on the board's 要你動手 list (todos.json `items`; its outbox names closed ones too). */
+function boardItems(): string[] {
+  const doc = JSON.parse(boardFile("data/myshape/todos.json") || "{}") as { items?: Json };
+  return Object.keys(doc.items ?? {});
 }
 
 /** Whether the topic carries a close proposal in data/topics.json. */

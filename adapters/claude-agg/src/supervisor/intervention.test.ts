@@ -4,7 +4,7 @@
 // landing every action, a scripted query and the fake commands. No model, no
 // process but bin/agg-board.mjs, no board service.
 
-import { writeFileSync } from "node:fs";
+import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
@@ -322,6 +322,28 @@ describe("message", () => {
     expect(planners[1]?.prompts[0]).toContain('"id": "build-1"');
     expect(world.tasks()["build-2"]).toMatchObject({ title: "改 README", state: "done" });
     expect(world.inbox().waiting).toEqual([]);
+    supervisor.close();
+  });
+
+  it("is given to a planner once even when its file cannot be moved, so nothing loops", async () => {
+    const world = oneTask([init("w1"), result(workerOutput("report"))]);
+    world.query.planner.push({ messages: [init("p2", "dontAsk"), result(plan([]))] });
+    const supervisor = await run(world);
+    world.deliver({
+      kind: "message",
+      topic: { id: "build", name: "議題 build" },
+      text: "再看一次",
+    });
+    chmodSync(join(world.agg, "inbox", "handled"), 0o500);
+    try {
+      await pass(supervisor);
+      await pass(supervisor);
+    } finally {
+      chmodSync(join(world.agg, "inbox", "handled"), 0o700);
+    }
+    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(2);
+    expect(world.logs.some((line) => line.includes("was handled but not moved"))).toBe(true);
+    expect(world.inbox().waiting).toEqual(["w-1.json"]);
     supervisor.close();
   });
 

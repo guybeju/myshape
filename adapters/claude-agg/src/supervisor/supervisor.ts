@@ -143,6 +143,12 @@ export class Supervisor {
   private readonly streams = new Map<string, PromptStream>();
   /** Inbox files pushed into a running session and not taken yet, with the task. */
   private readonly pushed = new Map<string, string>();
+  /**
+   * Message files already handed to a planner this run. A planner is given
+   * each message once, so a message whose file could not be moved never
+   * starts the planner again and again.
+   */
+  private readonly offered = new Set<string>();
   /** The board's 要你動手 items as this pass read them. */
   private todoItems: ReadonlyMap<string, TodoItem> = new Map();
   /** The board's merges as the last pass read them. */
@@ -372,6 +378,11 @@ export class Supervisor {
       takesInput: (task) => this.streams.get(task)?.open === true,
       quotaTitle: QUOTA_HOLD.title,
     });
+    for (const [topic, messages] of this.sorted.messages) {
+      const fresh = messages.filter((item) => !this.offered.has(item.file));
+      if (fresh.length === 0) this.sorted.messages.delete(topic);
+      else this.sorted.messages.set(topic, fresh);
+    }
     for (const { item, log } of this.sorted.retire) {
       if (log !== undefined) this.log(log);
       this.store.retireInbox(item.file);
@@ -408,6 +419,15 @@ export class Supervisor {
     this.pushed.set(item.file, task);
     if (stream?.push(livePrompt(item.kind, item.text), taken) !== true)
       this.pushed.delete(item.file);
+  }
+
+  /** Moves an inbox file to inbox/handled/, logging a failure instead of throwing. */
+  private retireLogged(file: string): void {
+    try {
+      this.store.retireInbox(file);
+    } catch (error) {
+      this.log(`inbox/${file} was handled but not moved: ${(error as Error).message}`);
+    }
   }
 
   /** Forgets what was pushed into `task`'s session and not taken: it waits in the inbox. */
@@ -622,6 +642,7 @@ export class Supervisor {
     entry: OrderEntry,
     messages: readonly (InboxItem & { kind: "message" })[],
   ): Promise<void> {
+    for (const item of messages) this.offered.add(item.file);
     const abort = new AbortController();
     const prompt = new PromptStream(
       plannerPrompt({
@@ -635,8 +656,11 @@ export class Supervisor {
     const run = this.deps.query({ prompt, options });
     const report = await followSession(run, prompt, abort, { mode: "dontAsk", onStart: () => {} });
     this.takePlan(entry.topic, report);
-    if (report.end.kind === "quota") return;
-    for (const item of messages) this.store.retireInbox(item.file);
+    if (report.end.kind === "quota") {
+      for (const item of messages) this.offered.delete(item.file);
+      return;
+    }
+    for (const item of messages) this.retireLogged(item.file);
   }
 
   private takePlan(topic: string, report: SessionReport): void {
