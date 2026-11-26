@@ -49,6 +49,8 @@ describe("the board home", () => {
     ["NotebookEdit", { notebook_path: `${HOME}/n.ipynb` }],
     ["Grep", { pattern: "token", path: HOME }],
     ["Glob", { pattern: `${HOME}/**/*.json` }],
+    ["Glob", { pattern: "../../../../srv/agg-home/**/*.json" }],
+    ["Glob", { pattern: "agg-home/**", path: "/srv" }],
     ["LS", { path: `${HOME}/state` }],
     ["Read", { file_path: `../../../../srv/agg-home/state/myshape/token` }],
   ])("refuses %s %j", (tool, input) => {
@@ -86,6 +88,7 @@ describe("the board home", () => {
 
 describe("merging", () => {
   it.each([
+    "gh pr \\\n  merge 7",
     "gh pr merge 7 --merge",
     "gh  pr   merge --squash",
     "gh api -X PUT repos/o/r/pulls/7/merge",
@@ -110,6 +113,11 @@ describe("pushes", () => {
     "git push origin agg/t-1 main",
     "git push origin :main",
     "git push origin x:HEAD",
+    "git add -A\ngit push origin main",
+    "git status\n  git push origin main",
+    "git push origin \\\n  main",
+    "git push origin refs/heads/*:refs/heads/*",
+    "git push origin +agg/*",
   ])("refuses %s", (command) => {
     expect(bash(command)).toEqual(denied(REASONS.pushDefault));
   });

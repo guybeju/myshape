@@ -149,6 +149,17 @@ describe("endOf", () => {
   });
 });
 
+describe("a session that hands back no output in the schema", () => {
+  it.each([
+    [{ ...errorResult([]), subtype: "error_max_structured_output_retries" }],
+    [{ ...result(undefined), structured_output: undefined }],
+  ])("ends as an output no parser takes: %j", async (last) => {
+    const { report } = await follow([init("s1"), last]);
+    expect(report.end).toEqual({ kind: "output", output: undefined });
+    expect(endingOf(report.end).summary).toEqual({ kind: "failed", text: TEXT.invalid });
+  });
+});
+
 describe("refuseStart", () => {
   it("lets auto with no API key go on", () => {
     expect(refuseStart(init("s") as InitMessage, "auto")).toBeUndefined();

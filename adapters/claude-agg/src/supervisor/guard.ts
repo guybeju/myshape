@@ -83,6 +83,14 @@ function inside(path: string, dir: string): boolean {
   return path === dir || path.startsWith(`${dir}/`);
 }
 
+/** Where a Glob pattern starts: its part before the first wildcard, under `path` when given. */
+function globBase(pattern: string, path: unknown): string {
+  const wildcard = pattern.search(/[*?[{]/);
+  const literal = wildcard === -1 ? pattern : pattern.slice(0, wildcard);
+  if (isAbsolute(literal)) return literal;
+  return join(typeof path === "string" ? path : ".", literal);
+}
+
 /** The command with quotes and backslashes taken out and runs of spaces made one. */
 function normalize(command: string): string {
   return command.replaceAll(/["'\\`]/g, "").replaceAll(/\s+/g, " ");
@@ -95,8 +103,7 @@ function checkPaths(tool: string, input: Record<string, unknown>, cwd: string, c
     const value = input[field];
     if (value === undefined) continue;
     if (typeof value !== "string") return deny(REASONS.unreadable);
-    if (field === "pattern" && !isAbsolute(value)) continue;
-    paths.push(value);
+    paths.push(field === "pattern" ? globBase(value, input["path"]) : value);
   }
   for (const path of paths) {
     if (inside(ctx.realPath(resolve(cwd, path)), ctx.home)) return deny(REASONS.home);
@@ -104,27 +111,41 @@ function checkPaths(tool: string, input: Record<string, unknown>, cwd: string, c
   return ALLOW;
 }
 
-/** The words of each simple command in `command`, split at ;, &, |, newlines and parentheses. */
+/**
+ * The words of each simple command in `command` (as the session sent it):
+ * continued lines joined, then split at ;, &, |, newlines and parentheses,
+ * then each part normalized.
+ */
 function segments(command: string): string[][] {
   return command
-    .split(/[;&|\n()]+/)
-    .map((part) => part.trim().split(" ").filter(Boolean))
+    .replaceAll(/\\\r?\n/g, " ")
+    .split(/[;&|\r\n()]+/)
+    .map((part) => normalize(part).trim().split(" ").filter(Boolean))
     .filter((words) => words.length > 0);
 }
 
 /** Git's options before the subcommand that take the next word as their value. */
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
 
-/** The words after `push` when git's subcommand is `push`, or undefined when it is not. */
-function pushArgs(words: readonly string[]): string[] | undefined {
-  const git = words.findIndex((word) => word === "git" || word.endsWith("/git"));
-  if (git === -1) return undefined;
+/** The words after `push` when the git at `git` runs `push`, or undefined when it does not. */
+function pushAt(words: readonly string[], git: number): string[] | undefined {
   for (let at = git + 1; at < words.length; at += 1) {
     const word = words[at] ?? "";
     if (GIT_VALUE_OPTIONS.has(word)) at += 1;
     else if (!word.startsWith("-")) return word === "push" ? words.slice(at + 1) : undefined;
   }
   return undefined;
+}
+
+/** The arguments of every `git … push` in one simple command, whichever `git` word starts it. */
+function pushes(words: readonly string[]): string[][] {
+  const found: string[][] = [];
+  words.forEach((word, at) => {
+    if (word !== "git" && !word.endsWith("/git")) return;
+    const args = pushAt(words, at);
+    if (args !== undefined) found.push(args);
+  });
+  return found;
 }
 
 function refName(ref: string): string {
@@ -143,6 +164,7 @@ function checkPush(args: readonly string[], defaultBranch: string | null): Guard
   const refspecs = positional.slice(1);
   if (refspecs.length === 0) return deny(REASONS.pushUnnamed);
   for (const refspec of refspecs) {
+    if (refspec.includes("*")) return deny(REASONS.pushDefault);
     const [source = "", destination] = refspec.split(":");
     const target = refName(destination ?? source);
     if (destination === undefined && refName(source) === "HEAD") {
@@ -163,9 +185,7 @@ function checkCommand(command: string, ctx: GuardContext): GuardDecision {
     return deny(REASONS.merge);
   }
   if (new RegExp(`:${ctx.port}(?!\\d)`).test(plain)) return deny(REASONS.port);
-  for (const words of segments(plain)) {
-    const args = pushArgs(words);
-    if (args === undefined) continue;
+  for (const args of segments(command).flatMap(pushes)) {
     const decision = checkPush(args, ctx.defaultBranch);
     if (!decision.allow) return decision;
   }

@@ -65,6 +65,14 @@ interface Scratch {
 
 let scratch: Scratch;
 let started = false;
+/** The supervisor's log lines, shown with every failure. */
+const logs: string[] = [];
+
+function serviceLog(): string {
+  const path = join(scratch.home, "state", "myshape", "service.log");
+  const service = existsSync(path) ? readFileSync(path, "utf8").slice(-4000) : "no service.log";
+  return `supervisor log:\n${logs.join("\n")}\nservice.log:\n${service}`;
+}
 
 async function freePort(): Promise<number> {
   for (;;) {
@@ -145,7 +153,7 @@ async function waitFor(
 ): Promise<void> {
   const deadline = Date.now() + ms;
   while (!(await check())) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}\n${serviceLog()}`);
     await sleep(200);
   }
 }
@@ -332,7 +340,7 @@ describe.skipIf(!IN_CI)(
             token: CANARY,
             env: scratch.env,
             nowMs: () => Date.now(),
-            log: () => {},
+            log: (line) => logs.push(line),
             realPath: existingRealPath,
             pid: process.pid,
             isAlive: () => false,
@@ -381,6 +389,7 @@ describe.skipIf(!IN_CI)(
         ]) {
           expect(readFileSync(join(scratch.home, file), "utf8"), file).not.toContain(CANARY);
         }
+        expect(logs, serviceLog()).toEqual([]);
         supervisor.close();
       },
       STEP_MS,

@@ -119,7 +119,12 @@ function parseResult(message: Json): ResultMessage | undefined {
   return message as unknown as ResultMessage;
 }
 
-/** What a result means, given whether a quota signal came before or with it. */
+/**
+ * What a result means, given whether a quota signal came before or with it. A
+ * session that ended without an output in the schema (the SDK gave up on
+ * `outputFormat`, or a success with none) has the output `undefined`, which no
+ * parser takes.
+ */
 export function endOf(result: ResultMessage, quota: number | null | undefined): SessionEnd {
   const succeeded = result.subtype === "success" && !result.is_error;
   if (succeeded && result.structured_output !== undefined) {
@@ -127,6 +132,9 @@ export function endOf(result: ResultMessage, quota: number | null | undefined): 
   }
   if (result.subtype === "error_max_turns") return { kind: "max_turns" };
   if (quota !== undefined) return { kind: "quota", resetsAtMs: quota };
+  if (succeeded || result.subtype === "error_max_structured_output_retries") {
+    return { kind: "output", output: undefined };
+  }
   const errors = Array.isArray(result.errors) ? result.errors.join("; ") : "";
   return { kind: "error", message: errors === "" ? `結果是 ${result.subtype}` : errors };
 }
