@@ -77,7 +77,7 @@ function setup(timings: PollTimings = TIMINGS, blocked: string | null = null): S
   const poller = new Poller(
     async (command, timeout) => {
       calls.push({ command, timeout });
-      const home = command.kind === "feed" ? command.home : "main";
+      const home = command.kind === "deliver" ? "main" : command.home;
       const answer = answers.get(home);
       return answer === undefined ? report() : answer(command);
     },
@@ -610,5 +610,102 @@ describe("read hints", () => {
     expect(count("a")).toBeGreaterThanOrEqual(2);
     expect(count("a")).toBeLessThanOrEqual(3);
     expect(count("b")).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe("the topics call", () => {
+  /** A feed that answers the topics call with `answer` and every read with a report. */
+  function topicsFeed(answer: CommandResult): (command: AllowedCommand) => CommandResult {
+    return (command) =>
+      command.kind === "topics" ? answer : report({ topics: { t1: "old 2026-01-01T00:00:00Z" } });
+  }
+  const topicsCalls = (s: Setup): string[] =>
+    s.calls
+      .map(({ command }) => command)
+      .filter((command) => command.kind === "topics")
+      .map((command) =>
+        command.kind === "topics" ? `${command.home} ${command.tasks.join(" ")}` : "",
+      );
+
+  it("returns the tags of the tasks asked for and leaves what the board knows untouched", async () => {
+    const s = setup();
+    const stdout = JSON.stringify({
+      topics: { t1: "a 2026-01-01T00:00:00Z\nb 2026-01-02T00:00:00Z", other: "x" },
+    });
+    s.answers.set("main", topicsFeed({ code: 0, stdout, stderr: "" }));
+    await s.poller.readNow("main");
+    const before = JSON.stringify(s.poller.snapshots());
+    const changes = s.changes();
+    expect(await s.poller.readTopics("main", ["t1", "t2"])).toEqual({
+      t1: "a 2026-01-01T00:00:00Z\nb 2026-01-02T00:00:00Z",
+    });
+    expect(s.calls.at(-1)).toEqual({
+      command: { kind: "topics", home: "main", tasks: ["t1", "t2"] },
+      timeout: 111,
+    });
+    expect(JSON.stringify(s.poller.snapshots())).toBe(before);
+    expect(s.changes()).toBe(changes);
+  });
+
+  it("treats task ids that name object properties like any other", async () => {
+    const s = setup();
+    const stdout = '{"topics":{"__proto__":"a 2026-01-01T00:00:00Z"}}';
+    s.answers.set("main", topicsFeed({ code: 0, stdout, stderr: "" }));
+    const tags = await s.poller.readTopics("main", ["__proto__"]);
+    expect(tags !== null && Object.hasOwn(tags, "__proto__")).toBe(true);
+    s.answers.set("main", topicsFeed({ code: 0, stdout: '{"topics":{}}', stderr: "" }));
+    expect(await s.poller.readTopics("main", ["toString", "constructor"])).toEqual({});
+  });
+
+  it("gives null for a failure or output not of the shape, and asks again next time", async () => {
+    const s = setup();
+    const failures: CommandResult[] = [
+      { code: 1, stdout: "", stderr: "broken" },
+      { code: null, stdout: "", stderr: "killed" },
+      { code: 4, stdout: "", stderr: "cannot report" },
+      { code: 0, stdout: "not json", stderr: "" },
+      { code: 0, stdout: "[]", stderr: "" },
+      { code: 0, stdout: '{"tags":{}}', stderr: "" },
+      { code: 0, stdout: '{"topics":["t1"]}', stderr: "" },
+      { code: 0, stdout: '{"topics":{"t1":3}}', stderr: "" },
+    ];
+    for (const failure of failures) {
+      s.answers.set("main", topicsFeed(failure));
+      expect(await s.poller.readTopics("main", ["t1"])).toBeNull();
+    }
+    expect(topicsCalls(s)).toHaveLength(failures.length);
+    expect(s.poller.snapshots()[0]).toMatchObject({ error: null, report: null });
+  });
+
+  it("stops asking a home whose feed refuses the call (exit 2) until it reports other code", async () => {
+    const s = setup();
+    s.answers.set("main", () => report({ secondmates: [{ id: "sm1" }] }));
+    await s.poller.readNow("main");
+    s.answers.set("sm1", topicsFeed({ code: 2, stdout: "", stderr: "feed or deliver" }));
+    expect(await s.poller.readTopics("sm1", ["t1"])).toBeNull();
+    expect(await s.poller.readTopics("sm1", ["t1"])).toBeNull();
+    expect(topicsCalls(s)).toEqual(["sm1 t1"]);
+    expect(s.poller.snapshots().find((home) => home.id === "sm1")?.error).toBeNull();
+    await s.poller.readNow("sm1");
+    await s.poller.readNow("sm1");
+    expect(await s.poller.readTopics("sm1", ["t1"])).toBeNull();
+    expect(topicsCalls(s)).toEqual(["sm1 t1"]);
+    s.answers.set("sm1", (command) =>
+      command.kind === "topics"
+        ? { code: 0, stdout: '{"topics":{}}', stderr: "" }
+        : report({ code_commit: "c2" }),
+    );
+    await s.poller.readNow("sm1");
+    expect(await s.poller.readTopics("sm1", ["t1"])).toEqual({});
+    expect(topicsCalls(s)).toEqual(["sm1 t1", "sm1 t1"]);
+    expect(await s.poller.readTopics("main", ["t1"])).toEqual({});
+  });
+
+  it("runs nothing for an unknown home or while the feed may not run", async () => {
+    const s = setup();
+    expect(await s.poller.readTopics("nobody", ["t1"])).toBeNull();
+    const blocked = setup(TIMINGS, "要先在頁面上確認");
+    expect(await blocked.poller.readTopics("main", ["t1"])).toBeNull();
+    expect([...s.calls, ...blocked.calls]).toEqual([]);
   });
 });

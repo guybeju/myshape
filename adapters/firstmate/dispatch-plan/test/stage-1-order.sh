@@ -265,18 +265,57 @@ test_falls_open_when_the_snapshot_fails() {
   home=$(tb_make_home order-nosnap)
   tb_write_topics "$home"
   root="$TMP_ROOT/order-root"
-  mkdir -p "$root/bin"
-  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
-    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-queue-source-lib.sh "$root/bin/"
+  order_root "$root" 0
   printf '#!/usr/bin/env bash\nexit 1\n' > "$root/bin/fm-fleet-snapshot.sh"
-  chmod +x "$root/bin/fm-fleet-snapshot.sh"
   out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||
     fail "order must exit 0 when the snapshot fails"
   assert_equals "讀不到 backlog，照平常的方式派工。" "$out" "order did not fall open on a failed snapshot"
   pass "order tells firstmate to dispatch as usual when the backlog cannot be read"
 }
 
+# order_root <dir> <offers>: a code root of order's own files whose
+# fm-fleet-snapshot.sh logs its arguments to <dir>/snapshot.log and passes the
+# real snapshot's --json report through. Its text names --board-input only
+# when <offers> is 1, which is all order's check of the snapshot reads.
+order_root() {
+  local root=$1 note="Offers the full report only."
+  mkdir -p "$root/bin"
+  cp "$ROOT"/bin/fm-dispatch-plan.sh "$ROOT"/bin/myshape-lib.sh "$ROOT"/bin/fm-primary-scope-lib.sh \
+    "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-queue-source-lib.sh "$ROOT"/bin/fm-board-lib.sh \
+    "$root/bin/"
+  [ "$2" = 0 ] || note="Offers --board-input, the board's cheaper read."
+  printf '#!/usr/bin/env bash\n# %s\nprintf "%%s\\n" "$*" >> %q\nexec env -u FM_ROOT_OVERRIDE %q --json\n' \
+    "$note" "$root/snapshot.log" "$ROOT/bin/fm-fleet-snapshot.sh" > "$root/bin/fm-fleet-snapshot.sh"
+  chmod +x "$root/bin/fm-fleet-snapshot.sh"
+}
+
+# asks <log>: "<--board-input calls> <--json calls>" in an order_root snapshot log.
+asks() {
+  printf '%s %s\n' "$(grep -cx -e --board-input "$1")" "$(grep -cx -e --json "$1")"
+}
+
+test_asks_for_board_input_when_the_snapshot_offers_it() {
+  local home root offers out
+  home=$(tb_make_home order-mode)
+  tb_write_topics "$home"
+  write_backlog "$home"
+  write_tags "$home"
+  for offers in 1 0; do
+    root="$TMP_ROOT/order-mode-$offers"
+    order_root "$root" "$offers"
+    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||
+      fail "order failed with a snapshot that offers board input: $offers"
+    assert_equals "h1 h2 r1 n1 u1 p1 d1 " "$(section "$out" "可派：")" \
+      "order must rank the same either way (offers board input: $offers)"
+  done
+  assert_equals "1 0" "$(asks "$TMP_ROOT/order-mode-1/snapshot.log")" \
+    "order must ask a snapshot that offers --board-input for it, and not for --json"
+  assert_equals "0 1" "$(asks "$TMP_ROOT/order-mode-0/snapshot.log")" \
+    "order must ask a snapshot without --board-input for --json"
+  pass "order reads the backlog through --board-input when the snapshot offers it, else --json"
+}
+
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check \
   test_falls_open_without_a_usable_topic_file test_ranks_an_untagged_item_by_its_topic_line \
   test_resolves_archived_blockers_and_lists_every_item \
-  test_falls_open_when_the_snapshot_fails
+  test_falls_open_when_the_snapshot_fails test_asks_for_board_input_when_the_snapshot_offers_it

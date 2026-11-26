@@ -351,3 +351,32 @@ export function parseReport(stdout: string): ParsedReport {
     },
   };
 }
+
+/**
+ * The tag files a feed's topics call printed: `{"topics": {"<task>": "<tag text>"}}`,
+ * the same shape and meaning as a report's `topics` (C7). Only the tasks asked
+ * for are kept; a task left out has no tag file.
+ *
+ * Returns:
+ *   The tag texts by task, or null when the output is not that shape, which
+ *   the board reads as "not supported or failed".
+ */
+export function parseTopicsAnswer(stdout: string, tasks: string[]): Record<string, string> | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!isRecord(raw) || !isRecord(raw["topics"])) return null;
+  const given = raw["topics"];
+  // No prototype, so a task named __proto__ is kept like any other.
+  const found = Object.create(null) as Record<string, string>;
+  for (const task of tasks) {
+    if (!Object.hasOwn(given, task)) continue;
+    const text = given[task];
+    if (typeof text !== "string") return null;
+    found[task] = text;
+  }
+  return found;
+}

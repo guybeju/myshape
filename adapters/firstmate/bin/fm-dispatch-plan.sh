@@ -73,7 +73,8 @@
 #        Without a usable data/topics.json it sends nothing and exits 0.
 #
 # Every subcommand needs jq. order also reads this home's data/<task-id>/topic
-# tag files and the backlog through fm-fleet-snapshot.sh.
+# tag files and the backlog through fm-fleet-snapshot.sh (--board-input when
+# that script offers it, else --json).
 #
 # Exit codes: 0 success (including the fall-open answers and an older copy
 # ignored), 1 refused (and queues-push without --check when a transfer
@@ -110,6 +111,8 @@ PUSHED_DIR="$PLAN_STATE/pushed"
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-queue-source-lib.sh
 . "$SCRIPT_DIR/fm-queue-source-lib.sh"
+# shellcheck source=bin/fm-board-lib.sh
+. "$SCRIPT_DIR/fm-board-lib.sh"
 
 usage() {
   sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -129,14 +132,15 @@ require_jq() {
     tb_die 1 "$1 需要 jq，但找不到。安裝：$(tb_jq_install_hint)"
 }
 
-# Print the snapshot JSON, or return non-zero when it cannot be produced.
+# Print the snapshot JSON, or return non-zero when it cannot be produced. The
+# snapshot gives --board-input when it offers it (tb_snapshot_mode), else --json.
 order_snapshot() {
   local -a runner=()
   if command -v timeout >/dev/null 2>&1; then
     runner=(timeout 30)
   fi
   FM_HOME="$FM_HOME" FM_SNAPSHOT_SECONDMATES=1 FM_SNAPSHOT_BUDGET=1 FM_CREW_STATE_NO_FORGE=1 \
-    "${runner[@]+"${runner[@]}"}" "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json 2>/dev/null
+    "${runner[@]+"${runner[@]}"}" "$SCRIPT_DIR/fm-fleet-snapshot.sh" "$(tb_snapshot_mode "$SCRIPT_DIR")" 2>/dev/null
 }
 
 # One "<task-id>\t<last tagged topic id>" line per tagged task in this home.

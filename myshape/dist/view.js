@@ -125,7 +125,10 @@ class Placer {
     }
     /** The topic a task belongs to now. */
     current(home, task) {
-        const tags = this.tagsOf(home, task);
+        return this.latest(this.tagsOf(home, task));
+    }
+    /** The topic the last of these tags names. */
+    latest(tags) {
         return this.classify(tags[tags.length - 1]?.topic);
     }
     /** The topic a task belonged to at `atMs`: the last tag written by then, else its first tag. */
@@ -139,6 +142,10 @@ class Placer {
 /** Where one task belongs right now, given what the homes last reported. */
 export function placeTask(topics, homes, home, task) {
     return new Placer(topics, homes).current(home, task);
+}
+/** Where a task with this tag file text belongs right now ("" for a task with none). */
+export function placeTagText(topics, text) {
+    return new Placer(topics, []).latest(parseTags(text));
 }
 function homeView(home, input) {
     const age = home.lastOkAt === null ? null : input.nowMs - home.lastOkAt;

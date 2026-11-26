@@ -14,6 +14,7 @@
 #   fm-board.sh install-rules
 #   fm-board.sh rules
 #   fm-board.sh feed <home> <ledger-offset> <prefix-sha256> [<closed-offset> <closed-sha256>]
+#   fm-board.sh topics <home> <task-id>...
 #   fm-board.sh deliver        (one action record on stdin)
 #
 # The board itself is bin/myshape.sh; this command is what firstmate adds
@@ -72,8 +73,9 @@
 # fm-board/rules/.
 #
 # feed and deliver are the two programs the board service runs (its feed and
-# action contracts); bin/fm-board-io-lib.sh holds them and says what each
-# runs. The board sets MYSHAPE_HOME to its home, which they use as FM_HOME.
+# action contracts), and topics is the feed's call for some tasks' tags only;
+# bin/fm-board-io-lib.sh holds them and says what each runs. The board sets
+# MYSHAPE_HOME to its home, which they use as FM_HOME.
 #
 # --in-home runs tag, answers, or setup inside a LOCAL registered secondmate
 # home. answers forwards stdin to that home's
@@ -90,7 +92,7 @@ SELF="$SCRIPT_DIR/fm-board.sh"
 TOPIC="$SCRIPT_DIR/myshape.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 case "${1:-}" in
-  feed | deliver) FM_HOME=${MYSHAPE_HOME:-${FM_HOME:-}} ;;
+  feed | topics | deliver) FM_HOME=${MYSHAPE_HOME:-${FM_HOME:-}} ;;
 esac
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 export FM_HOME
@@ -606,8 +608,8 @@ main() {
   [ "$#" -gt 0 ] || usage_error "少了子命令"
   local sub=$1
   shift
-  # The subcommands that reach the board write a missing binding first; feed
-  # and deliver, which the board itself runs, never do.
+  # The subcommands that reach the board write a missing binding first; feed,
+  # topics and deliver, which the board itself runs, never do.
   case "$sub" in
     tag | split) ensure_binding ;;
   esac
@@ -621,6 +623,7 @@ main() {
     install-rules) cmd_install_rules "$@" ;;
     rules) cmd_rules "$@" ;;
     feed) cmd_feed "$@" ;;
+    topics) cmd_topics "$@" ;;
     deliver) cmd_deliver "$@" ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac

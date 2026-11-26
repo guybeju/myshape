@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { CodedError, fileSize, isAlive, isRecord, readPidFile } from "./files.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
 import type { BoardConfig, BoardPaths } from "./layout.js";
+import { REQUEST_TIMEOUT_MS } from "./protocol.js";
 import type { BoardRequest, BoardResponse, HealthData } from "./protocol.js";
 
 const EXIT_REFUSED = 1;
@@ -353,11 +354,11 @@ async function send(
   paths: BoardPaths,
   message: BoardRequest,
 ): Promise<BoardResponse> {
-  let outcome = await exchange(paths.socket, message, READY_TIMEOUT_MS);
+  let outcome = await exchange(paths.socket, message, REQUEST_TIMEOUT_MS);
   if (outcome.kind === "absent") {
     // The board went away between the health check and the request; nothing was sent.
     await ensureRunning(config, paths);
-    outcome = await exchange(paths.socket, message, READY_TIMEOUT_MS);
+    outcome = await exchange(paths.socket, message, REQUEST_TIMEOUT_MS);
   }
   if (outcome.kind === "answer") return outcome.response;
   if (outcome.kind === "silent" && outcome.sent) {

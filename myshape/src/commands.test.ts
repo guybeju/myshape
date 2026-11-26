@@ -53,6 +53,27 @@ describe("the feed", () => {
   });
 });
 
+describe("the topics call", () => {
+  it("is the feed's program asked for some tasks' tag files in one home", () => {
+    expect(invocationFor({ kind: "topics", home: "main", tasks: ["t1"] })).toEqual({
+      args: ["topics", "main", "t1"],
+    });
+    expect(invocationFor({ kind: "topics", home: "w2", tasks: ["_a", "b.c-d"] })).toEqual({
+      args: ["topics", "w2", "_a", "b.c-d"],
+    });
+  });
+
+  it("refuses a malformed home or task id, and no task at all", () => {
+    expect(refusedFor({ kind: "topics", home: "-x", tasks: ["t1"] })).toContain("home id");
+    for (const task of ["", "-t", ".t", "a b", "a/b", "t\n"]) {
+      expect(refusedFor({ kind: "topics", home: "main", tasks: ["t1", task] })).toContain(
+        "task id",
+      );
+    }
+    expect(refusedFor({ kind: "topics", home: "main", tasks: [] })).toContain("at least one");
+  });
+});
+
 describe("the deliverer", () => {
   it("gets the record as one line on stdin and no argument but its name", () => {
     expect(invocationFor({ kind: "deliver", record: '{"v":1}' })).toEqual({
@@ -170,6 +191,14 @@ describe("commandRunner", () => {
     expect(fs.existsSync(path.join(root, "ran-blocked"))).toBe(false);
     await run({ kind: "feed", home: "main", offset: 0, sha: "-" }, 5000);
     expect(roles).toEqual(["deliver", "feed"]);
+  });
+
+  it("runs the topics call as the feed's role, with its arguments", async () => {
+    program('printf "%s|" "$@"');
+    roles.length = 0;
+    const result = await run({ kind: "topics", home: "sm1", tasks: ["t1", "t2"] }, 5000);
+    expect(result).toEqual({ code: 0, stdout: "topics|sm1|t1|t2|", stderr: "" });
+    expect(roles).toEqual(["feed"]);
   });
 
   it("hands the program only the fixed environment", async () => {

@@ -29,7 +29,7 @@ import { serveBoard } from "./http.js";
 import type { ActionContext, ActionResult } from "./actions.js";
 import { ROLES, checkRole, readBinding, roleReason } from "./binding.js";
 import type { CheckInput, Role, RoleCheck } from "./binding.js";
-import { commandRunner } from "./commands.js";
+import { TASK_ID, commandRunner } from "./commands.js";
 import type { ProgramGate } from "./commands.js";
 import { isConfirmed } from "./confirmations.js";
 import { Journal, MAIN_HOME, Offsets, SUMMARY_KINDS, SUMMARY_MAX, Summaries } from "./journal.js";
@@ -52,16 +52,23 @@ import { commitChange, loadBoard } from "./store.js";
 import type { CommitTarget, LeftoverProposal, StoredBoard } from "./store.js";
 import * as topics from "./topics.js";
 import type { TodoNotice } from "./todos.js";
-import { buildView, parseTags, placeTask } from "./view.js";
+import { buildView, placeTask } from "./view.js";
 import { findLines } from "./lineage.js";
-import type { TaskTags } from "./lineage.js";
+import {
+  beforeDeadline,
+  findTasks,
+  freshTags,
+  knowHomes,
+  lookupDeadline,
+  reminderPrefix,
+} from "./lookup.js";
+import type { LookupHost } from "./lookup.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 import { deliveryRecord } from "./writes.js";
 import type { Action, TopicRef, WriteRecord, WriteState, WriteTimings } from "./writes.js";
 
 const PRIVATE_FILE = 0o600;
 const HEALTH_PROBE_MS = 3000;
-const LOOKUP_WAIT_MS = 10_000;
 const NOTIFY_DELAY_MS = 30_000;
 const WRITE_HISTORY_MS = 24 * 60 * 60 * 1000;
 const TEST_MODE = process.env["MYSHAPE_TEST"] === "1";
@@ -201,53 +208,32 @@ function resetToken(service: Service): BoardResponse {
   return { ok: true, line: "ok reset-token 已重置，請重新跑 open" };
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(fallback), ms);
-    void promise.then((value) => {
-      clearTimeout(timer);
-      resolve(value);
-    });
-  });
-}
-
-/** The home a `--home` argument names, or a refusal when it is not a registered secondmate. */
+/**
+ * The home a `--home` argument names, or a refusal when it is not a registered
+ * secondmate. Its read of the root home counts against the request's `deadline`.
+ */
 async function homeArg(
   service: Service,
   args: Record<string, unknown>,
+  deadline: number,
 ): Promise<string | BoardResponse> {
   const home = args["home"];
   if (home === undefined) return MAIN_HOME;
   if (typeof home !== "string") return usage("--home 要是 home 的 id。");
   // A board started just now has never read the root home, so it does not know the further homes yet.
-  if (!service.poller.hasMainReport())
-    await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
+  await knowHomes(service.poller, deadline);
   return service.poller.knows(home) && home !== MAIN_HOME
     ? home
     : refused(`--home ${home} 不是看板讀的 home。`);
 }
 
-/**
- * The line the agent puts in front of a chat reminder about `task`. The home is
- * read afresh, because nothing keeps the board current while no page is open
- * and a tag may have changed since. When that read fails, a tag seen earlier
- * still answers; without one the line is "議題不明", never "未分類": not
- * knowing is not the same as knowing the task has no topic.
- */
-async function reminderPrefix(service: Service, home: string, task: string): Promise<string> {
-  const read = await withTimeout(service.poller.readFresh(home), LOOKUP_WAIT_MS, false);
-  const placement = placeTask(service.board.topics, service.poller.snapshots(), home, task);
-  if (!read && placement.reason === "no-tag") return `議題不明（${task}）：`;
-  if (placement.topic === null) return "未分類：";
-  const name =
-    service.board.topics.doc.topics[placement.topic]?.name ??
-    service.board.topics.archive.topics[placement.topic]?.name;
-  return `${name ?? placement.topic}：`;
+function lookupHost(service: Service): LookupHost {
+  return { poller: service.poller, topics: () => service.board.topics };
 }
 
 function taskArg(args: Record<string, unknown>): string | null {
   const task = stringField(args, "task");
-  return task !== null && /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(task) ? task : null;
+  return task !== null && TASK_ID.test(task) ? task : null;
 }
 
 /** The text of a summary, or a refusal when it is empty or too long. */
@@ -264,6 +250,7 @@ async function summaryArg(
   service: Service,
   op: string,
   args: Record<string, unknown>,
+  deadline: number,
 ): Promise<Summary | BoardResponse> {
   const task = taskArg(args);
   const kind = SUMMARY_KINDS.find((name) => name === args["kind"]);
@@ -271,21 +258,23 @@ async function summaryArg(
     return usage(`${op} 需要 task id 與 ready、report、failed、landed 其中一種。`);
   const text = summaryText(args);
   if (typeof text !== "string") return text;
-  const home = await homeArg(service, args);
+  const home = await homeArg(service, args, deadline);
   if (typeof home !== "string") return home;
   return { ts: epochSeconds(), home, task, kind, text };
 }
 
 async function summary(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
-  const wanted = await summaryArg(service, "summary", args);
+  const deadline = lookupDeadline();
+  const wanted = await summaryArg(service, "summary", args, deadline);
   if ("ok" in wanted) return wanted;
   if (service.summaries.add(wanted)) service.version += 1;
-  return { ok: true, line: await reminderPrefix(service, wanted.home, wanted.task) };
+  const line = await reminderPrefix(lookupHost(service), wanted.home, wanted.task, deadline);
+  return { ok: true, line };
 }
 
 /** Takes a summary that turned out wrong off the board; the request's text is the reason. */
 async function retract(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
-  const wanted = await summaryArg(service, "retract", args);
+  const wanted = await summaryArg(service, "retract", args, lookupDeadline());
   if ("ok" in wanted) return wanted;
   const gone = service.summaries.retract(wanted);
   if (gone === null) return refused(`${wanted.task} 沒有可以撤回的 ${wanted.kind} 摘要。`);
@@ -296,20 +285,10 @@ async function retract(service: Service, args: Record<string, unknown>): Promise
 async function which(service: Service, args: Record<string, unknown>): Promise<BoardResponse> {
   const task = taskArg(args);
   if (task === null) return usage("which 需要 task id。");
-  const home = await homeArg(service, args);
+  const deadline = lookupDeadline();
+  const home = await homeArg(service, args, deadline);
   if (typeof home !== "string") return home;
-  return { ok: true, line: await reminderPrefix(service, home, task) };
-}
-
-/** The tag files of every task named exactly `task`, across the homes the board reads. */
-function taskTags(service: Service, task: string): TaskTags[] {
-  const found: TaskTags[] = [];
-  for (const home of service.poller.snapshots()) {
-    const tagFiles = home.report?.topics ?? {};
-    const text = Object.hasOwn(tagFiles, task) ? tagFiles[task] : undefined;
-    if (text !== undefined) found.push({ home: home.id, task, tags: parseTags(text) });
-  }
-  return found;
+  return { ok: true, line: await reminderPrefix(lookupHost(service), home, task, deadline) };
 }
 
 /**
@@ -320,8 +299,7 @@ async function find(service: Service, args: Record<string, unknown>): Promise<Bo
   const query = topics.oneLine(stringField(args, "query") ?? "", topics.NAME_MAX);
   if (query === null) return usage(`find 需要一行關鍵字，最多 ${topics.NAME_MAX} 個字。`);
   const isTask = taskArg({ task: query }) !== null;
-  if (isTask) await withTimeout(service.poller.readFresh(MAIN_HOME), LOOKUP_WAIT_MS, false);
-  const tasks = isTask ? taskTags(service, query) : [];
+  const tasks = isTask ? await findTasks(service.poller, query, lookupDeadline()) : [];
   const everything = args["all"] === true;
   return { ok: true, line: findLines(service.board.topics, query, tasks, everything).join("\n") };
 }
@@ -568,7 +546,7 @@ async function handle(service: Service, request: BoardRequest): Promise<BoardRes
   // the root home asks it once, so they do not say "aggregator" for Firstmate.
   // A hands-on op never waits for a read: the aggregator may be asking from inside one.
   if (service.aggregator === null && operationOf(request.op)?.commitFile === "topics")
-    await withTimeout(service.poller.readNow(MAIN_HOME), LOOKUP_WAIT_MS, false);
+    await beforeDeadline(lookupDeadline(), false, () => service.poller.readNow(MAIN_HOME));
   return topicOp(service, request.op, request.args);
 }
 
@@ -827,15 +805,16 @@ function recordFinished(service: Service, record: WriteRecord): void {
 }
 
 /**
- * Reads `home` afresh and returns `task`'s tag text, or null when the read
- * failed. A board that has not read the root home since it started does not
- * know the further homes yet, so it reads the root home first.
+ * Returns `task`'s tag text in `home` from a read that starts now ("" when it
+ * has none), or null when the read failed. A board that has not read the root
+ * home since it started does not know the further homes yet, so it reads the
+ * root home first.
  */
 async function readTags(service: Service, home: string, task: string): Promise<string | null> {
   if (!service.poller.knows(home)) await service.poller.readNow(MAIN_HOME);
-  if (!(await service.poller.readFresh(home))) return null;
-  const report = service.poller.snapshots().find((entry) => entry.id === home)?.report;
-  return report?.topics[task] ?? "";
+  const tags = await freshTags(service.poller, home, task);
+  if (tags === null) return null;
+  return Object.hasOwn(tags, task) ? (tags[task] as string) : "";
 }
 
 /** The aggregator block kept from an earlier start, or null. */

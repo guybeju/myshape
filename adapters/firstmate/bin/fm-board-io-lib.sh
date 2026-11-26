@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Firstmate's side of the board's two contracts (myshape/spec/contracts.markdown
-# section 7): the feed, which prints one home's report, and the deliverer,
-# which carries out one action record from the page. Sourced by
-# bin/fm-board.sh only; defines functions and has no side effects on source.
+# section 7): the feed, which prints one home's report or some tasks' tags,
+# and the deliverer, which carries out one action record from the page.
+# Sourced by bin/fm-board.sh only; defines functions and has no side effects
+# on source.
 #
 # The caller must already have sourced fm-secondmate-registry-lib.sh and
 # myshape-lib.sh, and set SCRIPT_DIR, SELF, DATA and FM_HOME (exported).
@@ -22,6 +23,12 @@
 # the reader found the Firstmate it runs on missing a capability it needs (the
 # reader's own exit 4 and line, passed on unchanged; for a remote home its own
 # code root's); 2 an unknown home; any other code is the reader's own failure.
+#
+# topics <home> <task-id>... prints {"topics": {"<task-id>": "<tag file>"}}, the
+# tag files the full report's topics would carry for those tasks, read from
+# data/<task-id>/topic in <home>: main, or a local secondmate's home. A task
+# without a tag file is left out. A remote secondmate is exit 2, as is an
+# unknown home or a malformed task id, so the board reads the whole home.
 #
 # deliver reads one action record on stdin and prints one outcome line,
 # {"outcome":"delivered|handled_elsewhere|retry|failed"[,"error":…]}, always
@@ -114,6 +121,25 @@ cmd_feed() {
     rm -f "$err"
   fi
   printf '%s\n' "$out" | fmb_decorate "$home" "$remote"
+}
+
+cmd_topics() {
+  local home=${1:-} task dir remote
+  local -a files=()
+  [ "$#" -ge 2 ] || usage_error "topics 的用法是 <home> <task-id>..."
+  shift
+  for task in "$@"; do
+    [[ "$task" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || usage_error "task id 格式不對：$task"
+  done
+  dir=$DATA
+  if [ "$home" != main ]; then
+    remote=$(fmb_registry_remote "$home") || usage_error "topics：$home 不是已註冊的 secondmate"
+    [ "$remote" = 0 ] || usage_error "topics：$home 是遠端的 secondmate，看板改讀整個 home"
+    dir=$(tb_local_secondmate_home "$DATA/secondmates.md" "$home") || exit 1
+    dir=$dir/data
+  fi
+  for task in "$@"; do files+=("$dir/$task/topic"); done
+  tb_tag_files_json "${files[@]}" | jq -c '{topics: .}'
 }
 
 # fmb_check_cursor <offset> <sha>: refuses a cursor the reader would refuse.

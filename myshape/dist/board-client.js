@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodedError, fileSize, isAlive, isRecord, readPidFile } from "./files.js";
 import { boardPaths, parseConfigArgs } from "./layout.js";
+import { REQUEST_TIMEOUT_MS } from "./protocol.js";
 const EXIT_REFUSED = 1;
 const EXIT_USAGE = 2;
 const EXIT_UNKNOWN_OUTCOME = 3;
@@ -308,11 +309,11 @@ function finish(response) {
 }
 /** Sends a request to a board known to be running and maps the outcome to an exit. */
 async function send(config, paths, message) {
-    let outcome = await exchange(paths.socket, message, READY_TIMEOUT_MS);
+    let outcome = await exchange(paths.socket, message, REQUEST_TIMEOUT_MS);
     if (outcome.kind === "absent") {
         // The board went away between the health check and the request; nothing was sent.
         await ensureRunning(config, paths);
-        outcome = await exchange(paths.socket, message, READY_TIMEOUT_MS);
+        outcome = await exchange(paths.socket, message, REQUEST_TIMEOUT_MS);
     }
     if (outcome.kind === "answer")
         return outcome.response;

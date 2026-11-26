@@ -3,7 +3,9 @@
 # prints one home's report with the aggregator's additions, reads a local
 # secondmate with --in-home and a remote one through fm-on.sh, and turns a
 # remote checkout that has no reader, and a Firstmate that lacks a capability
-# the report needs, into exit 4 with one line.
+# the report needs, into exit 4 with one line. fm-board.sh topics prints some
+# tasks' tags of the main home or a local secondmate, and the reader asks the
+# snapshot for --board-input when it offers it.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -424,7 +426,98 @@ test_usage_errors() {
   pass "an unknown home and a malformed offset or sha are usage errors"
 }
 
+# topics <root> <args...>: run fm-board.sh topics from <root> for the main home.
+topics() {
+  local root=$1
+  shift
+  MYSHAPE_HOME="$MAIN" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-board.sh" topics "$@"
+}
+
+# topics_code <root> <args...>: run topics, discard output, print the exit code.
+topics_code() {
+  local rc=0
+  topics "$@" >/dev/null 2>&1 || rc=$?
+  printf '%s\n' "$rc"
+}
+
+# The board's call for some tasks' tags (contracts section 4): the same text
+# the full report's topics carries, read in the home it names.
+test_topics_reads_the_tag_files_of_the_home() {
+  local out
+  out=$(topics "$FAKE" main run-a gone-merged no-tag) || fail "topics main failed"
+  assert_equals "$(feed "$FAKE" main 0 - |
+    jq -cS '{topics: (.topics | with_entries(select(.key == "run-a" or .key == "gone-merged")))}')" \
+    "$(jq -cS . <<< "$out")" \
+    "topics main must print the full report's tag text of each task asked for, and leave out one with no tag file"
+  assert_equals "$(printf 'billing 2026-07-01T00:00:00Z\nt2 2026-07-02T00:00:00Z')" \
+    "$(jq -r '.topics["run-a"]' <<< "$out")" "a tag file is carried whole, without its trailing newline"
+  assert_equals '{"topics":{}}' "$(topics "$FAKE" main no-tag)" "a task with no tag file is left out"
+  assert_equals '{"topics":{}}' "$(topics "$FAKE" main sm-tagged)" "the main home must not read a secondmate's tags"
+  mkdir -p "$SM/data/sm-tagged"
+  printf 'solo 2026-07-04T00:00:00Z\n' > "$SM/data/sm-tagged/topic"
+  assert_equals '{"topics":{"sm-tagged":"solo 2026-07-04T00:00:00Z"}}' "$(topics "$FAKE" sm1 sm-tagged run-a)" \
+    "topics sm1 must read the local secondmate's own tag files"
+  assert_equals '{"topics":{}}' "$(topics "$FAKE" main sm-tagged)" "the main home must not read a secondmate's tags"
+  assert_equals '{"topics":{}}' "$(env -u MYSHAPE_HOME FM_ROOT_OVERRIDE="$FAKE" "$FAKE/bin/fm-board.sh" topics main run-a)" \
+    "without MYSHAPE_HOME, topics must read FM_HOME"
+  rm -r "$SM/data/sm-tagged"
+  pass "topics prints the tag files of the tasks asked for, from the main home or a local secondmate"
+}
+
+test_topics_leaves_a_remote_home_and_bad_arguments_to_the_full_read() {
+  : > "$FEED_ON_LOG"
+  expect_code 2 "$(topics_code "$FAKE" far1 far-only)" "topics of a remote secondmate"
+  assert_equals '' "$(cat "$FEED_ON_LOG")" "topics of a remote secondmate must not reach it"
+  expect_code 2 "$(topics_code "$FAKE" nobody t1)" "topics of an unknown home"
+  expect_code 2 "$(topics_code "$FAKE" main)" "topics without a task"
+  expect_code 2 "$(topics_code "$FAKE" main run-a ../x)" "topics with a task id that leaves the data directory"
+  expect_code 2 "$(topics_code "$FAKE" main -x)" "topics with a task id that starts with -"
+  expect_code 2 "$(topics_code "$FAKE" main 'a b')" "topics with a task id holding a space"
+  assert_equals '' "$(topics "$FAKE" main run-a ../x 2>/dev/null)" "a refused topics call prints nothing on stdout"
+  pass "topics is exit 2 for a remote secondmate, an unknown home, and a malformed task id"
+}
+
+# snapshot_logger <root> <comment>: <root>'s fm-fleet-snapshot.sh becomes one
+# that logs its arguments to $TMP_ROOT/snapshot.log and passes the real
+# snapshot's --json report through. <comment> is the one line of its text the
+# reader's checks see besides the archived-blocker fix's marker, so naming
+# --board-input there makes it look like a snapshot that offers it.
+snapshot_logger() {
+  rm "$1/bin/fm-fleet-snapshot.sh"
+  printf '#!/usr/bin/env bash\n# fm_backlog_archived_done_ids\n# %s\nprintf "%%s\\n" "$*" >> %q\nexec %q --json\n' \
+    "$2" "$TMP_ROOT/snapshot.log" "$ROOT/bin/fm-fleet-snapshot.sh" > "$1/bin/fm-fleet-snapshot.sh"
+  chmod +x "$1/bin/fm-fleet-snapshot.sh"
+}
+
+# snapshot_asks: "<--board-input calls> <--json calls>" in $TMP_ROOT/snapshot.log.
+snapshot_asks() {
+  printf '%s %s\n' "$(grep -cx -e --board-input "$TMP_ROOT/snapshot.log")" \
+    "$(grep -cx -e --json "$TMP_ROOT/snapshot.log")"
+}
+
+test_the_reader_asks_for_board_input_when_the_snapshot_offers_it() {
+  local root="$TMP_ROOT/snapshot-root" expected
+  tb_make_fake_root "$root"
+  with_ledger_on "$MAIN"
+  expected=$(feed "$FAKE" main 0 - | jq -c '{tasks, holds, queued}')
+  snapshot_logger "$root" "Offers --board-input, the board's cheaper read."
+  : > "$TMP_ROOT/snapshot.log"
+  assert_equals "$expected" "$(feed "$root" main 0 - | jq -c '{tasks, holds, queued}')" \
+    "the report must be the same through a snapshot that offers --board-input"
+  feed "$root" sm1 0 - >/dev/null || fail "feed sm1 through a snapshot that offers --board-input failed"
+  assert_equals "2 0" "$(snapshot_asks)" \
+    "the reader must ask a snapshot that offers --board-input for it, in every home, and never for --json"
+  snapshot_logger "$root" "Offers the full report only."
+  : > "$TMP_ROOT/snapshot.log"
+  assert_equals "$expected" "$(feed "$root" main 0 - | jq -c '{tasks, holds, queued}')" \
+    "the report must be the same through a snapshot without --board-input"
+  assert_equals "0 1" "$(snapshot_asks)" "the reader must ask a snapshot without --board-input for --json"
+  pass "the reader asks the snapshot for --board-input when it offers it, else --json"
+}
+
 fm_test_run test_main_report_carries_the_backlog test_main_report_has_the_contract_keys \
   test_aggregator_block_and_read_hints test_ledger_hint_only_when_the_ledger_is_off \
   test_secondmates_are_read_in_their_own_homes test_remote_failures test_a_missing_capability_is_exit_4 \
-  test_closed_decisions test_usage_errors
+  test_closed_decisions test_usage_errors test_topics_reads_the_tag_files_of_the_home \
+  test_topics_leaves_a_remote_home_and_bad_arguments_to_the_full_read \
+  test_the_reader_asks_for_board_input_when_the_snapshot_offers_it
