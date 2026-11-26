@@ -3,6 +3,8 @@ import { agentRow, closedFold, closedTodoEntries, holdCard, liveTodos, todoCard,
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
 import { filterBar, mergeTagNote, topicChips } from "./tags.js";
+import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
+import { scheduledTopics } from "./schedules.js";
 function shownOf(page, view) {
     return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
 }
@@ -31,10 +33,16 @@ function topicCard(view, actions, id, shown) {
     const unsent = view.writes.filter((write) => write.topic === id && BAD_WRITES.includes(write.state)).length;
     return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), topicChips(view, id), matchedFields(shown, id));
 }
+/**
+ * The topics a queue box lists: those the filter shows, without the scheduled
+ * ones, which stay in 待辦 but are listed under 排程 and cannot be dragged.
+ */
+function queueTopics(view, queue, shown) {
+    const scheduled = scheduledTopics(view.schedules);
+    return view.queues[queue].filter((id) => isShown(shown, id) && !scheduled.has(id));
+}
 function queueBox(view, actions, queue, shown) {
-    return h("div", { class: "queue", "data-queue": queue }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, view.queues[queue]
-        .filter((id) => isShown(shown, id))
-        .map((id) => topicCard(view, actions, id, shown)), h("div", { class: "empty" }, "拖到這裡")));
+    return h("div", { class: "queue", "data-queue": queue }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, queueTopics(view, queue, shown).map((id) => topicCard(view, actions, id, shown)), h("div", { class: "empty" }, "拖到這裡")));
 }
 function archivedBox(view, actions, shown) {
     const archived = Object.entries(view.topics).filter(([id, topic]) => topic.status === "archived" && isShown(shown, id));
@@ -42,7 +50,7 @@ function archivedBox(view, actions, shown) {
 }
 export function sidebar(page, view, actions) {
     const shown = shownOf(page, view);
-    return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), QUEUES.map((queue) => queueBox(view, actions, queue, shown)), archivedBox(view, actions, shown));
+    return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
 }
 function closeProposals(view, actions, shown) {
     return Object.entries(view.topics)
@@ -141,6 +149,7 @@ export function home(page, view, actions) {
     const todos = mine(liveTodos(view));
     return [
         filterBar(page, view, actions, shown),
+        scheduleBar(page, view, actions),
         todos.length === 0
             ? null
             : section("要你動手", todos.map((todo) => todoCard(page, view, actions, todo, true))),
@@ -154,9 +163,7 @@ export function home(page, view, actions) {
         section("進行中", mine(view.agents)
             .filter((agent) => agent.topic !== null && active.includes(agent.light))
             .map((agent) => agentRow(view, actions, agent))),
-        section("排定的", view.queues.later
-            .filter((id) => isShown(shown, id))
-            .map((id) => h("div", { class: "row" }, topicLink(view, id, actions), h("span", { class: "note" }, "待辦，不自動開工"))), mine(view.holds)
+        section("排定的", queueTopics(view, "later", shown).map((id) => h("div", { class: "row" }, topicLink(view, id, actions), h("span", { class: "note" }, "待辦，不自動開工"))), mine(view.holds)
             .filter((hold) => !hold.live && hold.topic !== null)
             .map((hold) => holdCard(page, view, actions, hold, true))),
         shown === null ? unsorted(page, view, actions) : null,

@@ -9,6 +9,7 @@ import type {
   TodoView,
   UpdateView,
 } from "#board/view.js";
+import type { RecentChange } from "#board/oversight.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { BAD_WRITES, LIGHT_LABEL, WRITE_LABEL, agentName } from "./state.js";
@@ -475,4 +476,66 @@ export function closedTodoEntries(prefix: string, closed: ClosedTodoView[]): Clo
     text: entry.text,
     records: entry.records,
   }));
+}
+
+/** What a list of the agent's recent changes to one feature shows, and where its buttons go. */
+export interface RecentList {
+  title: string;
+  changes: RecentChange[];
+  /** The routes of 撤回 (with the change's rid) and of 看過了. */
+  revert: string;
+  seen: string;
+}
+
+/** The agent's recent changes, each with 撤回 (or 已撤回), and one 看過了 for them all. */
+export function recentCard(view: View, actions: Actions, list: RecentList): Child {
+  return h(
+    "div",
+    { class: "card" },
+    h("h3", {}, list.title),
+    list.changes.map((change) =>
+      h(
+        "div",
+        { class: "row" },
+        h("span", { class: "t note" }, when(change.ts)),
+        h("span", { class: "grow" }, change.text),
+        change.topic === null ? null : topicLink(view, change.topic, actions),
+        change.reverted
+          ? h("span", { class: "note" }, "已撤回")
+          : h("button", { onclick: () => actions.send(list.revert, { rid: change.rid }) }, "撤回"),
+      ),
+    ),
+    h(
+      "div",
+      { class: "btns" },
+      h("button", { onclick: () => actions.send(list.seen, {}) }, "看過了"),
+    ),
+  );
+}
+
+/** One row of a settings table. */
+export interface SettingRow {
+  label: string;
+  current: string;
+  fallback: string;
+  control: Child;
+}
+
+/** Each setting with its current value, its default and the control that changes it. */
+export function settingsTable(rows: SettingRow[]): Child {
+  return h(
+    "table",
+    { class: "settings" },
+    h("tr", {}, h("th", {}, "設定"), h("th", {}, "現在"), h("th", {}, "預設"), h("th", {}, "")),
+    rows.map((row) =>
+      h(
+        "tr",
+        {},
+        h("td", {}, row.label),
+        h("td", {}, row.current),
+        h("td", {}, row.fallback),
+        h("td", {}, row.control),
+      ),
+    ),
+  );
 }

@@ -1,6 +1,6 @@
 import { h } from "./dom.js";
 import { NO_FILTER, cycleHashtag, isActive, owedOutside, viewFilter } from "./filter.js";
-import { draftInput, topicLink, topicName, when } from "./parts.js";
+import { draftInput, recentCard, settingsTable, topicName } from "./parts.js";
 import { agentName } from "./state.js";
 const COLORS = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
 function hashtagOf(view, name) {
@@ -103,12 +103,14 @@ function panelButtons(page, view, actions) {
 }
 /** The filter bar above the home page. */
 export function filterBar(page, view, actions, shown) {
-    return h("section", { class: "filterbar" }, viewButtons(page, view, actions), hashtagButtons(page, view, actions), keywordRow(page, actions), owedLine(view, actions, shown), panelButtons(page, view, actions), page.tagPanel === "recent" ? recentPanel(view, actions) : null, page.tagPanel === "settings" ? settingsPanel(page, view, actions) : null);
-}
-function recentPanel(view, actions) {
-    return h("div", { class: "card" }, h("h3", {}, `${agentName()} 最近的 hashtag 改動`), view.hashtags.recent.map((change) => h("div", { class: "row" }, h("span", { class: "t note" }, when(change.ts)), h("span", { class: "grow" }, change.text), change.topic === null ? null : topicLink(view, change.topic, actions), change.reverted
-        ? h("span", { class: "note" }, "已撤回")
-        : h("button", { onclick: () => actions.send("hashtags/revert", { rid: change.rid }) }, "撤回"))), h("div", { class: "btns" }, h("button", { onclick: () => actions.send("hashtags/seen", {}) }, "看過了")));
+    return h("section", { class: "filterbar" }, viewButtons(page, view, actions), hashtagButtons(page, view, actions), keywordRow(page, actions), owedLine(view, actions, shown), panelButtons(page, view, actions), page.tagPanel === "recent"
+        ? recentCard(view, actions, {
+            title: `${agentName()} 最近的 hashtag 改動`,
+            changes: view.hashtags.recent,
+            revert: "hashtags/revert",
+            seen: "hashtags/seen",
+        })
+        : null, page.tagPanel === "settings" ? settingsPanel(page, view, actions) : null);
 }
 const SETTING_LABEL = {
     aggregator_may_tag: () => `${agentName()} 可以貼撕 hashtag`,
@@ -144,9 +146,14 @@ function settingControl(page, view, actions, name) {
         h("button", { onclick: save }, "改"),
     ];
 }
-function settingsTable(page, view, actions) {
+function hashtagSettings(page, view, actions) {
     const names = Object.keys(SETTING_LABEL);
-    return h("table", { class: "settings" }, h("tr", {}, h("th", {}, "設定"), h("th", {}, "現在"), h("th", {}, "預設"), h("th", {}, "")), names.map((name) => h("tr", {}, h("td", {}, SETTING_LABEL[name]()), h("td", {}, shownValue(view, name, view.hashtags.settings[name])), h("td", {}, shownValue(view, name, view.hashtags.defaults[name])), h("td", {}, settingControl(page, view, actions, name)))));
+    return settingsTable(names.map((name) => ({
+        label: SETTING_LABEL[name](),
+        current: shownValue(view, name, view.hashtags.settings[name]),
+        fallback: shownValue(view, name, view.hashtags.defaults[name]),
+        control: settingControl(page, view, actions, name),
+    })));
 }
 /** The second step of a whole-hashtag change: how many topics, and which. */
 function wholeConfirm(page, view, actions, key, what) {
@@ -193,7 +200,7 @@ function hashtagRow(page, view, actions, entry) {
     return h("div", { class: "card" }, hashtagMeta(view, actions, entry), h("div", { class: "btns" }, draftInput(page, actions, `tag-to:${name}`, "新名稱", rename), h("button", { onclick: rename }, "改名…"), mergeInto(view, actions, name), h("button", { class: "danger", onclick: () => actions.ask(keys.remove, "hashtags/delete", { name }) }, "刪掉…")), wholeConfirm(page, view, actions, keys.rename, `把 #${name} 改名為 #${pendingArg(page, keys.rename, "to")}，`), wholeConfirm(page, view, actions, keys.merge, `把 #${name} 併入 #${pendingArg(page, keys.merge, "into")}，`), wholeConfirm(page, view, actions, keys.remove, `刪掉 #${name}，`));
 }
 function settingsPanel(page, view, actions) {
-    return h("div", { class: "card" }, h("h3", {}, "hashtag 設定"), h("p", { class: "note" }, `hashtag 只描述議題的內容，不改佇列、順序或派工。這裡的設定管 ${agentName()} 能做什麼；你在頁面上不受這些限制，只受「一個議題最多幾個」管。`), settingsTable(page, view, actions), h("h3", {}, "hashtag"), view.hashtags.hashtags.length === 0 ? h("p", { class: "note" }, "還沒有 hashtag。") : null, view.hashtags.hashtags.map((entry) => hashtagRow(page, view, actions, entry)), h("h3", {}, "存下來的視圖"), view.hashtags.views.length === 0
+    return h("div", { class: "card" }, h("h3", {}, "hashtag 設定"), h("p", { class: "note" }, `hashtag 只描述議題的內容，不改佇列、順序或派工。這裡的設定管 ${agentName()} 能做什麼；你在頁面上不受這些限制，只受「一個議題最多幾個」管。`), hashtagSettings(page, view, actions), h("h3", {}, "hashtag"), view.hashtags.hashtags.length === 0 ? h("p", { class: "note" }, "還沒有 hashtag。") : null, view.hashtags.hashtags.map((entry) => hashtagRow(page, view, actions, entry)), h("h3", {}, "存下來的視圖"), view.hashtags.views.length === 0
         ? h("p", { class: "note" }, "還沒有。用上面的篩選再按「存成視圖」。")
         : null, view.hashtags.views.map((saved) => h("div", { class: "row" }, h("span", { class: "grow" }, saved.name), [
         ...saved.any.map((name) => chip(view, name, "on")),

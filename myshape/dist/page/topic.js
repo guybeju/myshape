@@ -3,6 +3,7 @@ import { mergeConfirm, mergeMenu } from "./home.js";
 import { closedFold, closedTodoEntries, draftInput, holdCard, light, liveTodos, todoCard, queuedRow, questionRow, summaryRow, updateRow, when, writeRows, } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
 import { topicTagEditor } from "./tags.js";
+import { topicSchedule } from "./schedule-parts.js";
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
 const MAX_UPDATES = 200;
 /** A line of text with an edit button that swaps it for an input in place. */
@@ -163,7 +164,7 @@ export function topicPage(page, view, actions, id) {
     const key = `message:${id}`;
     const send = () => actions.message(id, key);
     return [
-        h("div", { class: "narrow" }, h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")), header(page, view, actions, id), handsOn(page, view, actions, id), decisions(page, view, actions, id), updates(view, actions, id), h("section", {}, h("h2", {}, "關聯 agent"), view.agents
+        h("div", { class: "narrow" }, h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")), header(page, view, actions, id), topicSchedule(page, view, actions, id), handsOn(page, view, actions, id), decisions(page, view, actions, id), updates(view, actions, id), h("section", {}, h("h2", {}, "關聯 agent"), view.agents
             .filter((agent) => agent.topic === id)
             .map((agent) => agentCard(page, actions, agent))), queued(view, id)),
         h("div", { class: "composer" }, h("div", { class: "inner" }, h("div", { class: "btns" }, draftInput(page, actions, key, `給 ${agentName()} 的訊息（會附上議題「${view.topics[id]?.name ?? id}」）`, send), h("button", { class: "primary", onclick: send }, `送給 ${agentName()}`)), writeRows(page, actions, (write) => (write.kind === "message" || write.kind === "notice") && write.topic === id))),

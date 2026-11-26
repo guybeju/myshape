@@ -21,6 +21,7 @@ import {
 import type { ClosedEntry } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
 import { topicTagEditor } from "./tags.js";
+import { topicSchedule } from "./schedule-parts.js";
 import type { Actions, Page, View } from "./state.js";
 
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
@@ -340,6 +341,7 @@ export function topicPage(page: Page, view: View, actions: Actions, id: string):
       { class: "narrow" },
       h("p", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "← 回首頁")),
       header(page, view, actions, id),
+      topicSchedule(page, view, actions, id),
       handsOn(page, view, actions, id),
       decisions(page, view, actions, id),
       updates(view, actions, id),

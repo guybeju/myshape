@@ -23,6 +23,8 @@ import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state
 import type { Actions, Page, View } from "./state.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
 import { filterBar, mergeTagNote, topicChips } from "./tags.js";
+import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
+import { scheduledTopics } from "./schedules.js";
 
 /** The topics the captain's filter shows, with what each matched; null when nothing is filtered. */
 type Shown = Map<string, string[]> | null;
@@ -80,6 +82,15 @@ function topicCard(view: View, actions: Actions, id: string, shown: Shown): Chil
   );
 }
 
+/**
+ * The topics a queue box lists: those the filter shows, without the scheduled
+ * ones, which stay in 待辦 but are listed under 排程 and cannot be dragged.
+ */
+function queueTopics(view: View, queue: Queue, shown: Shown): string[] {
+  const scheduled = scheduledTopics(view.schedules);
+  return view.queues[queue].filter((id) => isShown(shown, id) && !scheduled.has(id));
+}
+
 function queueBox(view: View, actions: Actions, queue: Queue, shown: Shown): Child {
   return h(
     "div",
@@ -88,9 +99,7 @@ function queueBox(view: View, actions: Actions, queue: Queue, shown: Shown): Chi
     h(
       "div",
       { class: "list" },
-      view.queues[queue]
-        .filter((id) => isShown(shown, id))
-        .map((id) => topicCard(view, actions, id, shown)),
+      queueTopics(view, queue, shown).map((id) => topicCard(view, actions, id, shown)),
       h("div", { class: "empty" }, "拖到這裡"),
     ),
   );
@@ -126,7 +135,13 @@ export function sidebar(page: Page, view: View, actions: Actions): Child {
     "div",
     { id: "sidebar" },
     h("h2", {}, "優先順序"),
+    nowStrip(page, view, actions),
     QUEUES.map((queue) => queueBox(view, actions, queue, shown)),
+    scheduleColumn(
+      view,
+      actions,
+      (id) => isShown(shown, id) && view.topics[id]?.status !== "archived",
+    ),
     archivedBox(view, actions, shown),
   );
 }
@@ -318,6 +333,7 @@ export function home(page: Page, view: View, actions: Actions): Child {
   const todos = mine(liveTodos(view));
   return [
     filterBar(page, view, actions, shown),
+    scheduleBar(page, view, actions),
     todos.length === 0
       ? null
       : section(
@@ -346,16 +362,14 @@ export function home(page: Page, view: View, actions: Actions): Child {
     ),
     section(
       "排定的",
-      view.queues.later
-        .filter((id) => isShown(shown, id))
-        .map((id) =>
-          h(
-            "div",
-            { class: "row" },
-            topicLink(view, id, actions),
-            h("span", { class: "note" }, "待辦，不自動開工"),
-          ),
+      queueTopics(view, "later", shown).map((id) =>
+        h(
+          "div",
+          { class: "row" },
+          topicLink(view, id, actions),
+          h("span", { class: "note" }, "待辦，不自動開工"),
         ),
+      ),
       mine(view.holds)
         .filter((hold) => !hold.live && hold.topic !== null)
         .map((hold) => holdCard(page, view, actions, hold, true)),

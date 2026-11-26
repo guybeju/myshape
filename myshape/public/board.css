@@ -85,3 +85,19 @@ button.chip{text-decoration:none}
 table.settings{border-collapse:collapse;width:100%;font-size:13px}
 table.settings th,table.settings td{padding:3px 6px;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle}
 table.settings input[type=text]{width:7em}
+.now{background:#fdecea;border:1px solid var(--red);border-radius:6px;padding:8px;margin-bottom:10px}
+.now h3{color:var(--red);margin-top:0}
+.occ.hard-rt{border-left:4px solid var(--red)}
+.occ.soft-rt{border-left:4px solid var(--amber)}
+.pill.upcoming{background:#fff4d6;border-color:#e6c766}
+.pill.due{background:var(--red);color:#fff;border-color:var(--red)}
+.pill.taken{background:#e1f3e7;border-color:var(--green)}
+.pill.rt{font-weight:600}
+.pill.new{background:var(--red);color:#fff;border-color:var(--red)}
+.schedules{background:#e6ebf2;border-radius:6px;padding:8px;margin-bottom:10px}
+.schedules h3{margin-top:0}
+.strip{display:flex;gap:4px;flex-wrap:wrap}
+.strip .cell{border:1px solid var(--line);border-radius:4px;padding:4px 6px;font-size:12px;background:#fff;min-width:7em}
+.strip .cell .t{color:var(--mute)}
+.strip .cell.missed,.strip .cell.untaken,.strip .cell.timed_out{background:#fff4d6}
+.strip .cell.done{background:#e1f3e7}

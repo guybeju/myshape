@@ -33,6 +33,8 @@ import * as topics from "./topics.js";
 import { buildView, placeTask } from "./view.js";
 import { findLines } from "./lineage.js";
 import { checkName, hashtagView, nameOfKey, topicsWith } from "./hashtags.js";
+import { openKeys, scheduleView } from "./schedule-view.js";
+import { scheduleOfTopic } from "./schedules.js";
 import { beforeDeadline, findTasks, freshTags, knowHomes, lookupDeadline, reminderPrefix, } from "./lookup.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 import { deliveryRecord } from "./writes.js";
@@ -280,10 +282,12 @@ function viewVersion(service) {
     const stale = service.poller
         .snapshots()
         .map((home) => home.lastOkAt === null || nowMs - home.lastOkAt > service.timings.staleMs ? "1" : "0");
-    // A program changing on disk is a change no write announces either.
+    // A program changing on disk is a change no write announces either, and an
+    // occurrence passing its closes_by is one even when the clock saves nothing.
+    const open = openKeys(service.board.schedules, nowMs);
     const reach = crypto
         .createHash("sha256")
-        .update(JSON.stringify([blockedReasons(service), programsToConfirm(service)]))
+        .update(JSON.stringify([blockedReasons(service), programsToConfirm(service), open]))
         .digest("hex")
         .slice(0, 12);
     return `${service.version}-${stale.join("")}-${reach}`;
@@ -370,6 +374,7 @@ function boardRecords(service) {
 function boardView(service) {
     return {
         hashtags: hashtagView(service.board.hashtags, boardRecords(service)),
+        schedules: scheduleView(service.board.schedules, service.board.topics, boardRecords(service), Date.now()),
         boot_id: service.bootId,
         code_commit: service.config.commit,
         aggregator: aggregatorView(service),
@@ -942,6 +947,7 @@ function serveBrowser(service) {
             },
             programConfirmed: () => programConfirmed(service),
             hashtagTopics: (name) => hashtagTopics(service, name),
+            scheduleOf: (topic) => scheduleOfTopic(service.board.schedules, service.board.topics, topic)?.id ?? null,
         }),
         // Only the path is recorded: a query string could carry a token someone pasted into the URL.
         onRejected: (reason, request) => {

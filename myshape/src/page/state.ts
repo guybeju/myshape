@@ -1,5 +1,6 @@
 // What the page remembers between renders, and the actions its buttons call.
 import type { HashtagView } from "#board/hashtags.js";
+import type { ScheduleView } from "#board/schedule-view.js";
 import type { Queue } from "#board/topics.js";
 import type { BoardView } from "#board/view.js";
 import type { Filter } from "./filter.js";
@@ -48,6 +49,7 @@ export type View = BoardView & {
   polling: boolean;
   writes: WriteView[];
   hashtags: HashtagView;
+  schedules: ScheduleView;
 };
 
 /** The first half of a two-step action, waiting for the captain to confirm. */
@@ -78,6 +80,10 @@ export interface Page {
   filter: Filter;
   /** Whether the hashtag settings panel, or the list of the agent's recent hashtag changes, is open. */
   tagPanel: "settings" | "recent" | null;
+  /** Whether the schedule settings panel, or the list of the agent's recent schedule changes, is open. */
+  schedulePanel: "settings" | "recent" | null;
+  /** Small in-page questions and forms that are open, by key, such as "close:<occurrence>". */
+  open: Set<string>;
 }
 
 export interface Actions {
@@ -103,6 +109,9 @@ export interface Actions {
   send: (path: string, body: Record<string, unknown>) => void;
   setFilter: (filter: Filter) => void;
   setTagPanel: (panel: Page["tagPanel"]) => void;
+  setSchedulePanel: (panel: Page["schedulePanel"]) => void;
+  /** Opens or closes the in-page question or form under `key`. */
+  toggle: (key: string) => void;
 }
 
 /** The queues in display order. Kept here because page scripts cannot load modules outside dist/page. */
