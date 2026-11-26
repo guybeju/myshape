@@ -6,11 +6,16 @@
 //   - `answer`: a `close` hold is closed now; a `release` hold resumes the
 //     worker's session with the answer;
 //   - `notice` about a task's 要你動手 item: kept for that task's resume;
+//   - `notice` about a schedule's occurrence (coming up, due, missed): kept
+//     for the supervisor's schedule step; one the captain closed: handled;
 //   - anything else: handled (the board files say what changed).
 // An action stays in inbox/ until it has been handed on, so a restart
 // finds it again; only then is it moved to inbox/handled/.
 
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
+
+import { RT_VALUES, type Rt } from "./board-files.js";
+import { isOccurrenceKey, type ScheduleNotice } from "./occurrences.js";
 
 type Json = Record<string, unknown>;
 
@@ -25,7 +30,14 @@ export type Action =
   | { kind: "direct"; task: string; text: string }
   | { kind: "answer"; task: string }
   | { kind: "tag" }
-  | { kind: "notice"; event: string; item: TodoRef | null; by: string };
+  | {
+      kind: "notice";
+      event: string;
+      item: TodoRef | null;
+      by: string;
+      /** The occurrence a schedule notice is about, or null for any other notice. */
+      schedule: ScheduleNotice | null;
+    };
 
 /** One landed action: its file name in inbox/, when it landed, and what it says. */
 export type InboxItem = { file: string; receivedMs: number } & Action;
@@ -60,10 +72,45 @@ function parseAnswer(record: Json): Action | undefined {
   return task === undefined ? undefined : { kind: "answer", task };
 }
 
+const SCHEDULE_EVENTS = [
+  "schedule.upcoming",
+  "schedule.due",
+  "schedule.missed",
+  "schedule.closed",
+] as const;
+
+/** A schedule notice's occurrence, or null when the notice is not one or its occurrence is unusable. */
+function parseScheduleNotice(event: string, record: Json): ScheduleNotice | null {
+  const known = SCHEDULE_EVENTS.find((name) => name === event);
+  const occurrence = record["occurrence"];
+  const topic = isRecord(record["topic"]) ? str(record["topic"]["id"]) : undefined;
+  if (known === undefined || !isRecord(occurrence) || topic === undefined) return null;
+  const [key, at] = [str(occurrence["key"]), str(occurrence["at"])];
+  const rt = RT_VALUES.find((value): value is Rt => value === occurrence["rt"]);
+  if (key === undefined || !isOccurrenceKey(key) || at === undefined || rt === undefined)
+    return null;
+  const expires = Date.parse(str(occurrence["expires_at"]) ?? "");
+  return {
+    event: known,
+    key,
+    topic,
+    at,
+    local: str(occurrence["local"]) ?? "",
+    rt,
+    expiresAtMs: Number.isNaN(expires) ? null : expires,
+  };
+}
+
 function parseNotice(record: Json): Action | undefined {
   const event = str(record["event"]);
   if (event === undefined) return undefined;
-  return { kind: "notice", event, item: parseTodoRef(record["item"]), by: str(record["by"]) ?? "" };
+  return {
+    kind: "notice",
+    event,
+    item: parseTodoRef(record["item"]),
+    by: str(record["by"]) ?? "",
+    schedule: parseScheduleNotice(event, record),
+  };
 }
 
 const PARSERS: Readonly<Record<string, (record: Json) => Action | undefined>> = {
@@ -119,11 +166,18 @@ export interface Sorted {
   messages: Map<string, (InboxItem & { kind: "message" })[]>;
   /** Input that resumes a task's session: directs, `release` answers, todo notices. */
   inputs: Map<string, InboxItem[]>;
+  /** Notices that an occurrence is coming up, is due, or was missed, oldest first. */
+  schedule: ScheduleItem[];
 }
+
+/** A landed notice about an occurrence the supervisor acts on. */
+export type ScheduleItem = InboxItem & { kind: "notice"; schedule: ScheduleNotice };
 
 export const INBOX_LOG = {
   ended: (task: string) => `direct for ${task} came after its worker ended; not passed on`,
   notHandled: (event: string) => `notice ${event} is not handled in this version`,
+  noOccurrence: (event: string) => `notice ${event} names no occurrence it can use; not acted on`,
+  closed: (key: string) => `the captain ended occurrence ${key} on the page`,
 } as const;
 
 const ENDED = new Set(["done", "failed"]);
@@ -139,7 +193,16 @@ function add<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   map.set(key, [...(map.get(key) ?? []), value]);
 }
 
+function sortScheduleNotice(item: InboxItem & { kind: "notice" }, sorted: Sorted): void {
+  const { schedule } = item;
+  if (schedule === null) sorted.retire.push({ item, log: INBOX_LOG.noOccurrence(item.event) });
+  else if (schedule.event === "schedule.closed")
+    sorted.retire.push({ item, log: INBOX_LOG.closed(schedule.key) });
+  else sorted.schedule.push({ ...item, schedule });
+}
+
 function sortNotice(item: InboxItem & { kind: "notice" }, view: InboxView, sorted: Sorted): void {
+  if (item.event.startsWith("schedule.")) return sortScheduleNotice(item, sorted);
   const task = item.item === null ? undefined : view.tasks.get(item.item.ref);
   const todo = item.event === "todo.claimed" || item.event === "todo.closed";
   if (todo && task !== undefined && !ENDED.has(task.state) && item.by !== "aggregator") {
@@ -203,6 +266,7 @@ export function sortInbox(items: readonly InboxItem[], view: InboxView): Sorted 
     push: [],
     messages: new Map(),
     inputs: new Map(),
+    schedule: [],
   };
   const ordered = items.toSorted(
     (a, b) => a.receivedMs - b.receivedMs || a.file.localeCompare(b.file),

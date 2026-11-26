@@ -2,7 +2,14 @@
 // model, a command runner that plays git, the board's command and gh in
 // memory, and a scratch board home. Nothing here starts a process.
 
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -246,9 +253,13 @@ async function* emit(step: Step, call: Call) {
 
 // --- commands ------------------------------------------------------------------
 
+type Json = Record<string, unknown>;
+
 /**
  * Plays git (worktree add, remove, list; rev-list), the board's command
- * (status, open, summary) and gh (pr view) in memory, and records each call.
+ * (status, open, summary, and schedule take and close against the home's
+ * schedules.json, as the board does) and gh (pr view) in memory, and records
+ * each call.
  */
 export class FakeCommands {
   readonly calls: CommandRequest[] = [];
@@ -258,8 +269,13 @@ export class FakeCommands {
   readonly summaries: { task: string; kind: string; text: string }[] = [];
   failAdd = false;
   summaryStatus = 0;
+  /** The exit status of `schedule close` while it is not 0; the board does nothing then. */
+  closeStatus = 0;
 
-  constructor(private readonly boardCommand: string) {}
+  constructor(
+    private readonly boardCommand: string,
+    private readonly nowMs: () => number = () => Date.now(),
+  ) {}
 
   readonly run: RunCommand = async (request) => {
     this.calls.push(request);
@@ -273,10 +289,54 @@ export class FakeCommands {
     const [command, task = "", kind = ""] = request.args;
     if (command === "status") return done(0, "看板服務：在跑\n");
     if (command === "open") return done(0, "http://127.0.0.1:1/\n");
+    if (command === "schedule") return this.schedule(request);
     if (command === "summary" && this.summaryStatus === 0) {
       this.summaries.push({ task, kind, text: request.input ?? "" });
     }
     return done(this.summaryStatus, "", this.summaryStatus === 0 ? "" : "refused");
+  }
+
+  /** `schedule take <key> --note <n>` and `schedule close <key> done|skipped --note <n>`. */
+  private schedule(request: CommandRequest): CommandResult {
+    const [, sub, key = "", ...rest] = request.args;
+    const path = `${request.env["MYSHAPE_HOME"] ?? ""}/data/myshape/schedules.json`;
+    const doc = (existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {}) as Json;
+    const occurrences = (doc["occurrences"] ?? {}) as Record<string, Json>;
+    const recent = (doc["recent"] ?? {}) as Record<string, Json[]>;
+    const note = rest[rest.indexOf("--note") + 1] ?? "";
+    const occurrence = occurrences[key];
+    const open =
+      occurrence !== undefined && Date.parse(String(occurrence["closes_by"])) > this.nowMs();
+    const save = () => writeFileSync(path, JSON.stringify({ ...doc, occurrences, recent }));
+    if (sub === "take") {
+      if (!open) return done(1, "", `${key} 不是開著的一場。`);
+      if (occurrence["state"] === "taken") return done(0, `ok ${key} 本來就已接下\n`);
+      occurrences[key] = { ...occurrence, state: "taken", taken_at: "now", note };
+      save();
+      return done(0, `ok ${key} 已接下\n`);
+    }
+    if (sub === "close") {
+      if (this.closeStatus !== 0) return done(this.closeStatus, "", "沒有回答");
+      const series = key.split(":")[0] ?? "";
+      if ((recent[series] ?? []).some((entry) => entry["key"] === key))
+        return done(0, `ok ${key} 本來就已結束\n`);
+      if (!open) return done(1, "", `${key} 不是開著的一場。`);
+      delete occurrences[key];
+      recent[series] = [
+        ...(recent[series] ?? []),
+        { key, outcome: rest[0], by: "aggregator", note },
+      ];
+      save();
+      return done(0, `ok ${key} 已結束\n`);
+    }
+    return done(2, "", `unplayed schedule ${String(sub)}`);
+  }
+
+  /** The arguments of every `schedule` command the supervisor ran. */
+  scheduleCalls(): string[][] {
+    return this.calls
+      .filter((call) => call.file === this.boardCommand && call.args[0] === "schedule")
+      .map((call) => [...call.args]);
   }
 
   private git(args: readonly string[]): CommandResult {

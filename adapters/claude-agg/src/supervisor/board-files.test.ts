@@ -142,8 +142,8 @@ describe("readBoard", () => {
       }),
     );
     expect([...board.schedules.series]).toEqual([
-      ["s", { topic: "t", rt: "soft-rt" }],
-      ["r", { topic: "t", rt: "none" }],
+      ["s", { topic: "t", rt: "soft-rt", rings: true }],
+      ["r", { topic: "t", rt: "none", rings: true }],
     ]);
     expect([...board.schedules.occurrences]).toEqual([
       [
@@ -233,5 +233,31 @@ describe("what the intervention reads", () => {
       ["b", { state: "open", ref: "", title: "" }],
     ]);
     expect(readTodos(join(home, "missing")).size).toBe(0);
+  });
+
+  it("says which schedules ring: not paused, not all paused, not waiting for the captain's enable", () => {
+    const read = (settings: object, series: object) =>
+      [...readBoard(writeHome({ schedules: { settings, series } })).schedules.series].map(
+        ([id, entry]) => `${id} ${String(entry.rings)}`,
+      );
+    const series = {
+      on: { topic: "t", state: "on", by: "captain" },
+      paused: { topic: "t", state: "paused", by: "captain" },
+      mine: { topic: "t", state: "on", by: "aggregator", seen: false },
+      seen: { topic: "t", state: "on", by: "aggregator", seen: true },
+    };
+    expect(read({}, series)).toEqual(["on true", "paused false", "mine true", "seen true"]);
+    expect(read({ aggregator_needs_enable: true }, series)).toEqual([
+      "on true",
+      "paused false",
+      "mine false",
+      "seen true",
+    ]);
+    expect(read({ all_paused: true }, series)).toEqual([
+      "on false",
+      "paused false",
+      "mine false",
+      "seen false",
+    ]);
   });
 });

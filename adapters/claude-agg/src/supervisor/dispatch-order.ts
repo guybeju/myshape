@@ -111,6 +111,14 @@ class Planner {
     return { order: this.order, skipped: this.skipped };
   }
 
+  /** The entry `topic` would have, with `reason`, or undefined when it cannot get work at all. */
+  single(topic: string, reason: string): OrderEntry | undefined {
+    this.placeQueues();
+    if (this.unusable(topic) !== undefined) return undefined;
+    this.add(topic, null, reason);
+    return this.order[0];
+  }
+
   private resolve(id: string): string {
     return followMerges(this.board.topics.merged, id);
   }
@@ -252,4 +260,13 @@ class Planner {
  */
 export function dispatchOrder(board: Board, nowMs: number): DispatchOrder {
   return new Planner(board, nowMs).run();
+}
+
+/**
+ * The order entry of one live topic outside the order (a scheduled topic in
+ * 待辦 whose make-up or held schedule work goes on), or undefined when the
+ * topic is archived or not on the board.
+ */
+export function topicEntry(board: Board, topic: string, reason: string): OrderEntry | undefined {
+  return new Planner(board, 0).single(topic, reason);
 }

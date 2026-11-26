@@ -43,7 +43,7 @@ export class World {
   readonly home: string;
   readonly root: string;
   readonly agg: string;
-  readonly commands = new FakeCommands(BOARD_COMMAND);
+  readonly commands = new FakeCommands(BOARD_COMMAND, () => this.nowMs);
   readonly query: ScriptedQuery;
   readonly logs: string[] = [];
   nowMs = START_MS;
@@ -162,6 +162,76 @@ export class World {
       mode,
       question_sha256: sha,
       topic: null,
+    });
+  }
+
+  /**
+   * Writes the board's data/myshape/schedules.json as its clock would have:
+   * these schedules (on, captain's, locked) and these open occurrences.
+   */
+  writeSchedules(
+    series: Record<string, { topic: string; rt?: string; state?: string }>,
+    occurrences: Record<string, { at: string; state?: string; closes_by?: string }> = {},
+    settings: Record<string, unknown> = {},
+  ): void {
+    const full = Object.fromEntries(
+      Object.entries(occurrences).map(([key, o]) => [
+        key,
+        {
+          series: key.split(":")[0],
+          state: "upcoming",
+          closes_by: new Date(Date.parse(o.at) + 3_600_000).toISOString(),
+          ...o,
+        },
+      ]),
+    );
+    const doc = this.schedulesDoc();
+    doc.settings = settings;
+    doc.series = Object.fromEntries(
+      Object.entries(series).map(([id, entry]) => [
+        id,
+        { rt: "none", state: "on", by: "captain", locked: true, ...entry },
+      ]),
+    );
+    doc.occurrences = { ...doc.occurrences, ...full };
+    writeFileSync(join(this.home, "data", "myshape", "schedules.json"), JSON.stringify(doc));
+  }
+
+  /** Takes an occurrence out of schedules.json, as the clock or the captain ending it does. */
+  endOccurrence(key: string): void {
+    const doc = this.schedulesDoc();
+    delete doc.occurrences[key];
+    writeFileSync(join(this.home, "data", "myshape", "schedules.json"), JSON.stringify(doc));
+  }
+
+  schedulesDoc(): {
+    settings: Record<string, unknown>;
+    series: Record<string, unknown>;
+    occurrences: Record<string, Record<string, unknown>>;
+    recent: Record<string, unknown[]>;
+  } {
+    const path = join(this.home, "data", "myshape", "schedules.json");
+    const empty = { settings: {}, series: {}, occurrences: {}, recent: {} };
+    return existsSync(path) ? { ...empty, ...JSON.parse(readFileSync(path, "utf8")) } : empty;
+  }
+
+  /** Lands a schedule notice about `key`, as the board's clock sends it. */
+  notice(
+    event: "schedule.upcoming" | "schedule.due" | "schedule.missed" | "schedule.closed",
+    key: string,
+    topic: string,
+    extra: { rt?: string; expires_at?: string } = {},
+  ): { outcome: string } {
+    const at = key.split(":")[1] ?? "";
+    const iso = `${at.slice(0, 4)}-${at.slice(4, 6)}-${at.slice(6, 8)}T${at.slice(9, 11)}:${at.slice(11, 13)}:00Z`;
+    const phase =
+      { "schedule.upcoming": "pre", "schedule.due": "start" }[event as string] ?? event.slice(9);
+    return this.deliver({
+      kind: "notice",
+      event,
+      text: `排程「${topic}」…（議題 ${topic}，這一場 ${key}）`,
+      topic: { id: topic, name: topic },
+      occurrence: { key, at: iso, local: iso, phase, rt: extra.rt ?? "none", ...extra },
     });
   }
 

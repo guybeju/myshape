@@ -68,6 +68,13 @@ export interface Series {
   /** The topic id when the schedule was made; merges are not written back. */
   topic: string;
   rt: Rt;
+  /**
+   * Whether the board's clock sends its notices: the schedule is on,
+   * nothing is all paused, and it is not an aggregator's waiting for the
+   * captain's enable (contract section 3.9). An occurrence of a schedule
+   * that does not ring gets no notice, so it gets no work either.
+   */
+  rings: boolean;
 }
 
 export interface Occurrence {
@@ -277,13 +284,21 @@ function parseOccurrence(raw: unknown): Occurrence | undefined {
   return { series, at, atMs, state, closes_by: closesBy, closesByMs };
 }
 
-/** data/myshape/schedules.json: each schedule's topic and rt, and the occurrences in the file. */
+function rings(raw: Json, settings: Json): boolean {
+  if (raw["state"] === "paused" || settings["all_paused"] === true) return false;
+  const waiting = raw["by"] === "aggregator" && raw["seen"] !== true;
+  return !(waiting && settings["aggregator_needs_enable"] === true);
+}
+
+/** data/myshape/schedules.json: each schedule's topic, rt and whether it rings, and the occurrences. */
 export function readSchedulesFile(path: string): SchedulesFile {
   const doc = readDocument(path) ?? {};
+  const settings = objectField(doc, "settings", path);
   const series = new Map<string, Series>();
   for (const [id, raw] of Object.entries(objectField(doc, "series", path))) {
     if (!isRecord(raw) || typeof raw["topic"] !== "string") continue;
-    series.set(id, { topic: raw["topic"], rt: oneOf(RT_VALUES, raw["rt"]) ?? "none" });
+    const rt = oneOf(RT_VALUES, raw["rt"]) ?? "none";
+    series.set(id, { topic: raw["topic"], rt, rings: rings(raw, settings) });
   }
   const occurrences = new Map<string, Occurrence>();
   for (const [key, raw] of Object.entries(objectField(doc, "occurrences", path))) {

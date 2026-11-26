@@ -1,33 +1,37 @@
-// Which waiting work starts now, and why the rest waits (plan section 4.3,
-// D6): at most MAX_RUNNING sessions in all (workers and the planner) and at
-// most MAX_PER_TOPIC on one topic; nothing new for a topic in later (待辦) or
-// gone from the board; nothing new at all while the quota or rate limit has
-// stopped dispatching. A pure function: the supervisor runs what it returns.
+// Which waiting work starts now, and why the rest waits (plan sections 3.8
+// and 4.3, D6): at most MAX_RUNNING sessions in all (workers and the planner)
+// and at most MAX_PER_TOPIC on one topic; nothing new for a topic in later
+// (待辦) or gone from the board, nor for an occurrence before its time or of
+// a silent schedule; nothing new at all while the quota or rate limit has
+// stopped dispatching. Each open occurrence whose work has not started keeps
+// one place free: other work starts only while running sessions plus kept
+// places stay under MAX_RUNNING. Nothing running is ever stopped. A pure
+// function: the supervisor runs what it returns.
 
 export const MAX_RUNNING = 2;
 export const MAX_PER_TOPIC = 1;
 
-/** A session that runs now, on a topic. */
+/** A session that runs now, on a topic; `occurrence` is the key of the occurrence it works for. */
 export interface Slot {
   id: string;
   topic: string;
+  occurrence?: string;
 }
 
 /** Work that may start: a planned task, a task to resume, or a topic to plan. */
-export interface Candidate {
-  id: string;
-  topic: string;
-}
+export type Candidate = Slot;
 
-export type TopicStatus = "dispatchable" | "later" | "gone";
+export type TopicStatus = "dispatchable" | "later" | "gone" | "notYet" | "silent";
 
 export interface Situation {
   running: readonly Slot[];
   /** In dispatch order. */
   candidates: readonly Candidate[];
-  topicStatus: (topic: string) => TopicStatus;
+  status: (candidate: Candidate) => TopicStatus;
   /** When dispatching is stopped for the quota: the UTC ISO time it should clear, or "" when unknown. */
   quotaUntil: string | null;
+  /** The keys of the open occurrences that keep a place free until their work starts. */
+  reserved: ReadonlySet<string>;
 }
 
 export interface Decision {
@@ -43,16 +47,34 @@ export const WAIT = {
   gone: "議題已封存或不在看板上，不開新工作",
   topicBusy: (id: string) => `同一個議題已經有 worker 在跑（${id}）`,
   full: `等空位（${MAX_RUNNING}/${MAX_RUNNING}）`,
+  notYet: "排程的這一場還沒到時間",
+  silent: "排程暫停中，這一場不開工",
+  reserved: (key: string) => `為排程的場次留位子（${key}）`,
 };
 
+const STATUS_WAIT: Readonly<Record<Exclude<TopicStatus, "dispatchable">, string>> = {
+  later: WAIT.later,
+  gone: WAIT.gone,
+  notYet: WAIT.notYet,
+  silent: WAIT.silent,
+};
+
+/** The kept places no running session works for yet, in key order. */
+function keptPlaces(running: readonly Slot[], reserved: ReadonlySet<string>): string[] {
+  const served = new Set(running.map((slot) => slot.occurrence));
+  return [...reserved].filter((key) => !served.has(key)).toSorted();
+}
+
 function waitReason(candidate: Candidate, running: readonly Slot[], situation: Situation) {
-  const status = situation.topicStatus(candidate.topic);
-  if (status === "later") return WAIT.later;
-  if (status === "gone") return WAIT.gone;
+  const status = situation.status(candidate);
+  if (status !== "dispatchable") return STATUS_WAIT[status];
   if (situation.quotaUntil !== null) return WAIT.quota(situation.quotaUntil);
   const sameTopic = running.filter((slot) => slot.topic === candidate.topic);
   if (sameTopic.length >= MAX_PER_TOPIC) return WAIT.topicBusy(sameTopic[0]?.id ?? "");
   if (running.length >= MAX_RUNNING) return WAIT.full;
+  const kept = keptPlaces(running, situation.reserved);
+  const own = candidate.occurrence !== undefined && situation.reserved.has(candidate.occurrence);
+  if (!own && running.length + kept.length >= MAX_RUNNING) return WAIT.reserved(kept[0] ?? "");
   return undefined;
 }
 

@@ -5,16 +5,25 @@
 // and stops dispatching while the quota or rate limit says so. It takes the
 // captain's actions from inbox/ (messages, directs, answers, 要你動手 notices),
 // opens holds for workers' questions, keeps workers' 要你動手 items on the
-// board, and proposes closing a topic whose tasks have all landed. It is the
-// only writer of the agent's state and the only one that runs the board's
-// command; workers never write the board.
+// board, and proposes closing a topic whose tasks have all landed. For the
+// board's schedules it takes an occurrence, keeps a place free for it, starts
+// its work at its time, closes it when the work ends, and answers a missed one
+// by its rt (schedule-step.ts, occurrences.ts). It is the only writer of the
+// agent's state and the only one that runs the board's command; workers never
+// write the board.
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
 
-import { readBoard, readTodos, type Board, type TodoItem } from "./board-files.js";
+import {
+  readBoard,
+  readTodos,
+  type Board,
+  type SchedulesFile,
+  type TodoItem,
+} from "./board-files.js";
 import {
   BoardCommand,
   Git,
@@ -23,7 +32,7 @@ import {
   type RunCommand,
   type SummaryKind,
 } from "./commands.js";
-import { dispatchOrder, followMerges, type OrderEntry } from "./dispatch-order.js";
+import { dispatchOrder, followMerges, topicEntry, type OrderEntry } from "./dispatch-order.js";
 import {
   endingOf,
   TEXT,
@@ -34,6 +43,16 @@ import {
 } from "./ending.js";
 import { parseInboxFile, sortInbox, type InboxItem, type Sorted } from "./inbox.js";
 import { closeReason } from "./landing.js";
+import {
+  NOTE,
+  occurrencePhase,
+  scheduleWork,
+  workId,
+  workOf,
+  type OccurrencePhase,
+  type ScheduleWork,
+  type WorkRef,
+} from "./occurrences.js";
 import { parsePlannerOutput, type PlannedWork, type Todo } from "./outputs.js";
 import {
   livePrompt,
@@ -42,6 +61,7 @@ import {
   workerPrompt,
   type ResumeInput,
 } from "./prompts.js";
+import { ScheduleStep, type MakeUp } from "./schedule-step.js";
 import { schedule, type Candidate, type Slot, type TopicStatus } from "./scheduler.js";
 import type { QueryFn } from "./sdk.js";
 import { followSession, PromptStream, type SessionReport } from "./session.js";
@@ -96,13 +116,34 @@ export const QUOTA_WAIT_MS = 30 * 60 * 1000;
 
 const PLAN_PREFIX = "plan:";
 
+function planId(topic: string): string {
+  return `${PLAN_PREFIX}${topic}`;
+}
+
 const NOTHING_SORTED: Sorted = {
   retire: [],
   close: [],
   push: [],
   messages: new Map(),
   inputs: new Map(),
+  schedule: [],
 };
+
+const NO_SCHEDULES: SchedulesFile = { series: new Map(), occurrences: new Map() };
+
+const PHASE_STATUS: Readonly<Record<OccurrencePhase, TopicStatus>> = {
+  due: "dispatchable",
+  notYet: "notYet",
+  silent: "silent",
+  ended: "gone",
+};
+
+/** What a planner plans for: an occurrence's work, a make-up, or the topic's ordinary work. */
+interface PlanFor {
+  ref: WorkRef;
+  /** The missed notice a make-up answers, retired once the planner has run. */
+  makeUp: MakeUp | undefined;
+}
 
 /** A resume: what the captain did, and the inbox files it consumes. */
 interface Resume {
@@ -134,7 +175,10 @@ export class Supervisor {
   private tasks = new Map<string, TaskEntry>();
   private holds = new Map<string, HoldEntry>();
   private queued: PlannedTask[] = [];
-  private readonly live = new Map<string, { topic: string; done: Promise<void> }>();
+  private readonly live = new Map<
+    string,
+    { topic: string; occurrence?: string; done: Promise<void> }
+  >();
   private readonly planned = new Set<string>();
   private quota: Quota | null = null;
   /** The inbox as this pass sorted it. */
@@ -153,6 +197,15 @@ export class Supervisor {
   private todoItems: ReadonlyMap<string, TodoItem> = new Map();
   /** The board's merges as the last pass read them. */
   private merged: ReadonlyMap<string, string> = new Map();
+  /** The board's live and archived topics as the last pass read them. */
+  private boardNow: Pick<Board, "topics" | "archived"> | undefined;
+  /** The board's schedules as the last pass read them. */
+  private schedules: SchedulesFile = NO_SCHEDULES;
+  private readonly step: ScheduleStep;
+  /** Occurrences whose planner planned nothing, or gave no usable plan, this run. */
+  private readonly plannedFor = new Map<string, "nothing" | "failed">();
+  /** Missed soft-rt occurrences waiting for their planner this pass, by topic. */
+  private makeUps: ReadonlyMap<string, MakeUp> = new Map();
 
   private constructor(settings: Settings, deps: Deps, release: () => void) {
     this.settings = settings;
@@ -164,6 +217,15 @@ export class Supervisor {
     );
     this.board = new BoardCommand(deps.run, settings.boardCommand, settings.home, deps.env);
     this.git = new Git(deps.run, deps.env);
+    this.step = new ScheduleStep({
+      board: this.board,
+      store: this.store,
+      log: (line) => this.log(line),
+      nowMs: deps.nowMs,
+      current: (topic) => this.current(topic),
+      live: (topic) => this.liveTopic(topic),
+      ids: () => [...this.tasks.keys(), ...this.queued.map((entry) => entry.id)],
+    });
   }
 
   /** Checks the settings, takes the lock, sets the home up, starts the board, and reconciles. */
@@ -303,26 +365,150 @@ export class Supervisor {
       return;
     }
     this.merged = board.topics.merged;
+    this.boardNow = board;
+    this.schedules = board.schedules;
     this.takeInbox();
+    this.makeUps = this.step.takeNotices(this.sorted.schedule, board.schedules);
+    const work = this.scheduleWork();
+    this.step.close(work.close);
+    this.dropQueued(work.drop);
     const order = dispatchOrder(board, this.deps.nowMs());
-    const entries = new Map(order.order.map((entry) => [entry.topic, entry]));
-    const later = new Set(
-      board.topics.queues.later.map((id) => followMerges(board.topics.merged, id)),
-    );
-    const topicStatus = (topic: string): TopicStatus => {
-      const now = followMerges(board.topics.merged, topic);
-      if (entries.has(now)) return "dispatchable";
-      return later.has(now) ? "later" : "gone";
-    };
     const candidates = this.candidates(order.order, (id) => followMerges(board.topics.merged, id));
+    const entries = new Map(order.order.map((entry) => [entry.topic, entry]));
     const decision = schedule({
-      running: [...this.live].map(([id, entry]) => ({ id, topic: entry.topic })),
+      running: this.slots(),
       candidates,
-      topicStatus,
+      status: this.statusOf(board, entries),
       quotaUntil: this.quota === null ? null : isoTime(this.quota.untilMs),
+      reserved: work.reserved,
     });
-    for (const candidate of decision.start) this.launch(candidate, entries);
+    for (const candidate of decision.start)
+      this.launch(candidate, this.withEntries(board, entries));
     this.writeWaiting(decision.waiting);
+  }
+
+  private slots(): Slot[] {
+    return [...this.live].map(([id, { topic, occurrence }]) =>
+      occurrence === undefined ? { id, topic } : { id, topic, occurrence },
+    );
+  }
+
+  /**
+   * How each candidate stands: an occurrence's plan or fresh work by the
+   * occurrence's phase; a make-up, or schedule work already started (held or
+   * paused), while its topic is live; anything else by its topic's place.
+   */
+  private statusOf(
+    board: Board,
+    entries: ReadonlyMap<string, OrderEntry>,
+  ): (candidate: Candidate) => TopicStatus {
+    const later = new Set(board.topics.queues.later.map((id) => this.current(id)));
+    const nowMs = this.deps.nowMs();
+    return (candidate) => {
+      const plan = candidate.id.startsWith(PLAN_PREFIX);
+      const work = plan ? undefined : this.workRef(candidate.id, candidate.topic);
+      const fresh = work !== undefined && !work.makeUp && !this.tasks.has(candidate.id);
+      const key = plan || fresh ? candidate.occurrence : undefined;
+      if (key !== undefined) return PHASE_STATUS[occurrencePhase(board.schedules, key, nowMs)];
+      if (work !== undefined || (plan && this.makeUps.has(candidate.topic)))
+        return this.liveTopic(candidate.topic) ? "dispatchable" : "gone";
+      if (entries.has(candidate.topic)) return "dispatchable";
+      return later.has(candidate.topic) ? "later" : "gone";
+    };
+  }
+
+  /** The order's entries, plus one for each live topic of schedule work outside the order. */
+  private withEntries(
+    board: Board,
+    entries: ReadonlyMap<string, OrderEntry>,
+  ): ReadonlyMap<string, OrderEntry> {
+    const all = new Map(entries);
+    const topics = [...this.makeUps.keys(), ...[...this.live.values()].map((entry) => entry.topic)];
+    for (const id of [...this.tasks.keys(), ...this.queued.map((entry) => entry.id)]) {
+      if (workOf(id) !== undefined) topics.push(this.topicOfAny(id));
+    }
+    for (const topic of topics) {
+      if (all.has(topic)) continue;
+      const entry = topicEntry(board, topic, "schedule work outside the order");
+      if (entry !== undefined) all.set(topic, entry);
+    }
+    return all;
+  }
+
+  // --- schedules -----------------------------------------------------------------
+
+  /** Whether `topic` (merges followed) is live on the board as the last pass read it. */
+  private liveTopic(topic: string): boolean {
+    const now = this.current(topic);
+    const board = this.boardNow;
+    return board !== undefined && board.topics.topics.has(now) && !board.archived.has(now);
+  }
+
+  /** A task's or queued task's topic now: its tag, else its queued topic, merges followed. */
+  private topicOfAny(id: string): string {
+    const tag = this.store.readTags().get(id);
+    if (tag !== undefined) return this.current(tag);
+    return this.current(this.queued.find((entry) => entry.id === id)?.topic_hint ?? "");
+  }
+
+  /**
+   * The occurrence work the id names, when its schedule is in the file and
+   * on that topic (merges followed); undefined for any other task, so a topic
+   * that happens to be named like an occurrence is never taken for one.
+   */
+  private workRef(id: string, topic: string): WorkRef | undefined {
+    const ref = workOf(id);
+    if (ref === undefined) return undefined;
+    const series = this.schedules.series.get(ref.key.split(":")[0] ?? "");
+    return series !== undefined && this.current(series.topic) === topic ? ref : undefined;
+  }
+
+  /** The key of the occurrence a candidate works for, when it is an occurrence's own work. */
+  private occurrenceOf(id: string, topic: string): { occurrence?: string } {
+    const ref = this.workRef(id, topic);
+    return ref === undefined || ref.makeUp ? {} : { occurrence: ref.key };
+  }
+
+  private scheduleWork(): ScheduleWork {
+    const tags = this.store.readTags();
+    const tasks = new Map(
+      [...this.tasks]
+        .filter(([id]) => this.workRef(id, this.current(tags.get(id) ?? "")) !== undefined)
+        .map(([id, task]) => [id, task.state]),
+    );
+    const queued = this.queued
+      .filter((entry) => this.workRef(entry.id, this.current(entry.topic_hint)) !== undefined)
+      .map((entry) => entry.id);
+    const live = new Set([...this.live.values()].flatMap((entry) => entry.occurrence ?? []));
+    return scheduleWork({
+      schedules: this.schedules,
+      nowMs: this.deps.nowMs(),
+      tasks,
+      queued,
+      live,
+      planned: this.plannedFor,
+      usable: (topic) => this.liveTopic(topic),
+    });
+  }
+
+  /** Takes queued work off the queue whose occurrence ended before it started. */
+  private dropQueued(ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    const drop = new Set(ids);
+    for (const id of ids)
+      this.log(`${id}: its occurrence ended before it started; taken off the queue`);
+    this.queued = this.queued.filter((entry) => !drop.has(entry.id));
+    this.store.writeQueued(this.queued);
+  }
+
+  /** Whether an occurrence still needs its planner: none of its work exists, and none ran this run. */
+  private needsPlan(key: string): boolean {
+    if (this.plannedFor.has(key)) return false;
+    const ids = [...this.tasks.keys(), ...this.queued.map((entry) => entry.id)];
+    return !ids.some((id) => {
+      const ref = workOf(id);
+      return ref !== undefined && !ref.makeUp && ref.key === key;
+    });
   }
 
   // --- the captain's actions ---------------------------------------------------
@@ -515,16 +701,21 @@ export class Supervisor {
     return { claimed, dropped };
   }
 
-  /** Paused tasks to resume, then planned tasks by topic order, then topics to plan. */
+  /**
+   * Paused tasks to resume, then planned tasks by topic order, then topics to
+   * plan: occurrences that are open first, then make-ups, then the rest.
+   */
   private candidates(order: readonly OrderEntry[], current: (id: string) => string): Candidate[] {
     const tags = this.store.readTags();
     const rank = new Map(order.map((entry, index) => [entry.topic, index]));
     const resume = [...this.tasks]
       .filter(([id]) => this.resumeOf(id) !== undefined)
-      .map(([id]) => ({ id, topic: current(tags.get(id) ?? "") }));
+      .map(([id]) => ({ id, topic: current(tags.get(id) ?? "") }))
+      .map((slot) => ({ ...slot, ...this.occurrenceOf(slot.id, slot.topic) }));
     const planned = this.queued
       .filter((entry) => !this.tasks.has(entry.id))
       .map((entry) => ({ id: entry.id, topic: current(entry.topic_hint) }))
+      .map((slot) => ({ ...slot, ...this.occurrenceOf(slot.id, slot.topic) }))
       .toSorted(
         (a, b) => (rank.get(a.topic) ?? order.length) - (rank.get(b.topic) ?? order.length),
       );
@@ -534,10 +725,17 @@ export class Supervisor {
       ...this.planned,
     ]);
     const asked = (topic: string) => this.sorted.messages.has(topic);
-    const toPlan = order
+    const due = order.flatMap((entry) =>
+      entry.occurrence !== null && this.needsPlan(entry.occurrence.key)
+        ? [{ id: planId(entry.topic), topic: entry.topic, occurrence: entry.occurrence.key }]
+        : [],
+    );
+    const makeUps = [...this.makeUps.keys()].map((topic) => ({ id: planId(topic), topic }));
+    const ordinary = order
+      .filter((entry) => entry.occurrence === null)
       .filter((entry) => !busy.has(entry.topic) || asked(entry.topic))
-      .filter((entry) => !this.live.has(`${PLAN_PREFIX}${entry.topic}`))
-      .map((entry) => ({ id: `${PLAN_PREFIX}${entry.topic}`, topic: entry.topic }));
+      .map((entry) => ({ id: planId(entry.topic), topic: entry.topic }));
+    const toPlan = [...due, ...makeUps, ...ordinary].filter((entry) => !this.live.has(entry.id));
     return [...resume, ...planned, ...toPlan];
   }
 
@@ -574,8 +772,12 @@ export class Supervisor {
     let done: Promise<void>;
     const resume = this.resumeOf(candidate.id);
     if (candidate.id.startsWith(PLAN_PREFIX)) {
-      this.planned.add(candidate.topic);
-      done = this.plan(entry, this.sorted.messages.get(candidate.topic) ?? []);
+      const purpose = this.planFor(candidate);
+      if (purpose === undefined) this.planned.add(candidate.topic);
+      else if (!purpose.ref.makeUp) {
+        this.step.takeIfOpen(purpose.ref.key, this.schedules, NOTE.takeDue);
+      }
+      done = this.plan(entry, this.sorted.messages.get(candidate.topic) ?? [], purpose);
     } else if (resume !== undefined) {
       done = this.resume(candidate.id, resume);
     } else if (this.tasks.has(candidate.id)) {
@@ -594,7 +796,21 @@ export class Supervisor {
           this.log(`the pass after ${candidate.id} failed: ${(error as Error).message}`);
         }
       });
-    this.live.set(candidate.id, { topic: candidate.topic, done: tracked });
+    const { occurrence } = candidate;
+    this.live.set(
+      candidate.id,
+      occurrence === undefined
+        ? { topic: candidate.topic, done: tracked }
+        : { topic: candidate.topic, occurrence, done: tracked },
+    );
+  }
+
+  /** What a plan candidate plans for: its occurrence, the topic's make-up, or undefined. */
+  private planFor(candidate: Candidate): PlanFor | undefined {
+    if (candidate.occurrence !== undefined)
+      return { ref: { key: candidate.occurrence, makeUp: false }, makeUp: undefined };
+    const makeUp = this.makeUps.get(candidate.topic);
+    return makeUp === undefined ? undefined : { ref: { key: makeUp.key, makeUp: true }, makeUp };
   }
 
   // --- the planner -------------------------------------------------------------
@@ -641,6 +857,7 @@ export class Supervisor {
   private async plan(
     entry: OrderEntry,
     messages: readonly (InboxItem & { kind: "message" })[],
+    purpose: PlanFor | undefined,
   ): Promise<void> {
     for (const item of messages) this.offered.add(item.file);
     const abort = new AbortController();
@@ -655,15 +872,16 @@ export class Supervisor {
     const options = plannerOptions(this.settings.worktreeRoot, this.sessionContext(null, abort));
     const run = this.deps.query({ prompt, options });
     const report = await followSession(run, prompt, abort, { mode: "dontAsk", onStart: () => {} });
-    this.takePlan(entry.topic, report);
+    this.takePlan(entry.topic, report, purpose?.ref);
     if (report.end.kind === "quota") {
       for (const item of messages) this.offered.delete(item.file);
       return;
     }
     for (const item of messages) this.retireLogged(item.file);
+    if (purpose?.makeUp !== undefined) this.retireLogged(purpose.makeUp.item.file);
   }
 
-  private takePlan(topic: string, report: SessionReport): void {
+  private takePlan(topic: string, report: SessionReport, ref: WorkRef | undefined): void {
     const { end } = report;
     if (end.kind === "quota") {
       this.planned.delete(topic);
@@ -675,6 +893,7 @@ export class Supervisor {
       this.log(
         `planner for ${topic} gave no usable plan (${end.kind}); not planned again this run`,
       );
+      if (ref !== undefined && !ref.makeUp) this.plannedFor.set(ref.key, "failed");
       return;
     }
     if (output.question !== null) {
@@ -682,11 +901,19 @@ export class Supervisor {
         `planner for ${topic} asked: ${output.question.title}; questions come in a later step`,
       );
     }
-    this.queuePlanned(topic, output.tasks);
+    const queued = this.queuePlanned(topic, output.tasks, ref);
+    if (queued === 0 && ref !== undefined && !ref.makeUp) this.plannedFor.set(ref.key, "nothing");
   }
 
-  /** Puts the planner's tasks for `topic` at the end of the queue, those for known repositories. */
-  private queuePlanned(topic: string, tasks: readonly PlannedWork[]): void {
+  /**
+   * Puts the planner's tasks for `topic` at the end of the queue, those for
+   * known repositories, named after the occurrence when they are its work.
+   *
+   * Returns:
+   *   How many it queued.
+   */
+  private queuePlanned(topic: string, tasks: readonly PlannedWork[], ref?: WorkRef): number {
+    let queued = 0;
     for (const work of tasks) {
       if (this.settings.repos[work.repo] === undefined) {
         this.log(
@@ -694,8 +921,9 @@ export class Supervisor {
         );
         continue;
       }
+      queued += 1;
       this.queued.push({
-        id: this.nextId(topic),
+        id: ref === undefined ? this.nextId(topic) : this.nextWorkId(ref),
         kind: work.kind,
         title: work.title,
         hold: null,
@@ -707,14 +935,23 @@ export class Supervisor {
       });
     }
     this.store.writeQueued(this.queued);
+    return queued;
   }
 
   private nextId(topic: string): string {
+    return this.firstUnused((n) => `${topic}-${n}`);
+  }
+
+  private nextWorkId(ref: WorkRef): string {
+    return this.firstUnused((n) => workId(ref, n));
+  }
+
+  private firstUnused(name: (n: number) => string): string {
     const used = new Set([...this.tasks.keys(), ...this.queued.map((entry) => entry.id)]);
     for (const id of this.store.readTags().keys()) used.add(id);
     let n = 1;
-    while (used.has(`${topic}-${n}`)) n += 1;
-    return `${topic}-${n}`;
+    while (used.has(name(n))) n += 1;
+    return name(n);
   }
 
   // --- a worker ----------------------------------------------------------------
@@ -904,6 +1141,10 @@ export class Supervisor {
       this.log(`cannot read the board's files: ${(error as Error).message}`);
       return;
     }
+    const scheduled = [...board.schedules.series.values()].some(
+      (series) => followMerges(board.topics.merged, series.topic) === topic,
+    );
+    if (scheduled) return;
     const tags = this.store.readTags();
     const tasks = new Map(
       [...this.tasks].filter(
