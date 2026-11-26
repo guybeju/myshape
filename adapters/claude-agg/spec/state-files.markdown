@@ -153,6 +153,14 @@ supervisor writes the first line when it makes the task; `deliver` appends a
 line when the captain files the task under another topic on the page. `feed`
 reports every file here, so ended tasks keep their topic.
 
+`tags/` may also hold a summary-only id: one with no `tasks.json` entry and
+no ledger line, whose tag exists only so the board files that id's summary
+under the topic. The supervisor uses one for the report of a missed schedule
+occurrence (`<schedule id>-at-<UTC>-missed`, at most 64 characters). The line
+format is the same. Restart reconciliation and cleanup read `tasks.json`, so
+they ignore such ids; the board shows no agent for one, since it has no task
+and no ledger line.
+
 ## Stability
 
 These formats hold while `v` is 1. A reader ignores fields it does not know.

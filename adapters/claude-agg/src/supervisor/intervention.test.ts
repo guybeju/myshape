@@ -573,7 +573,7 @@ describe("the inbox", () => {
     supervisor.close();
   });
 
-  it("retires tags and topic notices, and logs notices this version does not handle", async () => {
+  it("retires tags and topic notices, and logs notices it does not handle or cannot use", async () => {
     const world = new World({ normal: [] });
     const supervisor = await world.start();
     world.deliver({
@@ -582,10 +582,12 @@ describe("the inbox", () => {
       text: "t",
       topic: { id: "a", name: "A" },
     });
+    world.deliver({ kind: "notice", event: "board.something_new", text: "t" });
     world.deliver({ kind: "notice", event: "schedule.due", text: "t" });
     await pass(supervisor);
     expect(world.inbox().waiting).toEqual([]);
-    expect(world.logs).toContain(INBOX_LOG.notHandled("schedule.due"));
+    expect(world.logs).toContain(INBOX_LOG.notHandled("board.something_new"));
+    expect(world.logs).toContain(INBOX_LOG.noOccurrence("schedule.due"));
     expect(world.logs).not.toContain(INBOX_LOG.notHandled("topic.dispatchable"));
     supervisor.close();
   });

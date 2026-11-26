@@ -2,9 +2,17 @@
 // model, a command runner that plays git, the board's command and gh in
 // memory, and a scratch board home. Nothing here starts a process.
 
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { CommandRequest, CommandResult, PlainEnv, RunCommand } from "./commands.js";
 import { removeHomes, writeHome } from "./fixtures.test-helper.js";
@@ -246,9 +254,20 @@ async function* emit(step: Step, call: Call) {
 
 // --- commands ------------------------------------------------------------------
 
+type Json = Record<string, unknown>;
+
+/** The parts of a home's schedules.json the fake board's take and close change. */
+interface ScheduleDoc {
+  occurrences: Record<string, Json>;
+  recent: Record<string, Json[]>;
+  save: () => void;
+}
+
 /**
  * Plays git (worktree add, remove, list; rev-list), the board's command
- * (status, open, summary) and gh (pr view) in memory, and records each call.
+ * (status, open, summary, and schedule take and close against the home's
+ * schedules.json, as the board does) and gh (pr view) in memory, and records
+ * each call.
  */
 export class FakeCommands {
   readonly calls: CommandRequest[] = [];
@@ -258,8 +277,17 @@ export class FakeCommands {
   readonly summaries: { task: string; kind: string; text: string }[] = [];
   failAdd = false;
   summaryStatus = 0;
+  /** The exit status of `schedule close` while it is not 0; the board does nothing then. */
+  closeStatus = 0;
+  /** The exit status of `schedule take` while it is not 0; the board does nothing then. */
+  takeStatus = 0;
+  /** While true, running a `schedule` command throws, as a runner that cannot start it does. */
+  throwOnSchedule = false;
 
-  constructor(private readonly boardCommand: string) {}
+  constructor(
+    private readonly boardCommand: string,
+    private readonly nowMs: () => number = () => Date.now(),
+  ) {}
 
   readonly run: RunCommand = async (request) => {
     this.calls.push(request);
@@ -273,10 +301,74 @@ export class FakeCommands {
     const [command, task = "", kind = ""] = request.args;
     if (command === "status") return done(0, "看板服務：在跑\n");
     if (command === "open") return done(0, "http://127.0.0.1:1/\n");
+    if (command === "schedule" && this.throwOnSchedule) throw new Error("spawn failed");
+    if (command === "schedule") return this.schedule(request);
     if (command === "summary" && this.summaryStatus === 0) {
       this.summaries.push({ task, kind, text: request.input ?? "" });
+      const file = `${request.env["MYSHAPE_HOME"] ?? ""}/data/myshape/summaries.jsonl`;
+      const line = { ts: 0, home: "main", task, kind, text: request.input ?? "" };
+      if (existsSync(dirname(file))) appendFileSync(file, `${JSON.stringify(line)}\n`);
     }
     return done(this.summaryStatus, "", this.summaryStatus === 0 ? "" : "refused");
+  }
+
+  /** `schedule take <key> --note <n>` and `schedule close <key> done|skipped --note <n>`. */
+  private schedule(request: CommandRequest): CommandResult {
+    const [, sub, key = "", ...rest] = request.args;
+    const path = `${request.env["MYSHAPE_HOME"] ?? ""}/data/myshape/schedules.json`;
+    const doc = {
+      occurrences: {},
+      recent: {},
+      ...(existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {}),
+    } as Json;
+    const file: ScheduleDoc = {
+      occurrences: doc["occurrences"] as Record<string, Json>,
+      recent: doc["recent"] as Record<string, Json[]>,
+      save: () =>
+        writeFileSync(
+          path,
+          JSON.stringify({ ...doc, occurrences: file.occurrences, recent: file.recent }),
+        ),
+    };
+    const note = rest[rest.indexOf("--note") + 1] ?? "";
+    if (sub === "take") return this.take(file, key, note);
+    if (sub === "close") return this.close(file, key, rest[0] ?? "", note);
+    return done(2, "", `unplayed schedule ${String(sub)}`);
+  }
+
+  private isOpen(file: ScheduleDoc, key: string): boolean {
+    const occurrence = file.occurrences[key];
+    return occurrence !== undefined && Date.parse(String(occurrence["closes_by"])) > this.nowMs();
+  }
+
+  private take(file: ScheduleDoc, key: string, note: string): CommandResult {
+    if (this.takeStatus !== 0) return done(this.takeStatus, "", "看板拒絕了");
+    const occurrence = file.occurrences[key];
+    if (occurrence === undefined || !this.isOpen(file, key))
+      return done(1, "", `${key} 不是開著的一場。`);
+    if (occurrence["state"] === "taken") return done(0, `ok ${key} 本來就已接下\n`);
+    file.occurrences[key] = { ...occurrence, state: "taken", taken_at: "now", note };
+    file.save();
+    return done(0, `ok ${key} 已接下\n`);
+  }
+
+  private close(file: ScheduleDoc, key: string, outcome: string, note: string): CommandResult {
+    if (this.closeStatus !== 0) return done(this.closeStatus, "", "沒有回答");
+    const series = key.split(":")[0] ?? "";
+    const recent = file.recent[series] ?? [];
+    if (recent.some((entry) => entry["key"] === key)) return done(0, `ok ${key} 本來就已結束\n`);
+    if (!this.isOpen(file, key)) return done(1, "", `${key} 不是開著的一場。`);
+    delete file.occurrences[key];
+    file.recent[series] = [...recent, { key, outcome, by: "aggregator", note }];
+    file.save();
+    return done(0, `ok ${key} 已結束\n`);
+  }
+
+  /** The arguments of every `schedule` command the supervisor ran. */
+  scheduleCalls(): string[][] {
+    return this.calls
+      .filter((call) => call.file === this.boardCommand && call.args[0] === "schedule")
+      .map((call) => [...call.args]);
   }
 
   private git(args: readonly string[]): CommandResult {

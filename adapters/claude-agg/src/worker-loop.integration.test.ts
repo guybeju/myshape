@@ -4,7 +4,12 @@
 // 6 on the same board: a worker's question answered on the page in two
 // steps, its 要你動手 item claimed on the page and verified, a direct to the
 // ended worker refused, the close proposal, and the guarded hashtag
-// operation with the captain's settings. The board is
+// operation with the captain's settings. Step 7 on the same board: a
+// schedule the captain makes on the page is taken on its coming-up notice,
+// its work starts at its time though its topic is in 待辦, and it is closed
+// done when the worker ends (that test waits about three real minutes for the
+// board's clock), and a missed hard-rt occurrence landed through deliver gets
+// its report summary under the topic. The board is
 // a scratch board-only root and home on a free port that is never the live
 // board's 47819, started with the root's bin/myshape.sh open and stopped with
 // bin/myshape.sh stop; no test sends a signal. The program is confirmed on
@@ -554,8 +559,148 @@ describe.skipIf(!IN_CI)(
       },
       STEP_MS,
     );
+
+    it(
+      "takes the captain's page schedule, starts its work at its time and closes it done",
+      async () => {
+        await openBoard();
+        logs.length = 0;
+        const made = myshape(
+          "create",
+          "週會",
+          "--goal",
+          "整理會議紀錄",
+          "--id",
+          "weekly",
+          "--queue",
+          "later",
+        );
+        expect(made.status, made.stderr).toBe(0);
+        const fake = new FakeCommands("/nowhere/myshape.sh");
+        const query = new ScriptedQuery(scratch.work);
+        const work = plan([{ title: "整理", repo: "app", kind: "scout", prompt: "照目標做" }]);
+        query.planner.push({ messages: [init("p3", "dontAsk"), result(work)] });
+        const gate = new Gate();
+        query.worker.push({ messages: [init("w3"), result(workerOutput("report"))], gate });
+        const supervisor = await startSupervisor(query, fake);
+
+        // The captain's schedule on the page: T on a minute at least 2 minutes from now
+        // (recomputed right before the add), coming up 1 minute before it.
+        const atMs = Math.ceil((Date.now() + 150_000) / 60_000) * 60_000;
+        const added = await http("POST", "schedules/add", {
+          topic: "weekly",
+          daily: true,
+          at: new Date(atMs).toISOString().slice(11, 16),
+          tz: "UTC",
+          lead: 1,
+          duration: 15,
+          rt: "hard-rt",
+        });
+        expect(added["ok"], JSON.stringify(added)).toBe(true);
+        const utc = `${new Date(atMs).toISOString().slice(0, 16).replaceAll(/[-:]/g, "")}Z`;
+        const key = `weekly:${utc}`;
+        const task = `weekly-at-${utc}-1`;
+
+        // The clock opens it at T - 1 minute, within its 30-second check.
+        const opensBy = atMs - 60_000 + 30_000 + 15_000 - Date.now();
+        await waitFor("the coming-up notice", () => hasNotice("schedule.upcoming"), opensBy);
+        const noticed = Date.now();
+        supervisor.tick();
+        await waitFor("the take", () => occurrenceOf(key)?.["state"] === "taken", 15_000);
+        expect(Date.now() - noticed).toBeLessThan(60_000);
+
+        // Nothing starts before T; the work starts at T though the topic is in 待辦.
+        await waitFor(
+          "the occurrence's worker",
+          () => {
+            supervisor.tick();
+            if (Date.now() < atMs) expect(query.calls).toEqual([]);
+            return query.active.size === 1 && query.calls.length === 2;
+          },
+          atMs - Date.now() + 60_000,
+        );
+        expect(query.calls[1]?.options.cwd).toBe(join(scratch.work, task));
+        await waitFor("an in-progress light", async () => (await light(task)) === "weekly:working");
+
+        gate.open();
+        await supervisor.idle();
+        supervisor.tick();
+        await waitFor("the close", () => recentOf("weekly").some((entry) => entry["key"] === key));
+        expect(recentOf("weekly").find((entry) => entry["key"] === key)).toMatchObject({
+          outcome: "done",
+          by: "aggregator",
+        });
+        expect(records("occurrence.taken").map((record) => record["by"])).toEqual(["aggregator"]);
+        expect(
+          records("occurrence.closed").map((record) => [record["by"], record["outcome"]]),
+        ).toEqual([["aggregator", "done"]]);
+        expect(proposed("weekly")).toBe(false);
+
+        // A missed hard-rt occurrence, landed through the program the board runs (no clock
+        // wait): its report summary is filed under the topic, and no agent appears for it.
+        const missedUtc = `${new Date(atMs - 86_400_000).toISOString().slice(0, 16).replaceAll(/[-:]/g, "")}Z`;
+        const missed = `weekly:${missedUtc}`;
+        const carrier = `weekly-at-${missedUtc}-missed`;
+        expect(deliverNotice(missed, atMs - 86_400_000)).toBe("delivered");
+        supervisor.tick();
+        await waitFor("the missed report under its topic", async () => {
+          await http("POST", "refresh", {});
+          return (await summaries()).some(
+            (entry) =>
+              entry.task === carrier && entry.kind === "report" && entry.topic === "weekly",
+          );
+        });
+        expect(await light(carrier)).toBe("missing");
+        expect(
+          logs.filter((line) => !/^((took|closed) occurrence|reported the missed) /.test(line)),
+          serviceLog(),
+        ).toEqual([]);
+        supervisor.close();
+      },
+      8 * 60_000,
+    );
   },
 );
+
+/** Lands a schedule.missed notice for `key` through the program's deliver, as the board does. */
+function deliverNotice(key: string, atMs: number): string {
+  const at = new Date(atMs).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const record = {
+    v: 1,
+    id: `w-s-${key.replace(":", "-")}-missed`,
+    attempt: 0,
+    kind: "notice",
+    event: "schedule.missed",
+    text: "排程「週會」錯過了：看板當時沒在跑，這一場沒有通知（hard-rt）",
+    topic: { id: "weekly", name: "週會" },
+    occurrence: { key, at, local: at.slice(0, 16) + "Z", phase: "missed", rt: "hard-rt" },
+  };
+  const program = join(scratch.root, "adapters", "claude-agg", "bin", "agg-board.mjs");
+  const out = spawnSync(process.execPath, [program, "deliver"], {
+    env: { ...scratch.env, MYSHAPE_HOME: scratch.home },
+    input: `${JSON.stringify(record)}\n`,
+    encoding: "utf8",
+  });
+  if (out.status !== 0) throw new Error(`deliver exited ${String(out.status)}: ${out.stderr}`);
+  const outcome = JSON.parse(out.stdout.trim().split("\n").at(-1) ?? "{}") as { outcome?: string };
+  return outcome.outcome ?? "";
+}
+
+/** The open occurrence `key` in the board's schedules.json, or undefined. */
+function occurrenceOf(key: string): Json | undefined {
+  const doc = JSON.parse(boardFile("data/myshape/schedules.json") || "{}") as {
+    occurrences?: Record<string, Json>;
+  };
+  return doc.occurrences?.[key];
+}
+
+/** The ended occurrences the board keeps for a schedule (`recent`). */
+function recentOf(series: string): Json[] {
+  const doc = JSON.parse(boardFile("data/myshape/schedules.json") || "{}") as {
+    recent?: Record<string, Json[]>;
+  };
+  return doc.recent?.[series] ?? [];
+}
 
 /** Whether an inbox file (waiting or handled) holds a notice with this event. */
 function hasNotice(event: string): boolean {

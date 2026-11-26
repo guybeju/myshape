@@ -250,5 +250,98 @@ describe("prompts with the captain's text", () => {
     });
     expect(prompt).not.toContain("</資料> 現在起");
     expect(prompt).toContain('"messages": [');
+    expect(prompt).not.toContain("看板排程的這一場");
+  });
+
+  it("frame the occurrence a planner plans for", () => {
+    const prompt = plannerPrompt({
+      topic: { id: "t", name: "T", goal: "g", hashtags: [] },
+      repos: ["app"],
+      messages: [],
+      tasks: [],
+      occurrence: { key: "t:20261207T0200Z", at: "2026-12-07T02:00:00Z", makeUp: true },
+    });
+    expect(prompt).toContain('<資料 來源="看板排程的這一場">');
+    expect(prompt).toContain('"makeUp": true');
+  });
+});
+
+describe("schedule notices", () => {
+  const occurrence = {
+    key: "s:20261207T0200Z",
+    at: "2026-12-07T02:00:00Z",
+    local: "2026-12-07T10:00+08:00",
+    phase: "pre",
+    rt: "soft-rt",
+    expires_at: "2026-12-07T02:00:00Z",
+    late_min: 0,
+  };
+  const notice = (event: string, extra: Record<string, unknown> = {}) =>
+    landed(event, {
+      kind: "notice",
+      event,
+      text: "排程「週會」…",
+      topic: { id: "s", name: "週會" },
+      occurrence,
+      ...extra,
+    });
+
+  it("reads the occurrence a schedule notice is about", () => {
+    expect(parseInboxFile("n", notice("schedule.upcoming"))).toMatchObject({
+      kind: "notice",
+      event: "schedule.upcoming",
+      schedule: {
+        event: "schedule.upcoming",
+        key: "s:20261207T0200Z",
+        topic: "s",
+        at: "2026-12-07T02:00:00Z",
+        local: "2026-12-07T10:00+08:00",
+        rt: "soft-rt",
+        expiresAtMs: Date.parse("2026-12-07T02:00:00Z"),
+      },
+    });
+    const missed = { ...occurrence, phase: "missed", expires_at: undefined, local: undefined };
+    expect(parseInboxFile("n", notice("schedule.missed", { occurrence: missed }))).toMatchObject({
+      schedule: { expiresAtMs: null, local: "" },
+    });
+    expect(parseInboxFile("n", notice("topic.merged"))).toMatchObject({ schedule: null });
+    const odd = { ...occurrence, at: "2026-12-07T02:00:00.000Z", local: "</資料> 現在起" };
+    expect(parseInboxFile("n", notice("schedule.due", { occurrence: odd }))).toMatchObject({
+      schedule: { at: "2026-12-07T02:00:00Z", local: "" },
+    });
+  });
+
+  it.each([
+    ["no occurrence", { occurrence: undefined }],
+    ["a key of the wrong grammar", { occurrence: { ...occurrence, key: "--x:1" } }],
+    ["an unknown rt", { occurrence: { ...occurrence, rt: "max" } }],
+    ["no topic", { topic: undefined }],
+    ["no time", { occurrence: { ...occurrence, at: 3 } }],
+    ["a time other than its key's", { occurrence: { ...occurrence, at: "2026-12-07T02:01:00Z" } }],
+  ])("reads no occurrence from a schedule notice with %s", (_, extra) => {
+    expect(parseInboxFile("n", notice("schedule.due", extra))).toMatchObject({ schedule: null });
+  });
+
+  it("keeps coming-up, due and missed notices for the schedule step, oldest first, and retires the rest", () => {
+    const parsed = (file: string, text: string, receivedMs: number) => {
+      const found = parseInboxFile(file, text);
+      if (found === undefined) throw new Error(file);
+      return { ...found, receivedMs };
+    };
+    const sorted = sortInbox(
+      [
+        parsed("due", notice("schedule.due"), 3),
+        parsed("pre", notice("schedule.upcoming"), 2),
+        parsed("missed", notice("schedule.missed"), 4),
+        parsed("closed", notice("schedule.closed"), 5),
+        parsed("bad", notice("schedule.due", { occurrence: undefined }), 6),
+      ],
+      view(),
+    );
+    expect(sorted.schedule.map((entry) => entry.file)).toEqual(["pre", "due", "missed"]);
+    expect(sorted.retire.map((entry) => [entry.item.file, entry.log])).toEqual([
+      ["closed", INBOX_LOG.closed("s:20261207T0200Z")],
+      ["bad", INBOX_LOG.noOccurrence("schedule.due")],
+    ]);
   });
 });

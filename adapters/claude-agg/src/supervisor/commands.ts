@@ -1,6 +1,6 @@
 // The commands the supervisor runs, each through one injected runner: the
 // board's command (bin/myshape.sh: summary, todo, close-propose, hashtag,
-// status, open), git (worktrees) and
+// schedule take and close, status, open), git (worktrees) and
 // gh (a pull request's state). Each command gets an environment built here
 // from a few names; none of them ever gets the subscription token.
 
@@ -70,6 +70,16 @@ export interface BoardTodo {
   ref: string;
 }
 
+/** The board's limit for a `schedule take` or `close` note: one line, at most 200 code points. */
+export const NOTE_MAX = 200;
+
+const OCCURRENCE_KEY = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}:\d{8}T\d{4}Z$/;
+
+/** Whether `key` is an occurrence key: a schedule id, `:`, and T in UTC to the minute. */
+export function isOccurrenceKey(key: string): boolean {
+  return OCCURRENCE_KEY.test(key);
+}
+
 /** `text` cut to at most `max` Unicode code points, ending in … when cut. */
 export function clip(text: string, max = SUMMARY_MAX): string {
   const points = [...text.trim()];
@@ -119,9 +129,10 @@ export class BoardCommand {
   private async write(args: string[]): Promise<string | undefined> {
     let result = await this.call(args);
     if (result.status === 3) result = await this.call(args);
+    const twoWords = args[0] === "todo" || args[0] === "schedule";
     return result.status === 0
       ? undefined
-      : failure(args[0] === "todo" ? `todo ${args[1]}` : `${args[0]}`, result);
+      : failure(twoWords ? `${args[0]} ${args[1]}` : `${args[0]}`, result);
   }
 
   /** Puts a 要你動手 item on the board, or rewrites it (`myshape.sh todo add`). */
@@ -166,6 +177,31 @@ export class BoardCommand {
   hashtag(topic: string, change: "add" | "remove", name: string): Promise<string | undefined> {
     const args = change === "add" ? [`+${name}`] : ["--remove", name];
     return this.write(["hashtag", topic, ...args]);
+  }
+
+  /**
+   * Reports that the agent took an open occurrence (`myshape.sh schedule take
+   * <key> --note <line>`). Only an occurrence key of the board's grammar is
+   * sent; the note is made one line within the board's limit.
+   */
+  scheduleTake(key: string, note: string): Promise<string | undefined> {
+    return this.occurrenceWrite(["take", key], note);
+  }
+
+  /**
+   * Reports that the agent's work for an occurrence ended (`myshape.sh
+   * schedule close <key> done --note <line>`). It never closes one as skipped.
+   */
+  scheduleCloseDone(key: string, note: string): Promise<string | undefined> {
+    return this.occurrenceWrite(["close", key, "done"], note);
+  }
+
+  private async occurrenceWrite(args: string[], note: string): Promise<string | undefined> {
+    const key = args[1] ?? "";
+    if (!isOccurrenceKey(key))
+      return `myshape.sh schedule ${args[0] ?? ""}: not an occurrence key: ${key}`;
+    const line = clip(note.replaceAll(/\s+/g, " "), NOTE_MAX);
+    return this.write(["schedule", ...args, "--note", line]);
   }
 
   /** Starts the board service when `myshape.sh status` does not say it runs. */

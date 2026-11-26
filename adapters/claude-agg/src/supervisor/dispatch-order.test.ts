@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { readBoard } from "./board-files.js";
-import { dispatchOrder } from "./dispatch-order.js";
+import { dispatchOrder, topicEntry } from "./dispatch-order.js";
 import type { DispatchOrder } from "./dispatch-order.js";
 import { removeHomes, writeHome } from "./fixtures.test-helper.js";
 import type { HomeFiles } from "./fixtures.test-helper.js";
@@ -360,5 +360,35 @@ describe("dispatchOrder over schedule occurrences", () => {
         reason: "open, but the topic already has an earlier open occurrence",
       },
     ]);
+  });
+});
+
+describe("topicEntry", () => {
+  it("gives a live topic in later its place and details, and nothing for an archived or unknown one", () => {
+    const home = writeHome({
+      topics: {
+        topics: {
+          s: { name: "週會", goal: "整理紀錄", created_at: "2026-11-27T00:00:00Z" },
+          old: { name: "舊", goal: "", created_at: "2026-11-27T00:00:00Z" },
+        },
+        queues: { high: [], normal: [], later: ["old", "s"] },
+        merged: {},
+      },
+      archive: { topics: { gone: {} } },
+      hashtags: { topics: { s: ["會議"] }, hashtags: {} },
+    });
+    const board = readBoard(home);
+    expect(topicEntry(board, "s", "make-up")).toEqual({
+      topic: "s",
+      name: "週會",
+      goal: "整理紀錄",
+      queue: "later",
+      position: 2,
+      occurrence: null,
+      hashtags: ["會議"],
+      reason: "make-up",
+    });
+    expect(topicEntry(board, "gone", "x")).toBeUndefined();
+    expect(topicEntry(board, "nobody", "x")).toBeUndefined();
   });
 });

@@ -251,4 +251,39 @@ describe("BoardCommand's board writes", () => {
     expect(await board(run).todoDone("i")).toBe("myshape.sh todo done exited 1: 沒有這個項目");
     expect(calls).toHaveLength(2);
   });
+
+  it("reports taking and closing an occurrence, with a one-line note within the limit", async () => {
+    const { run, calls } = scripted(ok(), ok());
+    const b = board(run);
+    expect(await b.scheduleTake("weekly-sync:20261130T0200Z", "接下\n到時間開工")).toBeUndefined();
+    expect(
+      await b.scheduleCloseDone("weekly-sync:20261130T0200Z", "x".repeat(300)),
+    ).toBeUndefined();
+    expect(calls.map((call) => call.args)).toEqual([
+      ["schedule", "take", "weekly-sync:20261130T0200Z", "--note", "接下 到時間開工"],
+      ["schedule", "close", "weekly-sync:20261130T0200Z", "done", "--note", `${"x".repeat(199)}…`],
+    ]);
+    expect(calls.every((call) => call.input === undefined)).toBe(true);
+  });
+
+  it("sends no schedule report for a key that is not an occurrence key", async () => {
+    const { run, calls } = scripted();
+    const b = board(run);
+    for (const key of ["--note", "s", "s:20261130T0200Z extra", "-s:20261130T0200Z"]) {
+      expect(await b.scheduleTake(key, "n")).toContain("not an occurrence key");
+      expect(await b.scheduleCloseDone(key, "n")).toContain("not an occurrence key");
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("names the schedule subcommand in a refusal", async () => {
+    const { run } = scripted({
+      status: 1,
+      stdout: "",
+      stderr: "s:20261130T0200Z 那一場已經結束（untaken）。",
+    });
+    expect(await board(run).scheduleCloseDone("s:20261130T0200Z", "n")).toBe(
+      "myshape.sh schedule close exited 1: s:20261130T0200Z 那一場已經結束（untaken）。",
+    );
+  });
 });
