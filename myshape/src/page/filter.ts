@@ -48,7 +48,7 @@ export function parseFilterHash(hash: string): Filter | null {
     any: list(query.get("any")),
     none: list(query.get("none")),
     untagged: query.get("untagged") === "1",
-    text: query.get("text") ?? "",
+    text: query.has("text") ? String(query.get("text")) : "",
     view: query.get("view"),
   };
 }
@@ -92,7 +92,12 @@ function key(name: string): string {
 export function resolveFilter(filter: Filter, known: readonly { name: string }[]): Filter {
   const shown = new Map(known.map((entry) => [key(entry.name), entry.name]));
   const resolve = (names: string[]): string[] => [
-    ...new Set(names.flatMap((name) => shown.get(key(name)) ?? [])),
+    ...new Set(
+      names.flatMap((name) => {
+        const found = shown.get(key(name));
+        return found === undefined ? [] : [found];
+      }),
+    ),
   ];
   return { ...filter, any: resolve(filter.any), none: resolve(filter.none) };
 }
@@ -104,17 +109,23 @@ export function hashtagsPass(tags: readonly string[], filter: Filter): boolean {
   return !filter.none.some((name) => tags.includes(name));
 }
 
+/** A topic's hashtags; none when it has none. */
+function tagsOf(source: FilterSource, id: string): readonly string[] {
+  return Object.hasOwn(source.hashtags.topics, id) ? (source.hashtags.topics[id] as string[]) : [];
+}
+
+type TopicText = Pick<FilterSource["topics"][string], "name" | "goal" | "close_reason">;
+
 /** Every text the page shows about a topic, by the field it is shown in. */
-function topicTexts(source: FilterSource, id: string): [string, string][] {
-  const topic = source.topics[id];
+function topicTexts(source: FilterSource, id: string, topic: TopicText): [string, string][] {
   const mine = <T extends { topic: string | null }>(items: readonly T[]): T[] =>
     items.filter((item) => item.topic === id);
   return [
-    ["名稱", topic?.name ?? ""],
-    ["目標", topic?.goal ?? ""],
+    ["名稱", topic.name],
+    ["目標", topic.goal],
     ["議題 id", id],
-    ["提議關閉", topic?.close_reason ?? ""],
-    ["hashtag", (source.hashtags.topics[id] ?? []).join(" ")],
+    ["提議關閉", topic.close_reason === null ? "" : topic.close_reason],
+    ["hashtag", tagsOf(source, id).join(" ")],
     ...mine(source.agents).map((agent): [string, string] => [
       "agent",
       `${agent.task} ${agent.state} ${agent.detail}`,
@@ -144,10 +155,11 @@ function topicTexts(source: FilterSource, id: string): [string, string][] {
  * the fields the keyword matched in (empty when there is no keyword).
  */
 export function topicMatch(source: FilterSource, id: string, filter: Filter): string[] | null {
-  if (!hashtagsPass(source.hashtags.topics[id] ?? [], filter)) return null;
+  const topic = source.topics[id];
+  if (topic === undefined || !hashtagsPass(tagsOf(source, id), filter)) return null;
   const needle = filter.text.trim().toLowerCase();
   if (needle === "") return [];
-  const fields = topicTexts(source, id)
+  const fields = topicTexts(source, id, topic)
     .filter(([, text]) => text.toLowerCase().includes(needle))
     .map(([field]) => field);
   return fields.length === 0 ? null : [...new Set(fields)];

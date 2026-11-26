@@ -21,7 +21,13 @@ import {
   revertChange,
   saveView,
 } from "./hashtags.js";
-import type { HashtagContext, HashtagRecord, HashtagResult, HashtagStore } from "./hashtags.js";
+import type {
+  HashtagContext,
+  HashtagEntry,
+  HashtagRecord,
+  HashtagResult,
+  HashtagStore,
+} from "./hashtags.js";
 import type { Frozen } from "./records.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
@@ -68,7 +74,18 @@ describe("a hashtag name", () => {
     expect(checkName("AI_INFRA")).toEqual({ name: "AI_INFRA", key: "ai_infra" });
     expect(checkName(" #基礎設施2 ")).toEqual({ name: "基礎設施2", key: "基礎設施2" });
     expect(checkName("x".repeat(32))).not.toBeTypeOf("string");
-    for (const bad of ["", "#", "a-b", "a b", "x".repeat(33), "a.b", "<b>"])
+    for (const bad of [
+      "",
+      "#",
+      "a-b",
+      "a b",
+      "x".repeat(33),
+      "a.b",
+      "<b>",
+      "__proto__",
+      "constructor",
+      "toString",
+    ])
       expect(checkName(bad)).toBeTypeOf("string");
   });
 
@@ -471,5 +488,108 @@ describe("reading hashtags.json", () => {
       topics: { old: ["X"], a: ["Y"], z: ["X"], gone: ["Y"] },
     });
     expect(reconcile(store, topicState()).topics).toEqual({ a: ["Y", "X"], z: ["X"] });
+  });
+});
+
+describe("a setting name", () => {
+  it("is one of the settings, never something every object has", () => {
+    const captain = ctx(emptyHashtags(), { by: "captain" });
+    for (const name of ["constructor", "__proto__", "toString"])
+      expect(changeSettings(captain, { [name]: 1 })).toMatchObject({ ok: false, code: "usage" });
+  });
+});
+
+describe("a view id", () => {
+  it("that every object has is no saved view", () => {
+    expect(deleteView(ctx(tagged(), { by: "captain" }), "constructor")).toMatchObject({
+      changed: false,
+    });
+  });
+});
+
+describe("the edges", () => {
+  const captain = (store: Frozen<HashtagStore> = emptyHashtags()) => ctx(store, { by: "captain" });
+
+  it("a name whose NFKC form is not a name is refused", () => {
+    expect(checkName("½")).toBeTypeOf("string");
+  });
+
+  it("reading keeps the first of two equally old spellings and drops a key that is not a name as written", () => {
+    const store = parseHashtags({
+      v: 1,
+      hashtags: { ai: { created_at: "T" }, AI: { created_at: "T" }, "#B": {} },
+      views: { "3": { name: "x" } },
+      settings: { default_view: 3 },
+    });
+    expect(Object.keys(store.hashtags)).toEqual(["ai"]);
+    expect(store.settings.default_view).toBe("all");
+  });
+
+  it("settings take both ends of their ranges, and say the range when outside it", () => {
+    expect(
+      after(changeSettings(captain(), { per_topic_max: 32, board_max: 1 })).settings,
+    ).toMatchObject({
+      per_topic_max: 32,
+      board_max: 1,
+    });
+    expect(changeSettings(captain(), { per_topic_max: 33 })).toMatchObject({
+      line: "per_topic_max 要是 1 到 32 的整數。",
+    });
+  });
+
+  it("a lock change records what it was and what it is", () => {
+    const locked = after(lockHashtag(captain(tagged()), "URGENT", true));
+    expect(lockHashtag(captain(locked), "URGENT", false)).toMatchObject({
+      records: [{ kind: "hashtag.lock_changed", before: "true", after: "false" }],
+    });
+  });
+
+  it("a view gets v1 when its name has no slug, and a rewrite records the view it replaced", () => {
+    const view = { name: "工作", any: [], none: [], text: "", untagged: false };
+    const first = saveView(captain(tagged()), view);
+    expect(first).toMatchObject({ line: "ok v1 視圖「工作」已存下", records: [{ before: "" }] });
+    const second = saveView(captain(after(first)), { ...view, text: "gpu" });
+    expect(second).toMatchObject({ changed: true, records: [{ before: JSON.stringify(view) }] });
+    expect(saveView(captain(), { ...view, id: "all" })).toMatchObject({
+      line: "視圖 id 格式不對：all",
+    });
+  });
+
+  it("a hashtag is 新 only when the aggregator opened it after the last seen mark", () => {
+    const store = after(addHashtags(ctx(), "a", ["X"]));
+    const atSeen: HashtagRecord[] = [{ rid: "s", ts: NOW_S, kind: "hashtag.seen", by: "captain" }];
+    expect(hashtagView(store, atSeen).hashtags[0]?.new).toBe(false);
+    const undated = {
+      ...store,
+      hashtags: { X: { ...(store.hashtags["X"] as HashtagEntry), created_at: "" } },
+    };
+    expect(hashtagView(undated, []).hashtags[0]?.new).toBe(true);
+    expect(markSeen(ctx(store, { by: "captain" }))).toMatchObject({ changed: true });
+  });
+
+  it("a topic at the per-topic maximum is not flagged as over it", () => {
+    const base = emptyHashtags();
+    const store = after(
+      addHashtags(ctx({ ...base, settings: { ...base.settings, per_topic_max: 2 } }), "a", [
+        "A",
+        "B",
+      ]),
+    );
+    expect(hashtagView(store, []).over).toEqual([]);
+  });
+});
+
+describe("view ids", () => {
+  it("count up past the ones taken, and a bad one is a usage refusal", () => {
+    const captain = (store: Frozen<HashtagStore>) => ctx(store, { by: "captain" });
+    const view = (name: string) => ({ name, any: [], none: [], text: "", untagged: false });
+    const one = after(saveView(captain(emptyHashtags()), view("工作")));
+    const two = saveView(captain(one), view("家裡"));
+    expect(two).toMatchObject({ line: "ok v2 視圖「家裡」已存下" });
+    expect(saveView(captain(one), { ...view("x"), id: "-x" })).toEqual({
+      ok: false,
+      code: "usage",
+      line: "視圖 id 格式不對：-x",
+    });
   });
 });

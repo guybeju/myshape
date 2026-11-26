@@ -4,9 +4,9 @@
 // line per problem:
 //   - topics.json, the archive, todos.json, confirmations.json and
 //     hashtags.json are written (writeFileAtomic or writeIfChanged) only in
-//     store.ts's writeTopics, writeTodos, writeConfirmations, writeHashtags
-//     and writeIfChanged, and those four writers are called only from
-//     commitChange and the writeChange it calls;
+//     store.ts's writeTopics, writeTodos, writeOwnFile and writeIfChanged,
+//     and those three writers are called only from commitChange and the
+//     writeChange it calls;
 //   - a record reaches the journal only through store.ts's flushOutbox (the
 //     sink's append) and the one sink, commitTarget in board-server.ts;
 //   - store.ts exports no function but readBoard, loadBoard and commitChange;
@@ -33,7 +33,7 @@ const STATE_FIELDS = new Set(["doc", "archive", "items", "marks", "closed", "out
 const STATE_OWNERS = new Set(["topics.ts", "todos.ts", "confirmations.ts", "hashtags.ts", "store.ts"]);
 const STATE_PATHS = new Set(["topics", "archive", "todos", "confirmations", "hashtags"]);
 const STORE_EXPORTS = new Set(["readBoard", "loadBoard", "commitChange"]);
-const WRITERS = new Set(["writeTopics", "writeTodos", "writeConfirmations", "writeHashtags", "writeIfChanged"]);
+const WRITERS = new Set(["writeTopics", "writeTodos", "writeOwnFile", "writeIfChanged"]);
 const WRITER_CALLERS = new Set(["commitChange", "writeChange"]);
 const ASSIGN = new Set([K.EqualsToken, K.PlusEqualsToken, K.MinusEqualsToken, K.AsteriskEqualsToken,
   K.SlashEqualsToken, K.BarBarEqualsToken, K.AmpersandAmpersandEqualsToken, K.QuestionQuestionEqualsToken,

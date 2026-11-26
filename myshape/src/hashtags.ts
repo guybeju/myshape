@@ -105,18 +105,31 @@ export function checkName(raw: string): { name: string; key: string } | string {
   const length = [...name].length;
   if (length === 0 || length > NAME_MAX || !NAME_CHARS.test(name) || !NAME_CHARS.test(key))
     return `hashtag 只能用文字、數字與底線，1 到 ${NAME_MAX} 個字：${raw}`;
+  // A name every object already has (constructor, __proto__) could not be stored as a key.
+  if (name in Object.prototype || key in Object.prototype)
+    return `hashtag 不能叫 ${name}：這個名字是程式物件本來就有的屬性。`;
   return { name, key };
 }
 
 /** The shown spelling of the hashtag whose key is `key`, if the board has it. */
 export function nameOfKey(store: Frozen<HashtagStore>, key: string): string | undefined {
-  return Object.keys(store.hashtags).find((name) => store.hashtags[name]?.key === key);
+  return Object.entries(store.hashtags).find(([, entry]) => entry.key === key)?.[0];
+}
+
+/** The hashtags on topic `id` in a topic map; none when it has none. */
+function tagsIn(
+  topics: Readonly<Record<string, readonly string[]>>,
+  id: string,
+): readonly string[] {
+  const names = topics[id];
+  return names === undefined ? [] : names;
 }
 
 /** The ids of every topic that carries `name`, sorted. */
 export function topicsWith(store: Frozen<HashtagStore>, name: string): string[] {
-  return Object.keys(store.topics)
-    .filter((id) => store.topics[id]?.includes(name) === true)
+  return Object.entries(store.topics)
+    .filter(([, names]) => names.includes(name))
+    .map(([id]) => id)
     .toSorted();
 }
 
@@ -193,24 +206,43 @@ function parseSettings(raw: unknown, views: Record<string, SavedView>): HashtagS
   return settings;
 }
 
+function entriesOf(raw: unknown): [string, unknown][] {
+  return isRecord(raw) ? Object.entries(raw) : [];
+}
+
+function parseTopics(
+  registry: Record<string, HashtagEntry>,
+  raw: unknown,
+): Record<string, string[]> {
+  const topics: Record<string, string[]> = {};
+  for (const [id, names] of entriesOf(raw)) {
+    const shown = knownNames(registry, names);
+    if (isValidTopicId(id) && shown.length > 0) topics[id] = shown;
+  }
+  return topics;
+}
+
+function parseViews(
+  registry: Record<string, HashtagEntry>,
+  raw: unknown,
+): Record<string, SavedView> {
+  const views: Record<string, SavedView> = {};
+  for (const [id, value] of entriesOf(raw)) {
+    const view = parseView(registry, value);
+    if (view !== null && isValidTopicId(id) && id !== ALL_VIEW) views[id] = view;
+  }
+  return views;
+}
+
 /** Reads hashtags.json; throws when it is not an object with v: 1. */
 export function parseHashtags(raw: unknown): HashtagStore {
   if (!isRecord(raw) || raw["v"] !== 1) throw new Error("expected an object with v: 1");
   const registry = parseRegistry(raw["hashtags"]);
-  const topics: Record<string, string[]> = {};
-  for (const [id, names] of Object.entries(isRecord(raw["topics"]) ? raw["topics"] : {})) {
-    const shown = knownNames(registry, names);
-    if (isValidTopicId(id) && shown.length > 0) topics[id] = shown;
-  }
-  const views: Record<string, SavedView> = {};
-  for (const [id, value] of Object.entries(isRecord(raw["views"]) ? raw["views"] : {})) {
-    const view = parseView(registry, value);
-    if (view !== null && isValidTopicId(id) && id !== ALL_VIEW) views[id] = view;
-  }
+  const views = parseViews(registry, raw["views"]);
   return {
     v: 1,
     hashtags: registry,
-    topics,
+    topics: parseTopics(registry, raw["topics"]),
     views,
     settings: parseSettings(raw["settings"], views),
   };
@@ -231,7 +263,7 @@ export function reconcile(store: HashtagStore, topics: Frozen<TopicState>): Hash
     const owner = resolveTopicId(topics.doc, id);
     const known =
       topics.doc.topics[owner] !== undefined || topics.archive.topics[owner] !== undefined;
-    if (known) next[owner] = [...new Set([...(next[owner] ?? []), ...names])];
+    if (known) next[owner] = [...new Set([...tagsIn(next, owner), ...names])];
   }
   return { ...store, topics: next };
 }
@@ -354,6 +386,39 @@ function overMax(ctx: HashtagContext, topic: { id: string; name: string }, count
   return `議題「${topic.name}」（${topic.id}）已經有 ${count} 個 hashtag，上限 ${max} 個；先撕掉一些才能再貼，這次沒有改。`;
 }
 
+/** The names among `names` that are locked. */
+function lockedOf(store: Frozen<HashtagStore>, names: readonly string[]): string[] {
+  return names.filter((name) => store.hashtags[name]?.locked === true);
+}
+
+/** Why `adding` may not go on a topic that has `count` hashtags now, or null. */
+function addProblem(
+  ctx: HashtagContext,
+  topic: { id: string; name: string },
+  count: number,
+  adding: readonly string[],
+  fresh: readonly string[],
+): string | null {
+  const problem =
+    aggregatorProblem(ctx, lockedOf(ctx.store, adding)) ?? creationProblem(ctx, fresh);
+  if (problem !== null) return problem;
+  return count + adding.length > ctx.store.settings.per_topic_max
+    ? overMax(ctx, topic, count)
+    : null;
+}
+
+/** A copy of the store in which topic `id` carries `names`, and no entry when they are none. */
+function withTopicTags(
+  store: Frozen<HashtagStore>,
+  id: string,
+  names: readonly string[],
+): HashtagStore {
+  const next = clone(store);
+  if (names.length === 0) delete next.topics[id];
+  else next.topics[id] = [...names];
+  return next;
+}
+
 /**
  * Puts `raw` hashtags on one topic, opening the ones the board does not have.
  * One record for the whole change, saying what the topic had before and after.
@@ -367,27 +432,33 @@ export function addHashtags(
   if (typeof topic === "string") return refuse(topic);
   const asked = wanted(ctx.store, raw);
   if (typeof asked === "string") return refuse(asked);
-  const before = ctx.store.topics[topic.id] ?? [];
+  const before = tagsIn(ctx.store.topics, topic.id);
   const adding = asked.names.filter((name) => !before.includes(name));
   if (adding.length === 0)
     return unchanged(ctx.store, `ok ${topic.id} 本來就有 ${tags(asked.names)}`);
-  const locked = adding.filter((name) => ctx.store.hashtags[name]?.locked === true);
-  const problem = aggregatorProblem(ctx, locked) ?? creationProblem(ctx, asked.fresh);
+  const problem = addProblem(ctx, topic, before.length, adding, asked.fresh);
   if (problem !== null) return refuse(problem);
-  if (before.length + adding.length > ctx.store.settings.per_topic_max)
-    return refuse(overMax(ctx, topic, before.length));
-  const next = clone(ctx.store);
-  for (const name of asked.fresh)
-    next.hashtags[name] = newEntry(ctx, hashtagKey(name), Object.keys(next.hashtags).length);
+  return putOn(ctx, topic, { before, adding, fresh: asked.fresh });
+}
+
+/** The change that puts `adding` on a topic that had `before`, opening `fresh`. */
+function putOn(
+  ctx: HashtagContext,
+  topic: { id: string; name: string },
+  change: { before: readonly string[]; adding: readonly string[]; fresh: readonly string[] },
+): HashtagResult {
+  const { before, adding, fresh } = change;
   const after = [...before, ...adding];
-  next.topics[topic.id] = after;
-  const opened = asked.fresh.length === 0 ? "" : `（新開的 hashtag：${tags(asked.fresh)}）`;
+  const next = withTopicTags(ctx.store, topic.id, after);
+  for (const name of fresh)
+    next.hashtags[name] = newEntry(ctx, hashtagKey(name), Object.keys(next.hashtags).length);
+  const opened = fresh.length === 0 ? "" : `（新開的 hashtag：${tags(fresh)}）`;
   return changed(next, `ok ${topic.id} 已貼上 ${tags(adding)}${opened}`, {
     kind: "hashtag.added",
     topic: topic.id,
     before: before.join(" "),
     after: after.join(" "),
-    ...(asked.fresh.length === 0 ? {} : { outcome: "created" }),
+    ...(fresh.length === 0 ? {} : { outcome: "created" }),
     text: `議題「${topic.name}」貼上 ${tags(adding)}${opened}`,
   });
 }
@@ -399,16 +470,13 @@ export function removeHashtag(ctx: HashtagContext, rawTopic: string, raw: string
   const checked = checkName(raw);
   if (typeof checked === "string") return refuse(checked);
   const name = nameOfKey(ctx.store, checked.key);
-  const before = ctx.store.topics[topic.id] ?? [];
+  const before = tagsIn(ctx.store.topics, topic.id);
   if (name === undefined || !before.includes(name))
     return unchanged(ctx.store, `ok ${topic.id} 本來就沒有 #${checked.name}`);
-  const problem = aggregatorProblem(ctx, ctx.store.hashtags[name]?.locked === true ? [name] : []);
+  const problem = aggregatorProblem(ctx, lockedOf(ctx.store, [name]));
   if (problem !== null) return refuse(problem);
-  const next = clone(ctx.store);
   const after = before.filter((entry) => entry !== name);
-  if (after.length === 0) delete next.topics[topic.id];
-  else next.topics[topic.id] = after;
-  return changed(next, `ok ${topic.id} 已撕掉 #${name}`, {
+  return changed(withTopicTags(ctx.store, topic.id, after), `ok ${topic.id} 已撕掉 #${name}`, {
     kind: "hashtag.removed",
     topic: topic.id,
     before: before.join(" "),
@@ -535,14 +603,15 @@ function settingValue(
 ): string | null {
   if ((FLAG_SETTINGS as readonly string[]).includes(name))
     return typeof value === "boolean" ? null : `${name} 要是 true 或 false。`;
-  const range = SETTING_RANGES[name as NumberSetting];
-  if (range !== undefined)
-    return inRange(value, range) ? null : `${name} 要是 ${range[0]} 到 ${range[1]} 的整數。`;
-  if (name === "default_view")
-    return value === ALL_VIEW || (typeof value === "string" && Object.hasOwn(views, value))
-      ? null
-      : "預設視圖要是「全部」或一個存下來的視圖。";
-  return `不認得的設定：${name}`;
+  if (Object.hasOwn(SETTING_RANGES, name)) return numberProblem(name as NumberSetting, value);
+  if (name !== "default_view") return `不認得的設定：${name}`;
+  const known = value === ALL_VIEW || (typeof value === "string" && Object.hasOwn(views, value));
+  return known ? null : "預設視圖要是「全部」或一個存下來的視圖。";
+}
+
+function numberProblem(name: NumberSetting, value: unknown): string | null {
+  const range = SETTING_RANGES[name];
+  return inRange(value, range) ? null : `${name} 要是 ${range[0]} 到 ${range[1]} 的整數。`;
 }
 
 /** Changes any of the captain's settings; each one is checked, and none changes when one is wrong. */
@@ -579,17 +648,25 @@ function viewOf(store: Frozen<HashtagStore>, input: ViewInput): SavedView | stri
   if (name === null) return `視圖的名稱要是一行、不能是空的、最多 ${VIEW_NAME_MAX} 個字。`;
   const text = input.text.trim() === "" ? "" : oneLine(input.text, VIEW_TEXT_MAX);
   if (text === null) return `關鍵字要是一行、最多 ${VIEW_TEXT_MAX} 個字。`;
-  const lists: string[][] = [];
-  for (const raw of [input.any, input.none]) {
-    const names: string[] = [];
-    for (const entry of raw) {
-      const found = existing(store, entry);
-      if (typeof found !== "string") return found.problem;
-      if (!names.includes(found)) names.push(found);
-    }
-    lists.push(names);
+  const any = shownNames(store, input.any);
+  if (!Array.isArray(any)) return any.problem;
+  const none = shownNames(store, input.none);
+  if (!Array.isArray(none)) return none.problem;
+  return { name, any, none, text, untagged: input.untagged };
+}
+
+/** The shown spellings of `raw`, each once, or why one of them is not a hashtag the board has. */
+function shownNames(
+  store: Frozen<HashtagStore>,
+  raw: readonly string[],
+): string[] | { problem: string } {
+  const names: string[] = [];
+  for (const entry of raw) {
+    const found = existing(store, entry);
+    if (typeof found !== "string") return found;
+    if (!names.includes(found)) names.push(found);
   }
-  return { name, any: lists[0] ?? [], none: lists[1] ?? [], text, untagged: input.untagged };
+  return names;
 }
 
 /** The view's id: the one given, else the saved view of the same name, else a new one. */
@@ -597,13 +674,19 @@ function viewId(store: Frozen<HashtagStore>, input: ViewInput, name: string): st
   if (input.id !== undefined) return input.id;
   const same = Object.keys(store.views).find((id) => store.views[id]?.name === name);
   if (same !== undefined) return same;
-  const slug = input.name
+  return freshViewId(store, input.name);
+}
+
+/** A view id nobody uses: the name's slug when it has one, else v<n>. */
+function freshViewId(store: Frozen<HashtagStore>, name: string): string {
+  const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
-  const free = (id: string): boolean => id !== ALL_VIEW && !Object.hasOwn(store.views, id);
-  if (slug !== "" && free(slug)) return slug;
+  const free = (id: string): boolean =>
+    id !== ALL_VIEW && !Object.hasOwn(store.views, id) && isValidTopicId(id);
+  if (free(slug)) return slug;
   for (let n = 1; ; n += 1) if (free(`v${n}`)) return `v${n}`;
 }
 
@@ -630,7 +713,7 @@ export function saveView(ctx: HashtagContext, input: ViewInput): HashtagResult {
 
 /** Drops a saved view; the default view falls back to 全部 when it was this one. */
 export function deleteView(ctx: HashtagContext, id: string): HashtagResult {
-  const view = ctx.store.views[id];
+  const view = Object.hasOwn(ctx.store.views, id) ? ctx.store.views[id] : undefined;
   if (view === undefined) return unchanged(ctx.store, `ok 本來就沒有視圖 ${id}`);
   const next = clone(ctx.store);
   delete next.views[id];
@@ -660,7 +743,7 @@ export function markSeen(ctx: HashtagContext): HashtagResult {
 }
 
 function words(list: string | undefined): string[] {
-  return (list ?? "").split(" ").filter((name) => name !== "");
+  return list === undefined ? [] : list.split(" ").filter((name) => name !== "");
 }
 
 /** The record to take back and the topic it changed, or the result that turns the revert down. */
@@ -694,15 +777,13 @@ export function revertChange(ctx: HashtagContext, rid: string): HashtagResult {
     return refuse(
       `${tags(missing)} 已經不在了（改名、合併或刪掉了），這筆改動不能自動撤回；請直接在議題上改。`,
     );
-  const before = ctx.store.topics[topic.id] ?? [];
+  const before = tagsIn(ctx.store.topics, topic.id);
   const added = became.filter((name) => !was.includes(name));
   const after = [
     ...before.filter((name) => !added.includes(name)),
     ...gone.filter((name) => !before.includes(name)),
   ];
-  const next = clone(ctx.store);
-  if (after.length === 0) delete next.topics[topic.id];
-  else next.topics[topic.id] = after;
+  const next = withTopicTags(ctx.store, topic.id, after);
   for (const name of added) {
     const entry = next.hashtags[name];
     if (entry !== undefined && isNew(ctx, entry) && topicsWith(next, name).length === 0)
@@ -739,7 +820,7 @@ export function carryMerge(
 ): Carried | null {
   const brought = store.topics[from];
   if (brought === undefined) return null;
-  const before = store.topics[into.id] ?? [];
+  const before = tagsIn(store.topics, into.id);
   const after = [...new Set([...before, ...brought])];
   const next = clone(store);
   delete next.topics[from];
@@ -837,16 +918,27 @@ export function hashtagView(
     settings: { ...store.settings },
     defaults: { ...DEFAULT_SETTINGS },
     ranges: { ...SETTING_RANGES },
-    over: Object.keys(store.topics).filter((id) => (store.topics[id]?.length ?? 0) > max),
-    recent: oversight
-      .unseenChanges(records, WATCHED)
-      .map((record) => ({
-        rid: record.rid ?? "",
-        ts: record.ts,
-        topic: record.topic ?? null,
-        text: record.text ?? "",
-        reverted: oversight.isReverted(records, WATCHED, record.rid ?? ""),
-      }))
-      .toReversed(),
+    over: Object.entries(store.topics)
+      .filter(([, names]) => names.length > max)
+      .map(([id]) => id),
+    recent: recentChanges(records),
   };
+}
+
+/** The aggregator's changes since the last seen mark, newest first. */
+function recentChanges(records: readonly (HashtagRecord & { text?: string })[]): RecentChange[] {
+  const recent: RecentChange[] = [];
+  for (const record of oversight.unseenChanges(records, WATCHED)) {
+    // Every saved record has a rid; only lines from before records had one lack it.
+    if (record.rid === undefined) continue;
+    const reverted = oversight.isReverted(records, WATCHED, record.rid);
+    recent.unshift({
+      rid: record.rid,
+      ts: record.ts,
+      topic: record.topic ?? null,
+      text: record.text ?? "",
+      reverted,
+    });
+  }
+  return recent;
 }

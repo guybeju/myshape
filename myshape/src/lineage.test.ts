@@ -303,3 +303,20 @@ describe("findLines for working out what happened", () => {
     ).toHaveLength(9);
   });
 });
+
+describe("findLines for a hashtag", () => {
+  it("puts the hashtag and the topics with it first, bounded unless everything is asked for", () => {
+    const state = fixture();
+    const tagged = { name: "AI_INFRA", topics: ["billing", "login"] };
+    expect(findLines(state, "ai_infra", [], false, tagged)).toEqual([
+      "hashtag #AI_INFRA：2 個議題",
+      "  billing　帳務重構（高）",
+      "  login　登入（一般）",
+    ]);
+    const many = { name: "X", topics: ["billing", "login", "idea", "a", "b", "c"] };
+    const bounded = findLines(state, "x", [], false, many);
+    expect(bounded.slice(0, 1)).toEqual(["hashtag #X：6 個議題"]);
+    expect(bounded).toContain("  還有 1 個，加 --all 看全部");
+    expect(findLines(state, "x", [], true, many)).toContain("  c　（已不存在）");
+  });
+});

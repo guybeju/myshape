@@ -191,3 +191,16 @@ describe("the filter", () => {
     expect(viewFilter(view)).toEqual(filter({ none: ["AI_INFRA"], view: "w" }));
   });
 });
+
+describe("the URL fragment", () => {
+  it("names only the parts of the filter that are set", () => {
+    expect(filterHash(filter({ text: "gpu" }))).toBe("#/f/text=gpu");
+    expect(filterHash(filter({ any: ["A"] }))).toBe("#/f/any=A");
+    expect(filterHash(filter({ none: ["A"] }))).toBe("#/f/none=A");
+    expect(topicMatch(source(), "nope", NO_FILTER)).toBeNull();
+    expect(filterHash(filter({ untagged: true }))).toBe("#/f/untagged=1");
+    expect(filterHash(filter({ none: ["A", "B"] }))).toBe("#/f/none=A%2CB");
+    expect(filterHash(filter({ view: "w" }))).toBe("#/f/view=w");
+    expect(parseFilterHash("#/f/any=A,,B&untagged=0")).toEqual(filter({ any: ["A", "B"] }));
+  });
+});

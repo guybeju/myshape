@@ -270,20 +270,16 @@ function writeTodos(paths, board, next, outbox) {
     writeFileAtomic(paths.todos, serialize({ ...next, outbox }), FILE_MODE);
     return topics;
 }
-/** Writes the captain's confirmations; confirmations.json is its own commit point. */
-function writeConfirmations(paths, next, outbox) {
-    fs.mkdirSync(paths.boardDataDir, { recursive: true });
-    writeFileAtomic(paths.confirmations, serialize({ ...next, outbox }), FILE_MODE);
-}
 /**
- * Writes the hashtags; hashtags.json is its own commit point. A topic change
- * with a follow-up here writes it after topics.json, so a crash between the
- * two leaves the topic change made and recorded and the follow-up neither: a
- * topic without its hashtags, never a hashtag on a topic that is not there.
+ * Writes a file that is its own commit point: the captain's confirmations, or
+ * the hashtags. A topic change with a follow-up in hashtags.json writes it
+ * after topics.json, so a crash between the two leaves the topic change made
+ * and recorded and the follow-up neither: a topic without its hashtags, never
+ * a hashtag on a topic that is not there.
  */
-function writeHashtags(paths, next, outbox) {
+function writeOwnFile(paths, file, next, outbox) {
     fs.mkdirSync(paths.boardDataDir, { recursive: true });
-    writeFileAtomic(paths.hashtags, serialize({ ...next, outbox }), FILE_MODE);
+    writeFileAtomic(paths[file], serialize({ ...next, outbox }), FILE_MODE);
 }
 /** Saves a change's files and returns the board after it. */
 function writeChange(paths, board, change, stamp) {
@@ -296,12 +292,12 @@ function writeChange(paths, board, change, stamp) {
         };
     }
     if (change.file === "confirmations") {
-        writeConfirmations(paths, change.next, records);
+        writeOwnFile(paths, "confirmations", change.next, records);
         const outbox = { ...board.outbox, confirmations: records };
         return { board: { ...board, confirmations: change.next, outbox }, records };
     }
     if (change.file === "hashtags") {
-        writeHashtags(paths, change.next, records);
+        writeOwnFile(paths, "hashtags", change.next, records);
         return {
             board: { ...board, hashtags: change.next, outbox: { ...board.outbox, hashtags: records } },
             records,
@@ -312,7 +308,7 @@ function writeChange(paths, board, change, stamp) {
     if (change.hashtags === undefined)
         return { board: next, records };
     const follow = stamp(change.hashtags.records);
-    writeHashtags(paths, change.hashtags.next, follow);
+    writeOwnFile(paths, "hashtags", change.hashtags.next, follow);
     return {
         board: {
             ...next,
@@ -345,6 +341,12 @@ export function commitChange(target, board, change, actor) {
         appendError: flushOutbox(target.sink, saved.board.outbox),
     };
 }
+/** The hashtags as they apply to the topics read with them; none when the file is missing. */
+function readHashtags(paths, raw, state) {
+    if (raw === null)
+        return emptyHashtags();
+    return reconcile(parseFile(paths.hashtags, raw, parseHashtags), state);
+}
 /**
  * Reads the state files without writing anything. A crash between the two
  * writes of an archive or reopen can leave a topic in both topic files; the
@@ -375,13 +377,12 @@ export function readBoard(paths) {
     const confirmations = rawConfirmations === null
         ? emptyConfirmations()
         : parseFile(paths.confirmations, rawConfirmations, parseConfirmations);
-    const hashtags = rawHashtags === null ? emptyHashtags() : parseFile(paths.hashtags, rawHashtags, parseHashtags);
     return {
         board: {
             topics: store === null ? state : withProjection(state, store),
             todos: store ?? emptyTodos(),
             confirmations,
-            hashtags: reconcile(hashtags, state),
+            hashtags: readHashtags(paths, rawHashtags, state),
             outbox: {
                 topics: parseOutbox(rawTopics),
                 todos: parseOutbox(rawTodos),

@@ -545,3 +545,47 @@ describe("hashtags through the table", () => {
     expect(board.hashtags.hashtags["AI_INFA"]).toBeUndefined();
   });
 });
+
+describe("each hashtag operation's arguments", () => {
+  function reply(op: string, args: Record<string, unknown>, fromPage = true) {
+    return applyOperation(target, readBoard(paths).board, { op, args, fromPage }, WHO);
+  }
+  const usage = (op: string, args: Record<string, unknown>, fromPage = true) =>
+    expect(reply(op, args, fromPage).response).toMatchObject({ ok: false, code: "usage" });
+
+  it("say what each one needs, and change nothing", () => {
+    usage("hashtag-add", { id: "a" }, false);
+    usage("hashtag-remove", { name: "X" }, false);
+    usage("hashtag-rename", { name: "OLD" });
+    usage("hashtag-merge", { into: "OLD" });
+    usage("hashtag-delete", {});
+    usage("hashtag-lock", { name: "OLD", locked: "yes" });
+    usage("hashtag-color", { name: "OLD" });
+    usage("hashtag-settings", { per_topic_max: "8" });
+    usage("hashtag-revert", {});
+    usage("view-save", { any: [] });
+    usage("view-save", { name: "x", any: "OLD" });
+    usage("view-save", { name: "x", none: [1] });
+    usage("view-save", { name: "x", text: 3 });
+    usage("view-save", { name: "x", id: 3 });
+    usage("view-delete", {});
+    expect(journalLines()).toEqual([]);
+  });
+
+  it("view-save keeps the id it is given", () => {
+    const saved = reply("view-save", { id: "mine", name: "我的", any: ["old"], untagged: true });
+    expect(saved.board.hashtags.views["mine"]).toEqual({
+      name: "我的",
+      any: ["OLD"],
+      none: [],
+      text: "",
+      untagged: true,
+    });
+  });
+
+  it("a split of a topic without hashtags saves only the topic", () => {
+    const split = reply("split", { from: "b", name: "Bit", goal: "g" }, false);
+    expect(split.response.line).toBe("ok bit 已從 b 拆出，放進「一般」");
+    expect(split.records.map((record) => record.kind)).toEqual(["topic.split"]);
+  });
+});

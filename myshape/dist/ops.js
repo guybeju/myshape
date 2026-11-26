@@ -31,25 +31,27 @@ function optionalReason(args) {
         return undefined;
     return typeof reason === "string" ? reason : null;
 }
+/** The optional `id` argument, spread into an input; null when it is not a string. */
+function optionalId(args) {
+    const id = args["id"];
+    if (id === undefined)
+        return {};
+    return typeof id === "string" ? { id } : null;
+}
 function create(ctx, args) {
     const name = stringField(args, "name");
     const goal = stringField(args, "goal");
     const queue = optionalQueue(args);
-    const id = args["id"];
+    const id = optionalId(args);
     if (name === null || goal === null)
         return { usage: "create 需要名稱與 --goal。" };
     if (queue === null)
         return { usage: "--queue 只能是 high、normal、later。" };
-    if (id !== undefined && typeof id !== "string")
+    if (id === null)
         return { usage: "--id 要是字串。" };
     if (hashtagList(args) === null)
         return { usage: "--hashtag 要是 hashtag 名稱。" };
-    const input = {
-        name,
-        goal,
-        ...(id === undefined ? {} : { id }),
-        ...(queue === undefined ? {} : { queue }),
-    };
+    const input = { name, goal, ...id, ...(queue === undefined ? {} : { queue }) };
     return topics.create(ctx.topics, input, ctx.now);
 }
 /** The `hashtags` argument of a create: absent (none), a list of strings, or null when it is something else. */
@@ -133,21 +135,15 @@ function splitInput(args) {
     const from = stringField(args, "from");
     const name = stringField(args, "name");
     const goal = stringField(args, "goal");
-    const id = args["id"];
+    const id = optionalId(args);
     const reason = optionalReason(args);
     if (from === null || name === null || goal === null)
         return { usage: "split 需要來源議題、新名稱與 --goal。" };
-    if (id !== undefined && typeof id !== "string")
+    if (id === null)
         return { usage: "--id 要是字串。" };
     if (reason === null)
         return { usage: "--reason 要是一行文字。" };
-    return {
-        from,
-        name,
-        goal,
-        ...(id === undefined ? {} : { id }),
-        ...(reason === undefined ? {} : { reason }),
-    };
+    return { from, name, goal, ...id, ...(reason === undefined ? {} : { reason }) };
 }
 function split(ctx, args) {
     const input = splitInput(args);
@@ -227,25 +223,23 @@ function closeByCaptain(words) {
 function hashtagUsage(line) {
     return { ok: false, code: "usage", line };
 }
-/** A hashtag operation that names one topic and one hashtag. */
-function onTopicTag(apply) {
+/** A hashtag operation that takes two string arguments, `first` and `second`. */
+function onPair([first, second], apply) {
     return (ctx, args) => {
-        const id = stringField(args, "id");
-        const name = stringField(args, "name");
-        if (id === null || name === null)
-            return hashtagUsage("需要議題 id 與 hashtag 名稱。");
-        return apply(hashtagContext(ctx), id, name);
+        const one = stringField(args, first);
+        const two = stringField(args, second);
+        if (one === null || two === null)
+            return hashtagUsage(`需要 ${first} 與 ${second}。`);
+        return apply(hashtagContext(ctx), one, two);
     };
 }
-/** A hashtag operation that names one hashtag and one more string argument. */
+/** A hashtag operation on one topic: its id and a hashtag name. */
+function onTopicTag(apply) {
+    return onPair(["id", "name"], apply);
+}
+/** A hashtag operation on one hashtag and one more string argument. */
 function onTag(second, apply) {
-    return (ctx, args) => {
-        const name = stringField(args, "name");
-        const value = stringField(args, second);
-        if (name === null || value === null)
-            return hashtagUsage(`需要 hashtag 名稱與 ${second}。`);
-        return apply(hashtagContext(ctx), name, value);
-    };
+    return onPair(["name", second], apply);
 }
 function stringList(value) {
     if (value === undefined)
@@ -258,13 +252,13 @@ function viewInput(args) {
     const text = args["text"] ?? "";
     const any = stringList(args["any"]);
     const none = stringList(args["none"]);
-    const id = args["id"];
+    const id = optionalId(args);
     if (name === null || typeof text !== "string" || any === null || none === null)
         return "視圖需要名稱，any 與 none 是 hashtag 名稱的清單，text 是文字。";
-    if (id !== undefined && typeof id !== "string")
+    if (id === null)
         return "視圖 id 要是字串。";
     return {
-        ...(id === undefined ? {} : { id }),
+        ...id,
         name,
         any,
         none,
@@ -626,6 +620,15 @@ function applyConfirmOp(target, board, request, actor, result) {
     };
     return commit(target, board, change, actor, result.line);
 }
+/** Runs a topic operation, then its follow-up in hashtags.json, and saves both. */
+function runTopicOp(target, board, request, actor, run) {
+    const { operation, ctx } = run;
+    const result = operation.run(ctx, request.args);
+    if ("usage" in result)
+        return answer(board, { ok: false, code: "usage", line: result.usage });
+    const follow = (ok) => operation.hashtags?.(ctx, request.args, ok) ?? { follow: null, line: "" };
+    return applyTopicOp(target, board, request, actor, { result, follow });
+}
 /**
  * Runs one operation and saves what it changed. The page's requests are the
  * captain's, the socket's the agent side's; each channel may run only its own
@@ -648,13 +651,8 @@ export function applyOperation(target, board, request, who) {
         ...who,
     };
     const actor = { by, label: who.label };
-    if (operation.commitFile === "topics") {
-        const result = operation.run(ctx, request.args);
-        if ("usage" in result)
-            return answer(board, { ok: false, code: "usage", line: result.usage });
-        const follow = (ok) => operation.hashtags?.(ctx, request.args, ok) ?? { follow: null, line: "" };
-        return applyTopicOp(target, board, request, actor, { result, follow });
-    }
+    if (operation.commitFile === "topics")
+        return runTopicOp(target, board, request, actor, { operation, ctx });
     if (operation.commitFile === "hashtags")
         return applyHashtagOp(target, board, request, actor, operation.run(ctx, request.args));
     if (operation.commitFile === "confirmations")
