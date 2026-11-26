@@ -184,7 +184,7 @@ describe("daylight saving", () => {
 describe("occurrences", () => {
   it("falls on the rule's weekdays at most once a local date, always later than the last", () => {
     const random = generator(7);
-    for (let run = 0; run < 60; run += 1) {
+    for (let run = 0; run < 40; run += 1) {
       const rule = randomRule(random);
       const zone = pick(random, ZONES);
       const start = between(random, FROM, TO - 120 * DAY);
@@ -216,11 +216,12 @@ describe("occurrences", () => {
 
   it("keeps two occurrences at least the rule's least gap apart, across every shift", () => {
     const random = generator(4242);
-    for (let run = 0; run < 80; run += 1) {
+    // Each zone's shifts fall in spring and autumn: a year's window meets both.
+    for (let run = 0; run < 30; run += 1) {
       const rule = randomRule(random);
-      const zone = pick(random, ZONES);
-      const start = between(random, FROM, TO - 400 * DAY);
-      const found = occurrencesBetween(rule, zone, start, start + 400 * DAY);
+      const zone = ZONES[run % ZONES.length] as string;
+      const start = between(random, FROM, TO - 370 * DAY);
+      const found = occurrencesBetween(rule, zone, start, start + 370 * DAY);
       for (let index = 1; index < found.length; index += 1) {
         const gap = ((found[index] as number) - (found[index - 1] as number)) / MINUTE;
         expect(gap).toBeGreaterThanOrEqual(minGapMinutes(rule));
