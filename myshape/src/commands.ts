@@ -1,7 +1,8 @@
 // The only external programs the board service may run: the aggregator's feed
 // and its deliverer, as the binding names them and binding.ts allows them
 // right before each run (contracts section 7). The argument shapes are fixed
-// here: the board adds "feed" or "deliver" and its own validated arguments.
+// here: the board adds "feed", "topics" or "deliver" and its own validated
+// arguments; "topics" runs the feed's program.
 // Every run is an argument array for execFile (no shell), with captain text
 // only on stdin, and gets a short fixed environment, never the starter's.
 import { execFile } from "node:child_process";
@@ -25,6 +26,7 @@ export type AllowedCommand =
       /** The closed decisions' cursor, passed only to a home whose last report carried one. */
       closed?: { offset: number; sha: string };
     }
+  | { kind: "topics"; home: string; tasks: string[] }
   | { kind: "deliver"; record: string };
 
 export interface CommandResult {
@@ -42,6 +44,8 @@ interface Invocation {
 }
 
 const HOME_ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+/** A task id as every lookup checks it. */
+export const TASK_ID = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 const SHA = /^(-|[0-9a-f]{64})$/;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
@@ -79,9 +83,18 @@ function feedArgs(command: Extract<AllowedCommand, { kind: "feed" }>): string[] 
   return [...args, String(closed.offset), closed.sha];
 }
 
+function topicsArgs(command: Extract<AllowedCommand, { kind: "topics" }>): string[] {
+  if (!HOME_ID.test(command.home)) refuse(`malformed home id: ${command.home}`);
+  if (command.tasks.length === 0) refuse("topics needs at least one task id");
+  const bad = command.tasks.find((task) => !TASK_ID.test(task));
+  if (bad !== undefined) refuse(`malformed task id: ${bad}`);
+  return ["topics", command.home, ...command.tasks];
+}
+
 /** Turns an allowed command into the arguments to run; throws CommandRefused otherwise. */
 export function invocationFor(command: AllowedCommand): Invocation {
   if (command.kind === "feed") return { args: feedArgs(command) };
+  if (command.kind === "topics") return { args: topicsArgs(command) };
   if (/[\r\n]/.test(command.record)) refuse("an action record must be one line");
   return { args: ["deliver"], stdin: `${command.record}\n` };
 }
@@ -125,7 +138,7 @@ export function commandRunner(config: BoardConfig, gate: ProgramGate): CommandRu
         resolve({ code: null, stdout: "", stderr: (error as Error).message });
         return;
       }
-      const allowed = gate(command.kind);
+      const allowed = gate(command.kind === "deliver" ? "deliver" : "feed");
       if ("blocked" in allowed) {
         resolve({ code: null, stdout: "", stderr: "", blocked: allowed.blocked });
         return;

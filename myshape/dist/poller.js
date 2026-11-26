@@ -1,5 +1,5 @@
 import { MAIN_HOME } from "./journal.js";
-import { parseReport } from "./report.js";
+import { parseReport, parseTopicsAnswer } from "./report.js";
 export const DEFAULT_TIMINGS = {
     readMs: 10_000,
     timeoutMs: 60_000,
@@ -10,6 +10,8 @@ export const DEFAULT_TIMINGS = {
 export const FEED_CANNOT_REPORT = 4;
 /** The feed's exit code for arguments it does not take. */
 const FEED_USAGE = 2;
+/** The code_commit of a home whose code is not known yet because it never reported. */
+const UNREAD = Symbol("unread");
 const TICK_MS = 250;
 const MAX_CATCH_UP_READS = 50;
 const ERROR_MAX = 400;
@@ -24,6 +26,7 @@ function newHome(id) {
         version: "unknown",
         reading: null,
         dueAt: Number.NEGATIVE_INFINITY,
+        topicsRefusedAt: null,
     };
 }
 export class Poller {
@@ -94,6 +97,25 @@ export class Poller {
     async readFresh(id) {
         await this.homes.get(id)?.reading;
         return this.readNow(id);
+    }
+    /**
+     * Asks the feed for these tasks' tag files in one home, with a call that
+     * starts now and leaves what the board knows of the home untouched.
+     *
+     * Returns:
+     *   The tag texts by task (a task left out has no tag file), or null when
+     *   the call is not supported or failed, or the feed may not run: the caller
+     *   then reads the whole home. After exit 2 the home is not asked again
+     *   until it reports other code.
+     */
+    async readTopics(id, tasks) {
+        const home = this.homes.get(id);
+        if (home === undefined || home.topicsRefusedAt !== null || this.blocked() !== null)
+            return null;
+        const result = await this.run({ kind: "topics", home: id, tasks }, home.timeoutMs ?? this.timings.timeoutMs);
+        if (result.code === FEED_USAGE)
+            home.topicsRefusedAt = home.report?.code_commit ?? UNREAD;
+        return result.code === 0 ? parseTopicsAnswer(result.stdout, tasks) : null;
     }
     /** Reads every home now, the main home first so new secondmates are included. */
     async refreshAll() {
@@ -168,6 +190,10 @@ export class Poller {
             return false;
         }
         const { report } = parsed;
+        if (home.topicsRefusedAt === UNREAD)
+            home.topicsRefusedAt = report.code_commit;
+        if (home.topicsRefusedAt !== report.code_commit)
+            home.topicsRefusedAt = null;
         const rewind = this.storeLedger(home.id, report);
         home.report = report;
         home.lastOkAt = Date.now();

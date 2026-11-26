@@ -324,7 +324,11 @@ class Placer {
 
   /** The topic a task belongs to now. */
   current(home: string, task: string): Placement {
-    const tags = this.tagsOf(home, task);
+    return this.latest(this.tagsOf(home, task));
+  }
+
+  /** The topic the last of these tags names. */
+  latest(tags: Tag[]): Placement {
     return this.classify(tags[tags.length - 1]?.topic);
   }
 
@@ -345,6 +349,11 @@ export function placeTask(
   task: string,
 ): Placement {
   return new Placer(topics, homes).current(home, task);
+}
+
+/** Where a task with this tag file text belongs right now ("" for a task with none). */
+export function placeTagText(topics: Frozen<TopicState>, text: string): Placement {
+  return new Placer(topics, []).latest(parseTags(text));
 }
 
 function homeView(home: HomeSnapshot, input: ViewInput): HomeView {
