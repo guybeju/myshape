@@ -50,16 +50,18 @@ export function beforeDeadline<T>(
 /**
  * A home's tag files that hold `task`'s, from a read that starts now: the
  * topics call's answer, or the whole home's report when the call gave none.
- * Null when neither read succeeded.
+ * Null when neither read succeeded, or when `deadline` (epoch ms) passed
+ * before the whole read could start.
  */
 export async function freshTags(
   poller: Poller,
   home: string,
   task: string,
+  deadline: number = Number.POSITIVE_INFINITY,
 ): Promise<Readonly<Record<string, string>> | null> {
-  const asked = await poller.readTopics(home, [task]);
+  const asked = await poller.readTopics(home, [task], deadline);
   if (asked !== null) return asked;
-  if (!(await poller.readFresh(home))) return null;
+  if (Date.now() >= deadline || !(await poller.readFresh(home))) return null;
   return poller.snapshots().find((entry) => entry.id === home)?.report?.topics ?? null;
 }
 
@@ -83,7 +85,9 @@ export async function reminderPrefix(
   task: string,
   deadline: number,
 ): Promise<string> {
-  const tags = await beforeDeadline(deadline, null, () => freshTags(host.poller, home, task));
+  const tags = await beforeDeadline(deadline, null, () =>
+    freshTags(host.poller, home, task, deadline),
+  );
   const topics = host.topics();
   const placement =
     tags === null
@@ -106,7 +110,9 @@ export async function findTasks(
   task: string,
   deadline: number,
 ): Promise<TaskTags[]> {
-  const main = await beforeDeadline(deadline, null, () => freshTags(poller, MAIN_HOME, task));
+  const main = await beforeDeadline(deadline, null, () =>
+    freshTags(poller, MAIN_HOME, task, deadline),
+  );
   const found: TaskTags[] = [];
   for (const home of poller.snapshots()) {
     const tagFiles = home.id === MAIN_HOME && main !== null ? main : (home.report?.topics ?? {});

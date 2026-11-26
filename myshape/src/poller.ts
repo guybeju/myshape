@@ -34,6 +34,9 @@ const FEED_USAGE = 2;
 /** The code_commit of a home whose code is not known yet because it never reported. */
 const UNREAD = Symbol("unread");
 
+/** How many topics calls may run at once, across every home. */
+export const MAX_TOPICS_CALLS = 2;
+
 const TICK_MS = 250;
 const MAX_CATCH_UP_READS = 50;
 const ERROR_MAX = 400;
@@ -49,6 +52,8 @@ interface HomeState extends HomeSnapshot {
    * the board still asks; a report from other code asks again.
    */
   topicsRefusedAt: string | typeof UNREAD | null;
+  /** The topics calls of the home in flight; a read of the home waits them out. */
+  topicsCalls: Set<Promise<void>>;
 }
 
 function newHome(id: string): HomeState {
@@ -63,6 +68,7 @@ function newHome(id: string): HomeState {
     reading: null,
     dueAt: Number.NEGATIVE_INFINITY,
     topicsRefusedAt: null,
+    topicsCalls: new Set(),
   };
 }
 
@@ -83,6 +89,8 @@ export class Poller {
   private readonly homes = new Map<string, HomeState>([[MAIN_HOME, newHome(MAIN_HOME)]]);
   private lastViewerAt = 0;
   private timer: NodeJS.Timeout | null = null;
+  private topicsRunning = 0;
+  private topicsWaiting: (() => void)[] = [];
 
   constructor(
     private readonly run: CommandRunner,
@@ -158,16 +166,62 @@ export class Poller {
    *   the call is not supported or failed, or the feed may not run: the caller
    *   then reads the whole home. After exit 2 the home is not asked again
    *   until it reports other code.
+   *
+   * The call waits while a read of the home runs and while MAX_TOPICS_CALLS
+   * calls run; one that could not start before `deadline` (epoch ms) runs
+   * nothing and gives null.
    */
-  async readTopics(id: string, tasks: string[]): Promise<Record<string, string> | null> {
+  async readTopics(
+    id: string,
+    tasks: string[],
+    deadline: number = Number.POSITIVE_INFINITY,
+  ): Promise<Record<string, string> | null> {
     const home = this.homes.get(id);
-    if (home === undefined || home.topicsRefusedAt !== null || this.blocked() !== null) return null;
-    const result = await this.run(
-      { kind: "topics", home: id, tasks },
-      home.timeoutMs ?? this.timings.timeoutMs,
-    );
-    if (result.code === FEED_USAGE) home.topicsRefusedAt = home.report?.code_commit ?? UNREAD;
-    return result.code === 0 ? parseTopicsAnswer(result.stdout, tasks) : null;
+    if (home === undefined || !this.mayAskTopics(home)) return null;
+    const done = await this.topicsTurn(home);
+    try {
+      if (this.homes.get(id) !== home || !this.mayAskTopics(home) || Date.now() >= deadline)
+        return null;
+      const result = await this.run(
+        { kind: "topics", home: id, tasks },
+        home.timeoutMs ?? this.timings.timeoutMs,
+      );
+      if (result.code === FEED_USAGE) home.topicsRefusedAt = home.report?.code_commit ?? UNREAD;
+      return result.code === 0 ? parseTopicsAnswer(result.stdout, tasks) : null;
+    } finally {
+      done();
+    }
+  }
+
+  private mayAskTopics(home: HomeState): boolean {
+    return home.topicsRefusedAt === null && this.blocked() === null;
+  }
+
+  /**
+   * Waits until a topics call of `home` may start: fewer than MAX_TOPICS_CALLS
+   * run and no read of the home runs. Both are checked in the same turn the
+   * call is counted, so no read of the home starts in between. Returns what
+   * ends the call's turn.
+   */
+  private async topicsTurn(home: HomeState): Promise<() => void> {
+    for (;;) {
+      if (this.topicsRunning >= MAX_TOPICS_CALLS)
+        await new Promise<void>((resume) => this.topicsWaiting.push(resume));
+      else if (home.reading !== null) await Promise.allSettled([home.reading]);
+      else break;
+    }
+    this.topicsRunning += 1;
+    let finished: (() => void) | undefined;
+    const call = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    home.topicsCalls.add(call);
+    return () => {
+      home.topicsCalls.delete(call);
+      finished?.();
+      this.topicsRunning -= 1;
+      for (const resume of this.topicsWaiting.splice(0)) resume();
+    };
   }
 
   /** Reads every home now, the main home first so new secondmates are included. */
@@ -190,6 +244,7 @@ export class Poller {
   }
 
   private async readHome(home: HomeState): Promise<boolean> {
+    while (home.topicsCalls.size > 0) await Promise.all(home.topicsCalls);
     const before = fingerprint(home);
     const eventsBefore = this.journal.events.length;
     for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {

@@ -265,4 +265,15 @@ describe("a page write's re-read of a tag", () => {
     expect(await freshTags(s.poller, "main", "t1")).toBeNull();
     expect(await freshTags(s.poller, "nobody", "t1")).toBeNull();
   });
+
+  it("starts no full read once the deadline passed during a failed topics call", async () => {
+    const s = setup();
+    s.answers.set("main", (command) =>
+      command.kind === "topics"
+        ? { code: 1, stdout: "", stderr: "broken", delayMs: 60 }
+        : ok(reportOf({ t1: LOGIN })),
+    );
+    expect(await freshTags(s.poller, "main", "t1", Date.now() + 30)).toBeNull();
+    expect(s.runs).toEqual(["topics main"]);
+  });
 });

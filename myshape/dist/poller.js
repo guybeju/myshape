@@ -12,6 +12,8 @@ export const FEED_CANNOT_REPORT = 4;
 const FEED_USAGE = 2;
 /** The code_commit of a home whose code is not known yet because it never reported. */
 const UNREAD = Symbol("unread");
+/** How many topics calls may run at once, across every home. */
+export const MAX_TOPICS_CALLS = 2;
 const TICK_MS = 250;
 const MAX_CATCH_UP_READS = 50;
 const ERROR_MAX = 400;
@@ -27,6 +29,7 @@ function newHome(id) {
         reading: null,
         dueAt: Number.NEGATIVE_INFINITY,
         topicsRefusedAt: null,
+        topicsCalls: new Set(),
     };
 }
 export class Poller {
@@ -39,6 +42,8 @@ export class Poller {
     homes = new Map([[MAIN_HOME, newHome(MAIN_HOME)]]);
     lastViewerAt = 0;
     timer = null;
+    topicsRunning = 0;
+    topicsWaiting = [];
     constructor(run, journal, offsets, timings, host, 
     /** Why the feed may not run now, or null when it may (binding.ts). */
     blocked) {
@@ -107,15 +112,59 @@ export class Poller {
      *   the call is not supported or failed, or the feed may not run: the caller
      *   then reads the whole home. After exit 2 the home is not asked again
      *   until it reports other code.
+     *
+     * The call waits while a read of the home runs and while MAX_TOPICS_CALLS
+     * calls run; one that could not start before `deadline` (epoch ms) runs
+     * nothing and gives null.
      */
-    async readTopics(id, tasks) {
+    async readTopics(id, tasks, deadline = Number.POSITIVE_INFINITY) {
         const home = this.homes.get(id);
-        if (home === undefined || home.topicsRefusedAt !== null || this.blocked() !== null)
+        if (home === undefined || !this.mayAskTopics(home))
             return null;
-        const result = await this.run({ kind: "topics", home: id, tasks }, home.timeoutMs ?? this.timings.timeoutMs);
-        if (result.code === FEED_USAGE)
-            home.topicsRefusedAt = home.report?.code_commit ?? UNREAD;
-        return result.code === 0 ? parseTopicsAnswer(result.stdout, tasks) : null;
+        const done = await this.topicsTurn(home);
+        try {
+            if (this.homes.get(id) !== home || !this.mayAskTopics(home) || Date.now() >= deadline)
+                return null;
+            const result = await this.run({ kind: "topics", home: id, tasks }, home.timeoutMs ?? this.timings.timeoutMs);
+            if (result.code === FEED_USAGE)
+                home.topicsRefusedAt = home.report?.code_commit ?? UNREAD;
+            return result.code === 0 ? parseTopicsAnswer(result.stdout, tasks) : null;
+        }
+        finally {
+            done();
+        }
+    }
+    mayAskTopics(home) {
+        return home.topicsRefusedAt === null && this.blocked() === null;
+    }
+    /**
+     * Waits until a topics call of `home` may start: fewer than MAX_TOPICS_CALLS
+     * run and no read of the home runs. Both are checked in the same turn the
+     * call is counted, so no read of the home starts in between. Returns what
+     * ends the call's turn.
+     */
+    async topicsTurn(home) {
+        for (;;) {
+            if (this.topicsRunning >= MAX_TOPICS_CALLS)
+                await new Promise((resume) => this.topicsWaiting.push(resume));
+            else if (home.reading !== null)
+                await Promise.allSettled([home.reading]);
+            else
+                break;
+        }
+        this.topicsRunning += 1;
+        let finished;
+        const call = new Promise((resolve) => {
+            finished = resolve;
+        });
+        home.topicsCalls.add(call);
+        return () => {
+            home.topicsCalls.delete(call);
+            finished?.();
+            this.topicsRunning -= 1;
+            for (const resume of this.topicsWaiting.splice(0))
+                resume();
+        };
     }
     /** Reads every home now, the main home first so new secondmates are included. */
     async refreshAll() {
@@ -134,6 +183,8 @@ export class Poller {
         }
     }
     async readHome(home) {
+        while (home.topicsCalls.size > 0)
+            await Promise.all(home.topicsCalls);
         const before = fingerprint(home);
         const eventsBefore = this.journal.events.length;
         for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {

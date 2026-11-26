@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AllowedCommand, CommandResult } from "./commands.js";
 import { Journal, Offsets } from "./journal.js";
 import { boardPaths } from "./layout.js";
-import { DEFAULT_TIMINGS, Poller } from "./poller.js";
+import { DEFAULT_TIMINGS, MAX_TOPICS_CALLS, Poller } from "./poller.js";
 import type { PollTimings } from "./poller.js";
 
 const LINE = (task: string) => JSON.stringify({ v: 1, ts: 5, event: "task.status", task });
@@ -707,5 +707,140 @@ describe("the topics call", () => {
     const blocked = setup(TIMINGS, "要先在頁面上確認");
     expect(await blocked.poller.readTopics("main", ["t1"])).toBeNull();
     expect([...s.calls, ...blocked.calls]).toEqual([]);
+  });
+});
+
+describe("the topics call's turn", () => {
+  const TOPICS_OK: CommandResult = { code: 0, stdout: '{"topics":{}}', stderr: "" };
+
+  /** A feed whose every call waits until the test lets it answer, logging when each starts and ends. */
+  function heldFeed(s: Setup) {
+    const log: string[] = [];
+    const held: { name: string; finish: (result?: CommandResult) => void }[] = [];
+    const answer = (command: AllowedCommand): Promise<CommandResult> => {
+      const name = command.kind === "deliver" ? "deliver" : `${command.kind} ${command.home}`;
+      log.push(`start ${name}`);
+      return new Promise((resolve) => {
+        held.push({
+          name,
+          finish: (result) => {
+            log.push(`end ${name}`);
+            resolve(result ?? (command.kind === "topics" ? TOPICS_OK : report(SM_LIST)));
+          },
+        });
+      });
+    };
+    for (const home of ["main", "sm1", "far1"]) s.answers.set(home, answer);
+    /** Lets the oldest held call named `name` answer, then lets the poller react. */
+    const finish = async (name: string, result?: CommandResult): Promise<void> => {
+      const index = held.findIndex((call) => call.name === name);
+      if (index < 0) throw new Error(`no held call: ${name}; held: ${held.map((c) => c.name)}`);
+      const [call] = held.splice(index, 1);
+      call?.finish(result);
+      await settle();
+    };
+    return { log, held, finish };
+  }
+  const SM_LIST = { secondmates: SECONDMATES };
+  const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+  /** A poller that knows sm1 and far1, every later call held. */
+  async function knowingSetup() {
+    const s = setup();
+    s.answers.set("main", () => report(SM_LIST));
+    await s.poller.readNow("main");
+    s.calls.length = 0;
+    return { s, feed: heldFeed(s) };
+  }
+
+  it("waits out a read of the same home before it starts", async () => {
+    const { s, feed } = await knowingSetup();
+    const read = s.poller.readNow("sm1");
+    const topics = s.poller.readTopics("sm1", ["t1"]);
+    await settle();
+    expect(feed.log).toEqual(["start feed sm1"]);
+    await feed.finish("feed sm1");
+    expect(await read).toBe(true);
+    expect(feed.log).toEqual(["start feed sm1", "end feed sm1", "start topics sm1"]);
+    await feed.finish("topics sm1");
+    expect(await topics).toEqual({});
+  });
+
+  it("holds off a read of the same home until it ends, and not a read of another home", async () => {
+    const { s, feed } = await knowingSetup();
+    const topics = s.poller.readTopics("sm1", ["t1"]);
+    await settle();
+    const own = s.poller.readNow("sm1");
+    const other = s.poller.readNow("far1");
+    await settle();
+    expect(feed.log).toEqual(["start topics sm1", "start feed far1"]);
+    await feed.finish("topics sm1");
+    expect(await topics).toEqual({});
+    expect(feed.log.slice(2)).toEqual(["end topics sm1", "start feed sm1"]);
+    await feed.finish("feed sm1");
+    await feed.finish("feed far1");
+    expect(await own).toBe(true);
+    expect(await other).toBe(true);
+  });
+
+  it(`runs at most ${MAX_TOPICS_CALLS} calls at once and starts a waiting one when a call fails`, async () => {
+    const { s, feed } = await knowingSetup();
+    const homes = ["main", "sm1", "far1"];
+    expect(homes.length).toBeGreaterThan(MAX_TOPICS_CALLS);
+    const answers = homes.map((home) => s.poller.readTopics(home, ["t1"]));
+    await settle();
+    expect(feed.held.map((call) => call.name)).toEqual(
+      homes.slice(0, MAX_TOPICS_CALLS).map((home) => `topics ${home}`),
+    );
+    await feed.finish("topics main", { code: 1, stdout: "", stderr: "broken" });
+    expect(await answers[0]).toBeNull();
+    expect(feed.held.map((call) => call.name)).toEqual(["topics sm1", "topics far1"]);
+    await feed.finish("topics sm1");
+    await feed.finish("topics far1");
+    expect(await Promise.all(answers)).toEqual([null, {}, {}]);
+  });
+
+  it("runs nothing once its home's feed refused the call while it waited", async () => {
+    const { s, feed } = await knowingSetup();
+    const first = s.poller.readTopics("sm1", ["t1"]);
+    const second = s.poller.readTopics("sm1", ["t2"]);
+    const third = s.poller.readTopics("sm1", ["t3"]);
+    await settle();
+    await feed.finish("topics sm1", { code: 2, stdout: "", stderr: "feed or deliver" });
+    await feed.finish("topics sm1", { code: 2, stdout: "", stderr: "feed or deliver" });
+    expect(await Promise.all([first, second, third])).toEqual([null, null, null]);
+    expect(feed.log.filter((line) => line.startsWith("start"))).toHaveLength(MAX_TOPICS_CALLS);
+  });
+
+  describe("with a deadline", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("runs nothing when it could not start before the deadline", async () => {
+      const { s, feed } = await knowingSetup();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const read = s.poller.readNow("sm1");
+      const topics = s.poller.readTopics("sm1", ["t1"], Date.now() + 100);
+      await settle();
+      vi.advanceTimersByTime(100);
+      await feed.finish("feed sm1");
+      await read;
+      expect(await topics).toBeNull();
+      expect(feed.log).toEqual(["start feed sm1", "end feed sm1"]);
+    });
+
+    it("starts before the deadline when the read ends in time", async () => {
+      const { s, feed } = await knowingSetup();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const read = s.poller.readNow("sm1");
+      const topics = s.poller.readTopics("sm1", ["t1"], Date.now() + 100);
+      await settle();
+      vi.advanceTimersByTime(99);
+      await feed.finish("feed sm1");
+      await read;
+      await feed.finish("topics sm1");
+      expect(await topics).toEqual({});
+    });
   });
 });
