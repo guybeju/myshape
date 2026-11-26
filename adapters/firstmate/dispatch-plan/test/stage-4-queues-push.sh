@@ -29,7 +29,7 @@ push_setup() {
   STUB="$TMP_ROOT/$name-stub"
   mkdir -p "$CODE/bin" "$STUB/far"
   for script in fm-dispatch-plan.sh fm-primary-scope-lib.sh myshape-lib.sh fm-secondmate-registry-lib.sh \
-    fm-queue-source-lib.sh; do
+    fm-queue-source-lib.sh fm-board-lib.sh; do
     cp "$ROOT/bin/$script" "$CODE/bin/"
   done
   {
