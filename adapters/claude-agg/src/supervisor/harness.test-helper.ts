@@ -255,6 +255,13 @@ async function* emit(step: Step, call: Call) {
 
 type Json = Record<string, unknown>;
 
+/** The parts of a home's schedules.json the fake board's take and close change. */
+interface ScheduleDoc {
+  occurrences: Record<string, Json>;
+  recent: Record<string, Json[]>;
+  save: () => void;
+}
+
 /**
  * Plays git (worktree add, remove, list; rev-list), the board's command
  * (status, open, summary, and schedule take and close against the home's
@@ -300,36 +307,51 @@ export class FakeCommands {
   private schedule(request: CommandRequest): CommandResult {
     const [, sub, key = "", ...rest] = request.args;
     const path = `${request.env["MYSHAPE_HOME"] ?? ""}/data/myshape/schedules.json`;
-    const doc = (existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {}) as Json;
-    const occurrences = (doc["occurrences"] ?? {}) as Record<string, Json>;
-    const recent = (doc["recent"] ?? {}) as Record<string, Json[]>;
+    const doc = {
+      occurrences: {},
+      recent: {},
+      ...(existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {}),
+    } as Json;
+    const file: ScheduleDoc = {
+      occurrences: doc["occurrences"] as Record<string, Json>,
+      recent: doc["recent"] as Record<string, Json[]>,
+      save: () =>
+        writeFileSync(
+          path,
+          JSON.stringify({ ...doc, occurrences: file.occurrences, recent: file.recent }),
+        ),
+    };
     const note = rest[rest.indexOf("--note") + 1] ?? "";
-    const occurrence = occurrences[key];
-    const open =
-      occurrence !== undefined && Date.parse(String(occurrence["closes_by"])) > this.nowMs();
-    const save = () => writeFileSync(path, JSON.stringify({ ...doc, occurrences, recent }));
-    if (sub === "take") {
-      if (!open) return done(1, "", `${key} 不是開著的一場。`);
-      if (occurrence["state"] === "taken") return done(0, `ok ${key} 本來就已接下\n`);
-      occurrences[key] = { ...occurrence, state: "taken", taken_at: "now", note };
-      save();
-      return done(0, `ok ${key} 已接下\n`);
-    }
-    if (sub === "close") {
-      if (this.closeStatus !== 0) return done(this.closeStatus, "", "沒有回答");
-      const series = key.split(":")[0] ?? "";
-      if ((recent[series] ?? []).some((entry) => entry["key"] === key))
-        return done(0, `ok ${key} 本來就已結束\n`);
-      if (!open) return done(1, "", `${key} 不是開著的一場。`);
-      delete occurrences[key];
-      recent[series] = [
-        ...(recent[series] ?? []),
-        { key, outcome: rest[0], by: "aggregator", note },
-      ];
-      save();
-      return done(0, `ok ${key} 已結束\n`);
-    }
+    if (sub === "take") return this.take(file, key, note);
+    if (sub === "close") return this.close(file, key, rest[0] ?? "", note);
     return done(2, "", `unplayed schedule ${String(sub)}`);
+  }
+
+  private isOpen(file: ScheduleDoc, key: string): boolean {
+    const occurrence = file.occurrences[key];
+    return occurrence !== undefined && Date.parse(String(occurrence["closes_by"])) > this.nowMs();
+  }
+
+  private take(file: ScheduleDoc, key: string, note: string): CommandResult {
+    const occurrence = file.occurrences[key];
+    if (occurrence === undefined || !this.isOpen(file, key))
+      return done(1, "", `${key} 不是開著的一場。`);
+    if (occurrence["state"] === "taken") return done(0, `ok ${key} 本來就已接下\n`);
+    file.occurrences[key] = { ...occurrence, state: "taken", taken_at: "now", note };
+    file.save();
+    return done(0, `ok ${key} 已接下\n`);
+  }
+
+  private close(file: ScheduleDoc, key: string, outcome: string, note: string): CommandResult {
+    if (this.closeStatus !== 0) return done(this.closeStatus, "", "沒有回答");
+    const series = key.split(":")[0] ?? "";
+    const recent = file.recent[series] ?? [];
+    if (recent.some((entry) => entry["key"] === key)) return done(0, `ok ${key} 本來就已結束\n`);
+    if (!this.isOpen(file, key)) return done(1, "", `${key} 不是開著的一場。`);
+    delete file.occurrences[key];
+    file.recent[series] = [...recent, { key, outcome, by: "aggregator", note }];
+    file.save();
+    return done(0, `ok ${key} 已結束\n`);
   }
 
   /** The arguments of every `schedule` command the supervisor ran. */

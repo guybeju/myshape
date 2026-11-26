@@ -111,25 +111,24 @@ function workFor(key: string, ids: Iterable<string>): string[] {
   });
 }
 
+/** An open occurrence none of whose tasks started: it keeps a place, or closes if planned to nothing. */
+function unstarted(key: string, rings: boolean, view: WorkView, work: ScheduleWork): void {
+  const queued = workFor(key, view.queued).length > 0;
+  const planned = view.planned.get(key);
+  if (planned === "nothing" && !queued) work.close.push({ key, note: NOTE.nothing });
+  else if (rings && (planned === undefined || queued)) work.reserved.add(key);
+}
+
 /** What becomes of one open occurrence this pass. */
-function oneOccurrence(
-  key: string,
-  phase: OccurrencePhase,
-  view: WorkView,
-  work: ScheduleWork,
-): void {
+function oneOccurrence(key: string, rings: boolean, view: WorkView, work: ScheduleWork): void {
   if (view.live.has(key)) return;
   const tasks = workFor(key, view.tasks.keys()).toSorted();
-  const queued = workFor(key, view.queued);
   if (tasks.length === 0) {
-    const planned = view.planned.get(key);
-    if (planned === "nothing" && queued.length === 0) work.close.push({ key, note: NOTE.nothing });
-    else if (phase !== "silent" && (planned === undefined || queued.length > 0))
-      work.reserved.add(key);
+    unstarted(key, rings, view, work);
     return;
   }
   const ended = tasks.every((id) => ENDED.has(view.tasks.get(id) ?? "working"));
-  if (ended && queued.length === 0) {
+  if (ended && workFor(key, view.queued).length === 0) {
     const states = tasks.map((id) => `${id} ${view.tasks.get(id) ?? ""}`);
     work.close.push({ key, note: NOTE.ended(states) });
   }
@@ -142,21 +141,28 @@ function oneOccurrence(
  */
 export function scheduleWork(view: WorkView): ScheduleWork {
   const work: ScheduleWork = { reserved: new Set(), close: [], drop: [] };
-  for (const [key, occurrence] of [...view.schedules.occurrences].toSorted(([a], [b]) =>
-    a < b ? -1 : 1,
-  )) {
+  const keys = [...view.schedules.occurrences.keys()].toSorted();
+  for (const key of keys) {
     const phase = occurrencePhase(view.schedules, key, view.nowMs);
-    if (phase === "ended") continue;
-    const series = view.schedules.series.get(occurrence.series);
-    if (series === undefined || !view.usable(series.topic)) continue;
-    oneOccurrence(key, phase, view, work);
+    const topic = topicOf(view.schedules, key);
+    if (phase === "ended" || topic === undefined || !view.usable(topic)) continue;
+    oneOccurrence(key, phase !== "silent", view, work);
   }
-  for (const id of view.queued) {
-    const ref = workOf(id);
-    if (ref === undefined || ref.makeUp) continue;
-    if (occurrencePhase(view.schedules, ref.key, view.nowMs) === "ended") work.drop.push(id);
-  }
+  work.drop = view.queued.filter((id) => lostItsOccurrence(id, view));
   return work;
+}
+
+/** The topic of an occurrence's schedule, or undefined when either is not in the file. */
+function topicOf(schedules: SchedulesFile, key: string): string | undefined {
+  const occurrence = schedules.occurrences.get(key);
+  return occurrence === undefined ? undefined : schedules.series.get(occurrence.series)?.topic;
+}
+
+/** Whether a queued task is an occurrence's work whose occurrence has ended. */
+function lostItsOccurrence(id: string, view: WorkView): boolean {
+  const ref = workOf(id);
+  if (ref === undefined || ref.makeUp) return false;
+  return occurrencePhase(view.schedules, ref.key, view.nowMs) === "ended";
 }
 
 /** A schedule notice as `deliver` landed it: the occurrence it is about. */

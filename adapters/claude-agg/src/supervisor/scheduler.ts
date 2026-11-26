@@ -65,6 +65,13 @@ function keptPlaces(running: readonly Slot[], reserved: ReadonlySet<string>): st
   return [...reserved].filter((key) => !served.has(key)).toSorted();
 }
 
+/** Why a candidate waits for a place another occurrence keeps, or undefined. */
+function keptReason(candidate: Candidate, running: readonly Slot[], reserved: ReadonlySet<string>) {
+  if (candidate.occurrence !== undefined && reserved.has(candidate.occurrence)) return undefined;
+  const kept = keptPlaces(running, reserved);
+  return running.length + kept.length >= MAX_RUNNING ? WAIT.reserved(kept[0] ?? "") : undefined;
+}
+
 function waitReason(candidate: Candidate, running: readonly Slot[], situation: Situation) {
   const status = situation.status(candidate);
   if (status !== "dispatchable") return STATUS_WAIT[status];
@@ -72,10 +79,7 @@ function waitReason(candidate: Candidate, running: readonly Slot[], situation: S
   const sameTopic = running.filter((slot) => slot.topic === candidate.topic);
   if (sameTopic.length >= MAX_PER_TOPIC) return WAIT.topicBusy(sameTopic[0]?.id ?? "");
   if (running.length >= MAX_RUNNING) return WAIT.full;
-  const kept = keptPlaces(running, situation.reserved);
-  const own = candidate.occurrence !== undefined && situation.reserved.has(candidate.occurrence);
-  if (!own && running.length + kept.length >= MAX_RUNNING) return WAIT.reserved(kept[0] ?? "");
-  return undefined;
+  return keptReason(candidate, running, situation.reserved);
 }
 
 /** What starts now, in order, and why each other candidate waits. */

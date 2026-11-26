@@ -79,26 +79,34 @@ const SCHEDULE_EVENTS = [
   "schedule.closed",
 ] as const;
 
+type OccurrencePart = Omit<ScheduleNotice, "event" | "topic">;
+
+/** A notice's `occurrence` object, or null when it is missing or unusable. */
+function parseOccurrence(raw: unknown): OccurrencePart | null {
+  if (!isRecord(raw)) return null;
+  const [key, at, local] = [textOf(raw["key"]), str(raw["at"]), textOf(raw["local"])];
+  const rt = RT_VALUES.find((value): value is Rt => value === raw["rt"]);
+  if (!isOccurrenceKey(key) || at === undefined || rt === undefined) return null;
+  return { key, at, local, rt, expiresAtMs: timeOf(raw["expires_at"]) };
+}
+
+function textOf(value: unknown): string {
+  return str(value) ?? "";
+}
+
+/** A UTC ISO time in epoch milliseconds, or null when it is not one. */
+function timeOf(value: unknown): number | null {
+  const ms = Date.parse(textOf(value));
+  return Number.isNaN(ms) ? null : ms;
+}
+
 /** A schedule notice's occurrence, or null when the notice is not one or its occurrence is unusable. */
 function parseScheduleNotice(event: string, record: Json): ScheduleNotice | null {
   const known = SCHEDULE_EVENTS.find((name) => name === event);
-  const occurrence = record["occurrence"];
   const topic = isRecord(record["topic"]) ? str(record["topic"]["id"]) : undefined;
-  if (known === undefined || !isRecord(occurrence) || topic === undefined) return null;
-  const [key, at] = [str(occurrence["key"]), str(occurrence["at"])];
-  const rt = RT_VALUES.find((value): value is Rt => value === occurrence["rt"]);
-  if (key === undefined || !isOccurrenceKey(key) || at === undefined || rt === undefined)
-    return null;
-  const expires = Date.parse(str(occurrence["expires_at"]) ?? "");
-  return {
-    event: known,
-    key,
-    topic,
-    at,
-    local: str(occurrence["local"]) ?? "",
-    rt,
-    expiresAtMs: Number.isNaN(expires) ? null : expires,
-  };
+  const occurrence = parseOccurrence(record["occurrence"]);
+  if (known === undefined || topic === undefined || occurrence === null) return null;
+  return { event: known, topic, ...occurrence };
 }
 
 function parseNotice(record: Json): Action | undefined {
@@ -201,11 +209,15 @@ function sortScheduleNotice(item: InboxItem & { kind: "notice" }, sorted: Sorted
   else sorted.schedule.push({ ...item, schedule });
 }
 
-function sortNotice(item: InboxItem & { kind: "notice" }, view: InboxView, sorted: Sorted): void {
-  if (item.event.startsWith("schedule.")) return sortScheduleNotice(item, sorted);
+/** Whether a notice is the captain's about a 要你動手 item of a task that has not ended. */
+function isTodoInput(item: InboxItem & { kind: "notice" }, view: InboxView): boolean {
   const task = item.item === null ? undefined : view.tasks.get(item.item.ref);
+  return task !== undefined && !ENDED.has(task.state) && item.by !== "aggregator";
+}
+
+function sortNotice(item: InboxItem & { kind: "notice" }, view: InboxView, sorted: Sorted): void {
   const todo = item.event === "todo.claimed" || item.event === "todo.closed";
-  if (todo && task !== undefined && !ENDED.has(task.state) && item.by !== "aggregator") {
+  if (todo && isTodoInput(item, view)) {
     add(sorted.inputs, item.item?.ref ?? "", item);
   } else if (todo || TOPIC_EVENTS.has(item.event)) {
     sorted.retire.push({ item });
@@ -252,7 +264,9 @@ function sortOne(item: InboxItem, view: InboxView, sorted: Sorted): void {
     case "answer":
       return sortAnswer(item, view, sorted);
     case "notice":
-      return sortNotice(item, view, sorted);
+      return item.event.startsWith("schedule.")
+        ? sortScheduleNotice(item, sorted)
+        : sortNotice(item, view, sorted);
     case "tag":
       sorted.retire.push({ item });
   }

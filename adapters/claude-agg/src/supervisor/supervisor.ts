@@ -138,6 +138,20 @@ const PHASE_STATUS: Readonly<Record<OccurrencePhase, TopicStatus>> = {
   ended: "gone",
 };
 
+/** How a candidate stands, by its occurrence's phase, its topic being live, or its topic's place. */
+interface StatusRules {
+  phase: (key: string) => TopicStatus;
+  live: (topic: string) => TopicStatus;
+  topic: (topic: string) => TopicStatus;
+}
+
+/** Whether a topic (merges followed) has a schedule: a recurring topic is never proposed closed. */
+function hasSchedule(board: Board, topic: string): boolean {
+  return [...board.schedules.series.values()].some(
+    (series) => followMerges(board.topics.merged, series.topic) === topic,
+  );
+}
+
 /** What a planner plans for: an occurrence's work, a make-up, or the topic's ordinary work. */
 interface PlanFor {
   ref: WorkRef;
@@ -404,17 +418,28 @@ export class Supervisor {
   ): (candidate: Candidate) => TopicStatus {
     const later = new Set(board.topics.queues.later.map((id) => this.current(id)));
     const nowMs = this.deps.nowMs();
-    return (candidate) => {
-      const plan = candidate.id.startsWith(PLAN_PREFIX);
-      const work = plan ? undefined : this.workRef(candidate.id, candidate.topic);
-      const fresh = work !== undefined && !work.makeUp && !this.tasks.has(candidate.id);
-      const key = plan || fresh ? candidate.occurrence : undefined;
-      if (key !== undefined) return PHASE_STATUS[occurrencePhase(board.schedules, key, nowMs)];
-      if (work !== undefined || (plan && this.makeUps.has(candidate.topic)))
-        return this.liveTopic(candidate.topic) ? "dispatchable" : "gone";
-      if (entries.has(candidate.topic)) return "dispatchable";
-      return later.has(candidate.topic) ? "later" : "gone";
+    const status: StatusRules = {
+      phase: (key: string) => PHASE_STATUS[occurrencePhase(board.schedules, key, nowMs)],
+      live: (topic: string): TopicStatus => (this.liveTopic(topic) ? "dispatchable" : "gone"),
+      topic: (topic: string): TopicStatus => {
+        if (entries.has(topic)) return "dispatchable";
+        return later.has(topic) ? "later" : "gone";
+      },
     };
+    return (candidate) => this.candidateStatus(candidate, status);
+  }
+
+  private candidateStatus(candidate: Candidate, status: StatusRules): TopicStatus {
+    if (candidate.id.startsWith(PLAN_PREFIX)) {
+      if (candidate.occurrence !== undefined) return status.phase(candidate.occurrence);
+      return this.makeUps.has(candidate.topic)
+        ? status.live(candidate.topic)
+        : status.topic(candidate.topic);
+    }
+    const work = this.workRef(candidate.id, candidate.topic);
+    if (work === undefined) return status.topic(candidate.topic);
+    const fresh = !work.makeUp && !this.tasks.has(candidate.id);
+    return fresh ? status.phase(work.key) : status.live(candidate.topic);
   }
 
   /** The order's entries, plus one for each live topic of schedule work outside the order. */
@@ -772,12 +797,7 @@ export class Supervisor {
     let done: Promise<void>;
     const resume = this.resumeOf(candidate.id);
     if (candidate.id.startsWith(PLAN_PREFIX)) {
-      const purpose = this.planFor(candidate);
-      if (purpose === undefined) this.planned.add(candidate.topic);
-      else if (!purpose.ref.makeUp) {
-        this.step.takeIfOpen(purpose.ref.key, this.schedules, NOTE.takeDue);
-      }
-      done = this.plan(entry, this.sorted.messages.get(candidate.topic) ?? [], purpose);
+      done = this.startPlan(candidate, entry);
     } else if (resume !== undefined) {
       done = this.resume(candidate.id, resume);
     } else if (this.tasks.has(candidate.id)) {
@@ -803,6 +823,15 @@ export class Supervisor {
         ? { topic: candidate.topic, done: tracked }
         : { topic: candidate.topic, occurrence, done: tracked },
     );
+  }
+
+  /** Starts a planner; for an occurrence, takes it first if nothing took it yet. */
+  private startPlan(candidate: Candidate, entry: OrderEntry): Promise<void> {
+    const purpose = this.planFor(candidate);
+    if (purpose === undefined) this.planned.add(candidate.topic);
+    else if (!purpose.ref.makeUp)
+      this.step.takeIfOpen(purpose.ref.key, this.schedules, NOTE.takeDue);
+    return this.plan(entry, this.sorted.messages.get(candidate.topic) ?? [], purpose);
   }
 
   /** What a plan candidate plans for: its occurrence, the topic's make-up, or undefined. */
@@ -893,7 +922,7 @@ export class Supervisor {
       this.log(
         `planner for ${topic} gave no usable plan (${end.kind}); not planned again this run`,
       );
-      if (ref !== undefined && !ref.makeUp) this.plannedFor.set(ref.key, "failed");
+      this.notePlanned(ref, "failed");
       return;
     }
     if (output.question !== null) {
@@ -901,8 +930,12 @@ export class Supervisor {
         `planner for ${topic} asked: ${output.question.title}; questions come in a later step`,
       );
     }
-    const queued = this.queuePlanned(topic, output.tasks, ref);
-    if (queued === 0 && ref !== undefined && !ref.makeUp) this.plannedFor.set(ref.key, "nothing");
+    if (this.queuePlanned(topic, output.tasks, ref) === 0) this.notePlanned(ref, "nothing");
+  }
+
+  /** Remembers, for this run, that an occurrence's planner gave no work. */
+  private notePlanned(ref: WorkRef | undefined, how: "nothing" | "failed"): void {
+    if (ref !== undefined && !ref.makeUp) this.plannedFor.set(ref.key, how);
   }
 
   /**
@@ -1141,18 +1174,13 @@ export class Supervisor {
       this.log(`cannot read the board's files: ${(error as Error).message}`);
       return;
     }
-    const scheduled = [...board.schedules.series.values()].some(
-      (series) => followMerges(board.topics.merged, series.topic) === topic,
-    );
-    if (scheduled) return;
+    if (hasSchedule(board, topic)) return;
     const tags = this.store.readTags();
     const tasks = new Map(
       [...this.tasks].filter(
         ([task]) => followMerges(board.topics.merged, tags.get(task) ?? "") === topic,
       ),
     );
-    const others = [...this.live].filter(([live, entry]) => live !== id && entry.topic === topic);
-    const queued = this.queued.some((entry) => this.current(entry.topic_hint) === topic);
     const reason = closeReason({
       live: board.topics.topics.has(topic),
       proposed: board.topics.proposed.has(topic),
@@ -1160,13 +1188,20 @@ export class Supervisor {
       held: new Set(
         [...this.holds].filter(([, hold]) => hold.state === "open").map(([task]) => task),
       ),
-      pending: others.length > 0 || queued || this.sorted.messages.has(topic),
+      pending: this.pendingOn(topic, id),
       closedDetail: DETAIL.closed,
     });
     if (reason === undefined) return;
     const problem = await this.board.closePropose(topic, reason);
     if (problem === undefined) this.log(`proposed closing topic ${topic}: ${reason}`);
     else this.log(`topic ${topic}: the close proposal was not taken: ${problem}`);
+  }
+
+  /** Whether anything but `id` still runs, waits in the queue or waits for its planner on `topic`. */
+  private pendingOn(topic: string, id: string): boolean {
+    const others = [...this.live].some(([live, entry]) => live !== id && entry.topic === topic);
+    const queued = this.queued.some((entry) => this.current(entry.topic_hint) === topic);
+    return others || queued || this.sorted.messages.has(topic);
   }
 
   private async summary(id: string, kind: SummaryKind, text: string): Promise<void> {
