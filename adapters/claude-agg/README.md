@@ -67,6 +67,32 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   leaves running workers alone, opens a hold on that task, and resumes its
   session when the time the limit gave has passed or the captain answers
   「現在恢復」;
+- **follows the board's schedules** (plan section 3.8, `occurrences.ts` and
+  `schedule-step.ts`), reading each occurrence from `schedules.json` every
+  pass and never working one out itself:
+  - on `schedule.upcoming` it runs `schedule take <key> --note <line>` (on
+    `schedule.due` too, when nothing took it yet), and from then on keeps one
+    of the 2 places free for the occurrence: other work starts only while the
+    sessions running plus the places kept stay under 2. Nothing running is
+    stopped;
+  - at the occurrence's time (its `at` in the file, since a taken occurrence
+    gets no `schedule.due`) the planner plans from the topic's goal, and its
+    tasks are dispatched though the topic stays in 待辦. Nothing starts for an
+    occurrence before its time, nor for one whose schedule does not ring
+    (paused, all paused, or waiting for the captain's enable);
+  - once every task of the occurrence has ended it runs `schedule close <key>
+    done --note <line>`; a planner that finds nothing to do closes it the same
+    way. Queued work of an occurrence that ended before it started leaves the
+    queue;
+  - on `schedule.missed`, a `soft-rt` occurrence is made up once (unless the
+    notice has expired); a `hard-rt` or `none` one gets a `report` summary
+    saying it was missed, filed under the topic;
+  - an occurrence's tasks are named after it (`<schedule>-at-<UTC>-<n>`, a
+    make-up `<schedule>-at-<UTC>-makeup-<n>`, the missed report's carrier
+    `<schedule>-at-<UTC>-missed`), so a restart finds which task works for which
+    occurrence. A restart never takes an occurrence the file already says is
+    taken, and starts and closes one it took before;
+  - a topic with a schedule is never proposed closed;
 - **reconciles** at start: a worker of the last run that was still working is
   `paused`, a task listed in both `tasks.json` and `queued.json` stays in
   `tasks.json` only, worktrees git no longer lists are dropped from
@@ -79,7 +105,8 @@ when the name is a hashtag name and the captain's `aggregator_may_tag`,
 `aggregator_may_create`, lock, per-topic, board-wide and hourly limits (read
 from `hashtags.json` and `events.jsonl`) allow it. Nothing calls it yet: which
 output may ask for a hashtag change comes with the board's tag list. The
-agent creates no topic and no schedule.
+agent creates no topic, and creates, edits, pauses, resumes, skips or deletes
+no schedule: its only schedule commands are `take` and `close … done`.
 
 The model is the user's setting, passed to every session unchanged; with no
 setting, sessions get no model option. The subscription token is read from a
@@ -198,6 +225,9 @@ git in sandbox repositories under its own temporary directory. The tests in
 `src/board.integration.test.ts` and `src/worker-loop.integration.test.ts`
 start a real board service in a scratch root and home on a free port, so they
 run only when `CI` is set (GitHub's runner sets it) and are skipped otherwise.
+The schedule test in `worker-loop.integration.test.ts` waits for the board's
+real clock (about three minutes): the captain's schedule is made through the
+page's API, a few minutes ahead.
 
 The `Claude aggregator` job in `.github/workflows/tests.yml` runs the same
 checks, plus the guards on the top-level `bin/`, the vendor lists and imports.

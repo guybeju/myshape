@@ -138,7 +138,7 @@ const PHASE_STATUS: Readonly<Record<OccurrencePhase, TopicStatus>> = {
   ended: "gone",
 };
 
-/** How a candidate stands, by its occurrence's phase, its topic being live, or its topic's place. */
+/** How a candidate stands: by its occurrence's phase, its topic being live, or its place. */
 interface StatusRules {
   phase: (key: string) => TopicStatus;
   live: (topic: string) => TopicStatus;
@@ -526,7 +526,7 @@ export class Supervisor {
     this.store.writeQueued(this.queued);
   }
 
-  /** Whether an occurrence still needs its planner: none of its work exists, and none ran this run. */
+  /** Whether an occurrence still needs its planner: it has no work, and none was planned this run. */
   private needsPlan(key: string): boolean {
     if (this.plannedFor.has(key)) return false;
     const ids = [...this.tasks.keys(), ...this.queued.map((entry) => entry.id)];
@@ -1197,7 +1197,7 @@ export class Supervisor {
     else this.log(`topic ${topic}: the close proposal was not taken: ${problem}`);
   }
 
-  /** Whether anything but `id` still runs, waits in the queue or waits for its planner on `topic`. */
+  /** Whether anything but `id` still runs, is queued or waits for its planner on `topic`. */
   private pendingOn(topic: string, id: string): boolean {
     const others = [...this.live].some(([live, entry]) => live !== id && entry.topic === topic);
     const queued = this.queued.some((entry) => this.current(entry.topic_hint) === topic);

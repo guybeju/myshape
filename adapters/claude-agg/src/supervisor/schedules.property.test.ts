@@ -14,7 +14,7 @@ import { Gate, init, plan, removeScratch, result, workerOutput } from "./harness
 import { workOf } from "./occurrences.js";
 import { MAX_RUNNING } from "./scheduler.js";
 import type { Supervisor } from "./supervisor.js";
-import { World } from "./world.test-helper.js";
+import { keyTime, World } from "./world.test-helper.js";
 
 afterAll(removeScratch);
 
@@ -30,13 +30,6 @@ async function settle(): Promise<void> {
 
 function compact(ms: number): string {
   return new Date(ms).toISOString().slice(0, 16).replaceAll(/[-:]/g, "") + "Z";
-}
-
-function keyAt(key: string): number {
-  const at = key.split(":")[1] ?? "";
-  return Date.parse(
-    `${at.slice(0, 4)}-${at.slice(4, 6)}-${at.slice(6, 8)}T${at.slice(9, 11)}:${at.slice(11, 13)}:00Z`,
-  );
 }
 
 interface Run {
@@ -137,7 +130,7 @@ function check(run: Run, context: string): void {
   for (const call of world.query.active) {
     const ref = workOf(call.options.cwd.split("/").at(-1) ?? "");
     if (ref !== undefined && !ref.makeUp)
-      expect(keyAt(ref.key), `${context}: ${ref.key} ran early`).toBeLessThanOrEqual(world.nowMs);
+      expect(keyTime(ref.key), `${context}: ${ref.key} ran early`).toBeLessThanOrEqual(world.nowMs);
   }
 }
 

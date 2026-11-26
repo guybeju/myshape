@@ -39,6 +39,12 @@ export interface HoldView {
   hold_until?: string | null;
 }
 
+/** The time of an occurrence key's T (`<schedule>:YYYYMMDDTHHMMZ`), in epoch milliseconds. */
+export function keyTime(key: string): number {
+  const at = key.split(":")[1] ?? "";
+  return Date.parse(at.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z$/, "$1-$2-$3T$4:$5:00Z"));
+}
+
 export class World {
   readonly home: string;
   readonly root: string;
@@ -222,8 +228,7 @@ export class World {
     topic: string,
     extra: { rt?: string; expires_at?: string } = {},
   ): { outcome: string } {
-    const at = key.split(":")[1] ?? "";
-    const iso = `${at.slice(0, 4)}-${at.slice(4, 6)}-${at.slice(6, 8)}T${at.slice(9, 11)}:${at.slice(11, 13)}:00Z`;
+    const iso = new Date(keyTime(key)).toISOString().replace(/\.000Z$/, "Z");
     const phase =
       { "schedule.upcoming": "pre", "schedule.due": "start" }[event as string] ?? event.slice(9);
     return this.deliver({

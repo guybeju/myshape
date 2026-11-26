@@ -100,7 +100,7 @@ function timeOf(value: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/** A schedule notice's occurrence, or null when the notice is not one or its occurrence is unusable. */
+/** A schedule notice's occurrence, or null for another notice or an unusable occurrence. */
 function parseScheduleNotice(event: string, record: Json): ScheduleNotice | null {
   const known = SCHEDULE_EVENTS.find((name) => name === event);
   const topic = isRecord(record["topic"]) ? str(record["topic"]["id"]) : undefined;

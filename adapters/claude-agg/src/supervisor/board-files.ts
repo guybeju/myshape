@@ -290,7 +290,7 @@ function rings(raw: Json, settings: Json): boolean {
   return !(waiting && settings["aggregator_needs_enable"] === true);
 }
 
-/** data/myshape/schedules.json: each schedule's topic, rt and whether it rings, and the occurrences. */
+/** data/myshape/schedules.json: each schedule's topic, rt and whether it rings; the occurrences. */
 export function readSchedulesFile(path: string): SchedulesFile {
   const doc = readDocument(path) ?? {};
   const settings = objectField(doc, "settings", path);

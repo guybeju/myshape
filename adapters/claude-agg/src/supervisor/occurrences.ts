@@ -111,7 +111,7 @@ function workFor(key: string, ids: Iterable<string>): string[] {
   });
 }
 
-/** An open occurrence none of whose tasks started: it keeps a place, or closes if planned to nothing. */
+/** An open occurrence with no task started: it keeps a place, or closes if planned to nothing. */
 function unstarted(key: string, rings: boolean, view: WorkView, work: ScheduleWork): void {
   const queued = workFor(key, view.queued).length > 0;
   const planned = view.planned.get(key);
