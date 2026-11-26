@@ -138,6 +138,19 @@ function wholeHashtag(op, second) {
         return twoStep(host, body, binding, () => fromTopicOp(host.topicOp(op, args)));
     };
 }
+/**
+ * The captain deleting a schedule: the page cannot take that back (undo is
+ * only for the aggregator's changes), so it takes two steps. The code is
+ * bound to the topic and the schedule on it, so a schedule deleted and made
+ * again in between makes the second step refuse.
+ */
+const scheduleDelete = (host, body) => {
+    const topic = field(body, "topic");
+    const id = host.scheduleOf(topic);
+    if (id === null)
+        return fail(409, "refused", `議題 ${topic} 沒有排程。`);
+    return twoStep(host, body, bindingOf("schedule-delete", topic, id), () => fromTopicOp(host.topicOp("schedule-delete", { topic })));
+};
 /** Every browser API route, as "<method> <path>". */
 export const ROUTES = {
     "GET state": state,
@@ -171,6 +184,19 @@ export const ROUTES = {
     "POST hashtags/seen": topicRoute("hashtag-seen"),
     "POST views/save": topicRoute("view-save"),
     "POST views/delete": topicRoute("view-delete"),
+    "POST schedules/add": topicRoute("schedule-add"),
+    "POST schedules/edit": topicRoute("schedule-edit"),
+    "POST schedules/pause": topicRoute("schedule-pause"),
+    "POST schedules/resume": topicRoute("schedule-resume"),
+    "POST schedules/skip": topicRoute("schedule-skip"),
+    "POST schedules/rt": topicRoute("schedule-rt"),
+    "POST schedules/delete": scheduleDelete,
+    "POST schedules/close": topicRoute("schedule-close"),
+    "POST schedules/settings": topicRoute("schedule-settings"),
+    "POST schedules/lock": topicRoute("schedule-lock"),
+    "POST schedules/pause-all": topicRoute("schedule-pause-all"),
+    "POST schedules/revert": topicRoute("schedule-revert"),
+    "POST schedules/seen": topicRoute("schedule-seen"),
 };
 export function createApi(host) {
     return async (method, route, query, body) => {

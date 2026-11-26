@@ -18,6 +18,15 @@ export interface WatchedRecord {
   ref?: string;
 }
 
+/** One of the aggregator's changes as the page lists it, with whether it was taken back. */
+export interface RecentChange {
+  rid: string;
+  ts: number;
+  topic: string | null;
+  text: string;
+  reverted: boolean;
+}
+
 /** The record kinds of one feature. */
 export interface Watched {
   /** The aggregator's changes that the cap counts and the captain may take back. */
@@ -106,4 +115,24 @@ export function revertable<T extends WatchedRecord>(
     return { problem: `紀錄 ${rid} 不是 aggregator 做的改動，不能撤回。` };
   if (isReverted(records, watched, rid)) return { reverted: true };
   return { record };
+}
+
+/** The aggregator's changes since the latest seen mark, newest first, as the page lists them. */
+export function recentChanges(
+  records: readonly (WatchedRecord & { topic?: string | null; text?: string })[],
+  watched: Watched,
+): RecentChange[] {
+  const recent: RecentChange[] = [];
+  for (const record of unseenChanges(records, watched)) {
+    // Every saved record has a rid; only lines from before records had one lack it.
+    if (record.rid === undefined) continue;
+    recent.unshift({
+      rid: record.rid,
+      ts: record.ts,
+      topic: record.topic ?? null,
+      text: record.text ?? "",
+      reverted: isReverted(records, watched, record.rid),
+    });
+  }
+  return recent;
 }

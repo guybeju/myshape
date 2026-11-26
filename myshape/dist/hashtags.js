@@ -713,24 +713,6 @@ export function hashtagView(store, records) {
         over: Object.entries(store.topics)
             .filter(([, names]) => names.length > max)
             .map(([id]) => id),
-        recent: recentChanges(records),
+        recent: oversight.recentChanges(records, WATCHED),
     };
-}
-/** The aggregator's changes since the last seen mark, newest first. */
-function recentChanges(records) {
-    const recent = [];
-    for (const record of oversight.unseenChanges(records, WATCHED)) {
-        // Every saved record has a rid; only lines from before records had one lack it.
-        if (record.rid === undefined)
-            continue;
-        const reverted = oversight.isReverted(records, WATCHED, record.rid);
-        recent.unshift({
-            rid: record.rid,
-            ts: record.ts,
-            topic: record.topic ?? null,
-            text: record.text ?? "",
-            reverted,
-        });
-    }
-    return recent;
 }

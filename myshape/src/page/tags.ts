@@ -9,7 +9,7 @@ import { h } from "./dom.js";
 import type { Child } from "./dom.js";
 import { NO_FILTER, cycleHashtag, isActive, owedOutside, viewFilter } from "./filter.js";
 import type { Filter } from "./filter.js";
-import { draftInput, topicLink, topicName, when } from "./parts.js";
+import { draftInput, recentCard, settingsTable, topicName } from "./parts.js";
 import { agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
@@ -196,37 +196,15 @@ export function filterBar(
     keywordRow(page, actions),
     owedLine(view, actions, shown),
     panelButtons(page, view, actions),
-    page.tagPanel === "recent" ? recentPanel(view, actions) : null,
+    page.tagPanel === "recent"
+      ? recentCard(view, actions, {
+          title: `${agentName()} 最近的 hashtag 改動`,
+          changes: view.hashtags.recent,
+          revert: "hashtags/revert",
+          seen: "hashtags/seen",
+        })
+      : null,
     page.tagPanel === "settings" ? settingsPanel(page, view, actions) : null,
-  );
-}
-
-function recentPanel(view: View, actions: Actions): Child {
-  return h(
-    "div",
-    { class: "card" },
-    h("h3", {}, `${agentName()} 最近的 hashtag 改動`),
-    view.hashtags.recent.map((change) =>
-      h(
-        "div",
-        { class: "row" },
-        h("span", { class: "t note" }, when(change.ts)),
-        h("span", { class: "grow" }, change.text),
-        change.topic === null ? null : topicLink(view, change.topic, actions),
-        change.reverted
-          ? h("span", { class: "note" }, "已撤回")
-          : h(
-              "button",
-              { onclick: () => actions.send("hashtags/revert", { rid: change.rid }) },
-              "撤回",
-            ),
-      ),
-    ),
-    h(
-      "div",
-      { class: "btns" },
-      h("button", { onclick: () => actions.send("hashtags/seen", {}) }, "看過了"),
-    ),
   );
 }
 
@@ -277,22 +255,15 @@ function settingControl(page: Page, view: View, actions: Actions, name: keyof Se
   ];
 }
 
-function settingsTable(page: Page, view: View, actions: Actions): Child {
+function hashtagSettings(page: Page, view: View, actions: Actions): Child {
   const names = Object.keys(SETTING_LABEL) as (keyof Settings)[];
-  return h(
-    "table",
-    { class: "settings" },
-    h("tr", {}, h("th", {}, "設定"), h("th", {}, "現在"), h("th", {}, "預設"), h("th", {}, "")),
-    names.map((name) =>
-      h(
-        "tr",
-        {},
-        h("td", {}, SETTING_LABEL[name]()),
-        h("td", {}, shownValue(view, name, view.hashtags.settings[name])),
-        h("td", {}, shownValue(view, name, view.hashtags.defaults[name])),
-        h("td", {}, settingControl(page, view, actions, name)),
-      ),
-    ),
+  return settingsTable(
+    names.map((name) => ({
+      label: SETTING_LABEL[name](),
+      current: shownValue(view, name, view.hashtags.settings[name]),
+      fallback: shownValue(view, name, view.hashtags.defaults[name]),
+      control: settingControl(page, view, actions, name),
+    })),
   );
 }
 
@@ -421,7 +392,7 @@ function settingsPanel(page: Page, view: View, actions: Actions): Child {
       { class: "note" },
       `hashtag 只描述議題的內容，不改佇列、順序或派工。這裡的設定管 ${agentName()} 能做什麼；你在頁面上不受這些限制，只受「一個議題最多幾個」管。`,
     ),
-    settingsTable(page, view, actions),
+    hashtagSettings(page, view, actions),
     h("h3", {}, "hashtag"),
     view.hashtags.hashtags.length === 0 ? h("p", { class: "note" }, "還沒有 hashtag。") : null,
     view.hashtags.hashtags.map((entry) => hashtagRow(page, view, actions, entry)),

@@ -327,4 +327,23 @@ export default async function run(page) {
   await page.evaluate("void setTimeout(() => location.reload(), 0)");
   await page.waitFor("the page to load with the new token", `${has("優先順序")} && !${has("token 已重置或無效")}`, 30000);
   await page.waitFor("the token gone from the address bar", "location.hash === ''");
+
+  // A scheduled topic: its open occurrence sits in 現在 above 高, the topic is listed under 排程
+  // and nowhere in 待辦's box or 排定的, and the captain's close takes it out of 現在.
+  const strip = `document.querySelector('[data-strip="now"]')`;
+  const column = `document.querySelector('[data-column="schedules"]')`;
+  await page.waitFor("the open occurrence in 現在", `${strip} !== null && ${strip}.innerText.includes("Weekly") && ${strip}.innerText.includes("快到了") && ${strip}.innerText.includes("hard-rt")`);
+  if (!(await page.evaluate(`${strip}.compareDocumentPosition(document.querySelector('.queue[data-queue="high"]')) === Node.DOCUMENT_POSITION_FOLLOWING`)))
+    throw new Error("現在 belongs above 高");
+  await page.waitFor("the scheduled topic under 排程", `${column}.innerText.includes("Weekly") && ${column}.innerText.includes("下一場")`);
+  if (await page.evaluate(queueHas("later", "Weekly"))) throw new Error("a scheduled topic is not a card in 待辦's box");
+  const later = `[...document.querySelectorAll("section h2")].find((title) => title.textContent === "排定的").closest("section").innerText`;
+  if (await page.evaluate(`${later}.includes("Weekly")`)) throw new Error("排定的 must not list a scheduled topic");
+  if (await page.evaluate(`${strip}.querySelector("[draggable]") !== null || ${column}.querySelector("[draggable]") !== null`))
+    throw new Error("nothing under 現在 or 排程 can be dragged");
+  await page.click('[data-strip="now"] button', "這一場結束…");
+  await page.waitFor("the close question", `${strip}.innerText.includes("不用準備了")`);
+  await page.click('[data-strip="now"] .confirm button.danger', "標成做完");
+  await page.waitFor("現在 to empty", `${strip} === null`);
+  await page.waitFor("the schedule still under 排程", `${column}.innerText.includes("Weekly")`);
 }

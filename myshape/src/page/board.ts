@@ -29,6 +29,8 @@ const page: Page = {
   notice: null,
   filter: parseFilterHash(location.hash) ?? NO_FILTER,
   tagPanel: null,
+  schedulePanel: null,
+  open: new Set(),
 };
 /** Whether the page has applied a filter yet: the URL's, or the default view once the board names it. */
 let filterChosen = parseFilterHash(location.hash) !== null;
@@ -288,6 +290,14 @@ const actions: Actions = {
   setFilter,
   setTagPanel: (panel) => {
     page.tagPanel = panel;
+    render();
+  },
+  setSchedulePanel: (panel) => {
+    page.schedulePanel = panel;
+    render();
+  },
+  toggle: (key) => {
+    if (!page.open.delete(key)) page.open.add(key);
     render();
   },
 };

@@ -106,6 +106,19 @@ printf '已落地，沒人標議題。' | "$TB_TOPIC" summary done-1 landed - >/
 printf '一個 mate 的回報。' | "$TB_TOPIC" summary old-mate report - >/dev/null
 printf 'PR 開好了，等你看。' | "$TB_TOPIC" summary ship-a ready - >/dev/null
 "$TB_TOPIC" create "Side idea" --goal "merge me" --id side >/dev/null
+# A scheduled topic with an occurrence open (written in with the board stopped, as
+# its clock would); 2099 keeps the clock itself from opening or closing anything.
+"$TB_TOPIC" create "Weekly" --goal "週會" --id weekly --queue later >/dev/null
+"$TB_TOPIC" stop >/dev/null
+cat > "$MAIN/data/myshape/schedules.json" <<'JSON'
+{"v": 1, "series": {"weekly": {"topic": "weekly", "title": "Weekly", "rule": "weekly mon 10:00", "tz": "UTC",
+  "duration_min": null, "lead_min": null, "rt": "hard-rt", "rt_locked": false, "state": "on", "locked": true,
+  "by": "captain", "created_at": "2026-07-01T00:00:00Z", "checked_through": "2099-11-30T09:45:00Z"}},
+ "occurrences": {"weekly:20991130T1000Z": {"series": "weekly", "at": "2099-11-30T10:00:00Z", "state": "upcoming",
+  "opened_at": "2099-11-30T09:45:00Z", "closes_by": "2099-11-30T11:00:00Z"}},
+ "recent": {}, "removed": {}, "outbox": []}
+JSON
+"$TB_TOPIC" open >/dev/null || fail "the board did not start again"
 
 test_the_captains_path() {
   local url out
@@ -118,6 +131,8 @@ test_the_captains_path() {
   grep -q 'argv=ship-a|/compact|' "$TB_LOG" && fail "a command-like direct message reached the agent"
   assert_equals "login" "$(jq -r '.merged.side' "$MAIN/data/topics.json")" "the merge confirmed in the page did not happen"
   assert_equals "parked login" "$(jq -r '.queues.high | join(" ")' "$MAIN/data/topics.json")" "the drag did not reorder the queue"
+  assert_equals "done|captain" "$(jq -r '.recent.weekly[0] | "\(.outcome)|\(.by)"' "$MAIN/data/myshape/schedules.json")" \
+    "the captain's close of the open occurrence did not reach the schedule"
   pass "the page works end to end in a real browser"
 }
 

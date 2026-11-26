@@ -60,3 +60,20 @@ export function revertable(records, watched, rid) {
         return { reverted: true };
     return { record };
 }
+/** The aggregator's changes since the latest seen mark, newest first, as the page lists them. */
+export function recentChanges(records, watched) {
+    const recent = [];
+    for (const record of unseenChanges(records, watched)) {
+        // Every saved record has a rid; only lines from before records had one lack it.
+        if (record.rid === undefined)
+            continue;
+        recent.unshift({
+            rid: record.rid,
+            ts: record.ts,
+            topic: record.topic ?? null,
+            text: record.text ?? "",
+            reverted: isReverted(records, watched, record.rid),
+        });
+    }
+    return recent;
+}
