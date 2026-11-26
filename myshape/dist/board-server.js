@@ -30,6 +30,7 @@ import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
 import { buildView, placeTask } from "./view.js";
 import { findLines } from "./lineage.js";
+import { checkName, hashtagView, nameOfKey, topicsWith } from "./hashtags.js";
 import { beforeDeadline, findTasks, freshTags, knowHomes, lookupDeadline, reminderPrefix, } from "./lookup.js";
 import { DEFAULT_WRITE_TIMINGS, WriteEngine } from "./writes.js";
 import { deliveryRecord } from "./writes.js";
@@ -208,14 +209,30 @@ async function which(service, args) {
  * Where a topic or task is now and how it got there. The main home is read
  * afresh first, like `which`; other homes answer from their last read.
  */
+/** The hashtag `query` names, with the topics that carry it, or null when the board has none such. */
+function taggedBy(service, query) {
+    const checked = checkName(query);
+    if (typeof checked === "string")
+        return null;
+    const name = nameOfKey(service.board.hashtags, checked.key);
+    return name === undefined ? null : { name, topics: topicsWith(service.board.hashtags, name) };
+}
+/**
+ * Where a topic, hashtag or task is now and how it got there. The main home is
+ * read afresh first, like `which`; other homes answer from their last read. A
+ * keyword that is a hashtag the board has is not looked up as a task: that
+ * lookup can fall back to reading the whole home when the topics call fails.
+ */
 async function find(service, args) {
     const query = topics.oneLine(stringField(args, "query") ?? "", topics.NAME_MAX);
     if (query === null)
         return usage(`find 需要一行關鍵字，最多 ${topics.NAME_MAX} 個字。`);
-    const isTask = taskArg({ task: query }) !== null;
+    const tagged = taggedBy(service, query);
+    const isTask = tagged === null && taskArg({ task: query }) !== null;
     const tasks = isTask ? await findTasks(service.poller, query, lookupDeadline()) : [];
     const everything = args["all"] === true;
-    return { ok: true, line: findLines(service.board.topics, query, tasks, everything).join("\n") };
+    const lines = findLines(service.board.topics, query, tasks, everything, tagged);
+    return { ok: true, line: lines.join("\n") };
 }
 function writeView(record) {
     return {
@@ -339,8 +356,13 @@ function aggregatorView(service) {
         update_hint: service.aggregator?.update_hint ?? null,
     };
 }
+/** The board's saved records, oldest first, as the hashtag rails and the page read them. */
+function boardRecords(service) {
+    return service.journal.events.flatMap((event) => (event.src === "board" ? [event] : []));
+}
 function boardView(service) {
     return {
+        hashtags: hashtagView(service.board.hashtags, boardRecords(service)),
         boot_id: service.bootId,
         code_commit: service.config.commit,
         aggregator: aggregatorView(service),
@@ -425,7 +447,8 @@ async function handle(service, request) {
     // The records a command writes name the agent side; a board that never read
     // the root home asks it once, so they do not say "aggregator" for Firstmate.
     // A hands-on op never waits for a read: the aggregator may be asking from inside one.
-    if (service.aggregator === null && operationOf(request.op)?.commitFile === "topics")
+    const commitFile = operationOf(request.op)?.commitFile;
+    if (service.aggregator === null && (commitFile === "topics" || commitFile === "hashtags"))
         await beforeDeadline(lookupDeadline(), false, () => service.poller.readNow(MAIN_HOME));
     return topicOp(service, request.op, request.args);
 }
@@ -799,6 +822,7 @@ function topicOp(service, op, args, fromPage = false) {
         label: labelOf(service),
         agent: service.aggregator?.name ?? DEFAULT_LABEL,
         now: now(),
+        records: boardRecords(service),
     };
     const applied = applyOperation(commitTarget(service), before, { op, args, fromPage }, who);
     if (applied.committed !== null) {

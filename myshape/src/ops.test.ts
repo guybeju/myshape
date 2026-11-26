@@ -18,14 +18,29 @@ import type { CommitTarget, StoredBoard } from "./store.js";
 import { emptyTodos } from "./todos.js";
 import type { TodoItem, TodoStore } from "./todos.js";
 import { emptyState } from "./topics.js";
+import { emptyHashtags } from "./hashtags.js";
+import type { HashtagRecord, HashtagStore } from "./hashtags.js";
 import type { TopicState } from "./topics.js";
 
-const WHO = { label: "plain", agent: "plain-agent", now: "2026-11-21T00:00:00Z" };
+const WHO = { label: "plain", agent: "plain-agent", now: "2026-11-21T00:00:00Z", records: [] };
 
 interface Fixture {
   args: Record<string, unknown>;
   fromPage: boolean;
+  /** Records saved before this test's own, which the hashtag rails read. */
+  records?: HashtagRecord[];
 }
+
+/** The aggregator put #AI_INFRA on topic a. */
+const AGGREGATOR_ADD: HashtagRecord = {
+  rid: "r-old-1",
+  ts: 1_795_199_000,
+  kind: "hashtag.added",
+  by: "aggregator",
+  topic: "a",
+  before: "",
+  after: "AI_INFRA",
+};
 
 const FIXTURES = {
   create: { args: { name: "New", goal: "g" }, fromPage: false },
@@ -57,7 +72,35 @@ const FIXTURES = {
     },
     fromPage: true,
   },
+  "hashtag-add": { args: { id: "b", name: "ai_infra" }, fromPage: false },
+  "hashtag-remove": { args: { id: "a", name: "AI_INFRA" }, fromPage: false },
+  "hashtag-rename": { args: { name: "OLD", to: "OLDER" }, fromPage: true },
+  "hashtag-merge": { args: { name: "OLD", into: "AI_INFRA" }, fromPage: true },
+  "hashtag-delete": { args: { name: "OLD" }, fromPage: true },
+  "hashtag-lock": { args: { name: "AI_INFRA", locked: true }, fromPage: true },
+  "hashtag-color": { args: { name: "AI_INFRA", color: "c5" }, fromPage: true },
+  "hashtag-settings": { args: { per_topic_max: 4 }, fromPage: true },
+  "hashtag-revert": { args: { rid: "r-old-1" }, fromPage: true, records: [AGGREGATOR_ADD] },
+  "hashtag-seen": { args: {}, fromPage: true, records: [AGGREGATOR_ADD] },
+  "view-save": { args: { name: "工作", none: ["AI_INFRA"] }, fromPage: true },
+  "view-delete": { args: { id: "old" }, fromPage: true },
 } satisfies Record<OperationName, Fixture>;
+
+function hashtagsFixture(): HashtagStore {
+  const entry = (key: string, by: "captain" | "aggregator") => ({
+    key,
+    created_at: "2026-11-01T00:00:00Z",
+    created_by: by,
+    color: "c1" as const,
+    locked: false,
+  });
+  return {
+    ...emptyHashtags(),
+    hashtags: { AI_INFRA: entry("ai_infra", "aggregator"), OLD: entry("old", "captain") },
+    topics: { a: ["AI_INFRA"], c: ["OLD"] },
+    views: { old: { name: "舊的", any: ["OLD"], none: [], text: "", untagged: false } },
+  };
+}
 
 function topicsFixture(): TopicState {
   const state = emptyState();
@@ -125,6 +168,7 @@ beforeEach(() => {
   write(paths.topics, topics.doc);
   write(paths.archive, topics.archive);
   write(paths.todos, todosFixture());
+  write(paths.hashtags, hashtagsFixture());
   journal = new Journal(paths.events);
   let n = 0;
   target = {
@@ -147,6 +191,7 @@ function files(): Record<string, string | null> {
     archive: read(paths.archive),
     todos: read(paths.todos),
     confirmations: read(paths.confirmations),
+    hashtags: read(paths.hashtags),
     events: read(paths.events),
   };
 }
@@ -162,8 +207,17 @@ function journalLines(): StoredRecord[] {
 }
 
 function run(board: StoredBoard, op: OperationName) {
-  const { args, fromPage } = FIXTURES[op];
-  return applyOperation(target, board, { op, args, fromPage }, WHO);
+  const fixture: Fixture = FIXTURES[op];
+  const records = [...(fixture.records ?? []), ...journalLines()];
+  return applyOperation(
+    target,
+    board,
+    { op, args: fixture.args, fromPage: fixture.fromPage },
+    {
+      ...WHO,
+      records,
+    },
+  );
 }
 
 describe("every operation in the table", () => {
@@ -182,16 +236,27 @@ describe("every operation in the table", () => {
       expect(after[commitFile]).not.toBe(before[commitFile]);
       const lines = journalLines();
       expect(lines.length).toBeGreaterThan(0);
-      const outbox = (JSON.parse(after[commitFile] as string) as { outbox: StoredRecord[] }).outbox;
+      // A create, merge or split also saves its hashtags' follow-up, with its own outbox.
+      const outboxOf = (file: string | null | undefined): StoredRecord[] =>
+        file === null || file === undefined
+          ? []
+          : ((JSON.parse(file) as { outbox?: StoredRecord[] }).outbox ?? []);
+      const outbox = [
+        ...outboxOf(after[commitFile]),
+        ...(commitFile === "topics" ? outboxOf(after["hashtags"]) : []),
+      ];
       for (const line of lines) {
         expect(line.rid).toMatch(/^r-ops-\d+$/);
         expect(line.by).toBe(FIXTURES[op].fromPage ? "captain" : "aggregator");
         expect(line.label).toBe("plain");
         expect(line.ts).toBe(1_795_200_000);
         expect(RECORD_KINDS).toContain(line.kind);
-        // A confirmation is about the whole board, so it alone has no topic or item.
+        // A confirmation and a change to a hashtag itself are about the whole board, so they alone have no topic or item.
         expect(
-          line.topic !== null || line.item !== undefined || commitFile === "confirmations",
+          line.topic !== null ||
+            line.item !== undefined ||
+            commitFile === "confirmations" ||
+            commitFile === "hashtags",
         ).toBe(true);
         expect(outbox.map((record) => record.rid)).toContain(line.rid);
       }
@@ -380,5 +445,103 @@ describe("each operation's arguments", () => {
       response: { ok: true, line: "ok open 本來就已記下做完了，等驗證" },
       committed: null,
     });
+  });
+});
+
+describe("hashtags through the table", () => {
+  function reply(op: string, args: Record<string, unknown>, fromPage = false) {
+    return applyOperation(
+      target,
+      readBoard(paths).board,
+      { op, args, fromPage },
+      {
+        ...WHO,
+        records: journalLines(),
+      },
+    );
+  }
+
+  it("create puts its hashtags on the new topic and saves both files", () => {
+    const made = reply("create", { name: "GPU", goal: "g", hashtags: ["ai_infra", "NEW_ONE"] });
+    expect(made.response).toEqual({
+      ok: true,
+      line: "ok gpu 已建立，排在「一般」最後；已貼上 #AI_INFRA、#NEW_ONE（新開的 hashtag：#NEW_ONE）",
+    });
+    const board = readBoard(paths).board;
+    expect(board.topics.doc.topics["gpu"]).toBeDefined();
+    expect(board.hashtags.topics["gpu"]).toEqual(["AI_INFRA", "NEW_ONE"]);
+    expect(journalLines().map((line) => [line.kind, line.text])).toEqual([
+      ["topic.created", "議題「GPU」已建立，排在「一般」最後（plain 用指令）"],
+      [
+        "hashtag.added",
+        "議題「GPU」貼上 #AI_INFRA、#NEW_ONE（新開的 hashtag：#NEW_ONE）（plain 用指令）",
+      ],
+    ]);
+    const again = reply("create", { name: "GPU", goal: "g", hashtags: ["AI_INFRA", "NEW_ONE"] });
+    expect(again.committed).toBeNull();
+    const more = reply("create", { name: "GPU", goal: "g", hashtags: ["LATER"] });
+    expect(more.committed).toBe("hashtags");
+  });
+
+  it("create that a hashtag rail refuses makes no topic", () => {
+    reply("hashtag-lock", { name: "AI_INFRA", locked: true }, true);
+    const refused = reply("create", { name: "GPU", goal: "g", hashtags: ["AI_INFRA"] });
+    expect(refused.response).toMatchObject({ ok: false, code: "refused" });
+    expect(readBoard(paths).board.topics.doc.topics["gpu"]).toBeUndefined();
+    expect(
+      reply("create", { name: "GPU", goal: "g", hashtags: "AI_INFRA" }).response,
+    ).toMatchObject({
+      code: "usage",
+    });
+  });
+
+  it("merge brings the merged topic's hashtags along, and split copies them", () => {
+    const merged = reply("merge", { from: "c", into: "a" }, true);
+    expect(merged.response).toMatchObject({ ok: true, line: "ok c 已併入 a；hashtag 取聯集" });
+    expect(readBoard(paths).board.hashtags.topics).toEqual({ a: ["AI_INFRA", "OLD"] });
+    const split = reply("split", { from: "a", name: "Part", goal: "g" });
+    expect(split.response.line).toBe("ok part 已從 a 拆出，放進「高」；帶上 #AI_INFRA、#OLD");
+    expect(readBoard(paths).board.hashtags.topics["part"]).toEqual(["AI_INFRA", "OLD"]);
+  });
+
+  it("refuses the captain's hashtag operations over the socket and changes nothing", () => {
+    const pageOnly = [
+      "hashtag-rename",
+      "hashtag-merge",
+      "hashtag-delete",
+      "hashtag-lock",
+      "hashtag-color",
+      "hashtag-settings",
+      "hashtag-revert",
+      "hashtag-seen",
+      "view-save",
+      "view-delete",
+    ] as const;
+    const before = files();
+    for (const op of pageOnly) {
+      const result = reply(op, FIXTURES[op].args);
+      expect(result.response).toEqual({
+        ok: false,
+        code: "refused",
+        line: `${op} 是使用者在頁面上按的，不能從指令送。`,
+      });
+    }
+    expect(files()).toEqual(before);
+  });
+
+  it("an aggregator's change can be taken back on the page, from its record", () => {
+    const added = reply("hashtag-add", { id: "b", name: "AI_INFA" });
+    const rid = added.records[0]?.rid as string;
+    expect(added.records[0]).toMatchObject({
+      by: "aggregator",
+      label: "plain",
+      before: "",
+      after: "AI_INFA",
+    });
+    const back = reply("hashtag-revert", { rid }, true);
+    expect(back.records[0]).toMatchObject({ kind: "hashtag.reverted", ref: rid, by: "captain" });
+    const board = readBoard(paths).board;
+    expect(board.hashtags.topics["b"]).toBeUndefined();
+    expect(board.hashtags.hashtags["AI_INFA"]).toBeUndefined();
   });
 });

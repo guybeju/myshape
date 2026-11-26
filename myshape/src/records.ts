@@ -31,6 +31,19 @@ export const RECORD_KINDS = [
   "agent.tagged",
   "program.confirmed",
   "writes.released",
+  "hashtag.added",
+  "hashtag.removed",
+  "hashtag.carried",
+  "hashtag.renamed",
+  "hashtag.merged",
+  "hashtag.deleted",
+  "hashtag.settings_changed",
+  "hashtag.lock_changed",
+  "hashtag.color_changed",
+  "hashtag.reverted",
+  "hashtag.seen",
+  "hashtag.view_saved",
+  "hashtag.view_deleted",
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 
@@ -40,7 +53,9 @@ export type RecordKind = (typeof RECORD_KINDS)[number];
  * `task` name an agent; `outcome` and `reason` say how something ended or why.
  * A decision's records (decisions.ts) also carry `key`, which says what the
  * record is about so it is never written twice, `answer` and `source`, and
- * `at`, the time it happened when that is earlier than the save.
+ * `at`, the time it happened when that is earlier than the save. A change the
+ * captain may want to see or take back carries `before` and `after`, what it
+ * changed from and to; a record that takes back another names it in `ref`.
  */
 export interface Draft {
   kind: RecordKind;
@@ -53,6 +68,9 @@ export interface Draft {
   key?: string;
   answer?: string;
   source?: string;
+  before?: string;
+  after?: string;
+  ref?: string;
   at?: number;
   text: string;
 }
@@ -88,10 +106,22 @@ export interface StoredRecord {
   key?: string;
   answer?: string;
   source?: string;
+  before?: string;
+  after?: string;
+  ref?: string;
 }
 
 /** The optional text fields a record may carry, in the order they are saved. */
-export const OPTIONAL_TEXT_FIELDS = ["outcome", "reason", "key", "answer", "source"] as const;
+export const OPTIONAL_TEXT_FIELDS = [
+  "outcome",
+  "reason",
+  "key",
+  "answer",
+  "source",
+  "before",
+  "after",
+  "ref",
+] as const;
 
 /** Turns a draft into the record saved for it. */
 export function stampRecord(draft: Draft, actor: Actor, rid: string, ts: number): StoredRecord {

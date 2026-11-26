@@ -30,9 +30,31 @@ export const RECORD_KINDS = [
     "agent.tagged",
     "program.confirmed",
     "writes.released",
+    "hashtag.added",
+    "hashtag.removed",
+    "hashtag.carried",
+    "hashtag.renamed",
+    "hashtag.merged",
+    "hashtag.deleted",
+    "hashtag.settings_changed",
+    "hashtag.lock_changed",
+    "hashtag.color_changed",
+    "hashtag.reverted",
+    "hashtag.seen",
+    "hashtag.view_saved",
+    "hashtag.view_deleted",
 ];
 /** The optional text fields a record may carry, in the order they are saved. */
-export const OPTIONAL_TEXT_FIELDS = ["outcome", "reason", "key", "answer", "source"];
+export const OPTIONAL_TEXT_FIELDS = [
+    "outcome",
+    "reason",
+    "key",
+    "answer",
+    "source",
+    "before",
+    "after",
+    "ref",
+];
 /** Turns a draft into the record saved for it. */
 export function stampRecord(draft, actor, rid, ts) {
     return {
