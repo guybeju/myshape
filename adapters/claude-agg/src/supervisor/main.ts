@@ -14,6 +14,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { spawnCommand, type PlainEnv } from "./commands.js";
 import { readCredentialFile } from "./credential.js";
 import { existingRealPath } from "./guard.js";
+import { PLUGIN_DIR } from "./plugin.js";
 import type { QueryFn } from "./sdk.js";
 import { SESSION_TMP_ROOT } from "./session-options.js";
 import { readSettingsFile } from "./settings-file.js";
@@ -74,6 +75,7 @@ async function startFrom(path: string, deps: MainDeps): Promise<Supervisor> {
     pid: deps.pid,
     isAlive,
     tmpRoot: SESSION_TMP_ROOT,
+    pluginDir: PLUGIN_DIR,
   });
 }
 

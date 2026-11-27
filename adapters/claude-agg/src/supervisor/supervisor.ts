@@ -67,6 +67,7 @@ import {
 } from "./prompts.js";
 import { ScheduleStep, type MakeUp } from "./schedule-step.js";
 import { WAIT, schedule, type Candidate, type Slot, type TopicStatus } from "./scheduler.js";
+import { checkPlugin, checkPluginPlace } from "./plugin.js";
 import type { QueryFn } from "./sdk.js";
 import { followSession, PromptStream, type SessionReport } from "./session.js";
 import {
@@ -94,6 +95,8 @@ export interface Deps {
   isAlive: (pid: number) => boolean;
   /** Where each session's own temporary directory is made: SESSION_TMP_ROOT in production. */
   tmpRoot: string;
+  /** The supervisor's plugin directory: PLUGIN_DIR in production. */
+  pluginDir: string;
 }
 
 /** The planner's own empty working directory, in the worktree root. */
@@ -206,6 +209,8 @@ export class Supervisor {
   private readonly git: Git;
   private readonly redact: (text: string) => string;
   private readonly release: () => void;
+  /** The plugin every worker loads, checked and resolved once at start. */
+  private readonly plugin: string;
   private tasks = new Map<string, TaskEntry>();
   private holds = new Map<string, HoldEntry>();
   private queued: PlannedTask[] = [];
@@ -245,10 +250,11 @@ export class Supervisor {
   /** Missed soft-rt occurrences waiting for their planner this pass, by topic. */
   private makeUps: ReadonlyMap<string, MakeUp> = new Map();
 
-  private constructor(settings: Settings, deps: Deps, release: () => void) {
+  private constructor(settings: Settings, deps: Deps, release: () => void, plugin: string) {
     this.settings = settings;
     this.deps = deps;
     this.release = release;
+    this.plugin = plugin;
     this.redact = redactor(deps.credential.secret);
     this.store = new StateStore(join(settings.home, "agg"), this.redact, () =>
       Math.floor(deps.nowMs() / 1000),
@@ -267,12 +273,23 @@ export class Supervisor {
     });
   }
 
-  /** Checks the settings, takes the lock, sets the home up, starts the board, and reconciles. */
+  /**
+   * Checks the settings and the plugin, takes the lock, sets the home up,
+   * starts the board, and reconciles.
+   */
   static async start(settings: Settings, deps: Deps): Promise<Supervisor> {
     if (deps.credential.secret === "") throw new Error("claude-agg: no credential; nothing starts");
     const checked = checkSettings(settings, deps.realPath, deps.env.HOME);
+    const plugin = checkPlugin(deps.pluginDir);
+    checkPluginPlace(plugin, [
+      ["the board home", checked.home],
+      ["the worktree root", checked.worktreeRoot],
+      ...Object.entries(checked.repos).map(
+        ([name, repo]) => [`repo ${name}`, deps.realPath(repo.path)] as const,
+      ),
+    ]);
     const release = takeLock(checked.worktreeRoot, deps.pid, deps.isAlive);
-    const supervisor = new Supervisor(checked, deps, release);
+    const supervisor = new Supervisor(checked, deps, release, plugin);
     try {
       supervisor.store.setUp();
       mkdirSync(join(checked.worktreeRoot, PLANNER_DIR), { recursive: true, mode: 0o700 });
@@ -927,6 +944,7 @@ export class Supervisor {
       credential: this.deps.credential,
       credentialFile: this.settings.credentialFile,
       readPaths: this.settings.readPaths,
+      plugin: this.plugin,
       tmpdir,
       platform: process.platform,
       abortController: abort,
@@ -1206,6 +1224,7 @@ export class Supervisor {
     const report = await followSession(run, prompt, abort, {
       mode: SESSION_MODE,
       apiKeySource: this.apiKeySource(),
+      plugin: this.plugin,
       onStart: (init) => {
         task.session_id = init.session_id;
         if (init.model !== undefined) task.model = init.model;
@@ -1217,10 +1236,16 @@ export class Supervisor {
     this.aborts.delete(abort);
     this.streams.delete(id);
     this.releasePushed(id);
-    if (report.sessionId !== undefined) task.session_id = report.sessionId;
-    if (report.model !== undefined) task.model = report.model;
+    this.noteReport(id, task, report);
     if (this.stopping) return;
     await this.end(id, withForge(endingOf(report.end), forge), report.costUsd);
+  }
+
+  /** Keeps a worker session's id and model, and logs why its start was refused. */
+  private noteReport(id: string, task: TaskEntry, report: SessionReport): void {
+    if (report.sessionId !== undefined) task.session_id = report.sessionId;
+    if (report.model !== undefined) task.model = report.model;
+    if (report.end.kind === "refused") this.log(`task ${id}: ${report.end.reason}`);
   }
 
   private async end(id: string, ending: Ending, costUsd: number): Promise<void> {

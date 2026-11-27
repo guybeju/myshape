@@ -10,8 +10,10 @@ and the board imports nothing from it.
 It holds the program the board runs, `bin/agg-board.mjs`, the formats of the
 agent's state files, the supervisor in `src/supervisor/` (below), built on the
 Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, pinned in `package.json`),
-and its entry point `bin/claude-agg-supervisor.mjs`, which whoever runs it
-starts by hand in a terminal ([Running the supervisor](#running-the-supervisor)).
+its entry point `bin/claude-agg-supervisor.mjs`, which whoever runs it
+starts by hand in a terminal ([Running the supervisor](#running-the-supervisor)),
+and `plugin/`, the Claude Code plugin with the workers' rules and a status
+skill ([The plugin](#the-plugin-plugin)).
 The tests pass a scripted double for the SDK's `query()`, so no test calls a
 model unless the real-binary checks are switched on.
 
@@ -50,9 +52,13 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   `.claude/settings.json` or `.claude/settings.local.json` sets anything
   under `sandbox`. Also the deny rules and the PreToolUse guard of
   `guard.ts`, the target repository's project settings from its main
-  checkout, no MCP but its own, 200 turns, a structured output. It stops a
-  session whose start message is not `default` or names another credential
-  source than the settings select;
+  checkout, no MCP but its own, 200 turns, a structured output, and one
+  plugin, `plugin/` of the checkout the supervisor runs from, whose worker
+  skill holds the worker's rules (the prompt has the worker load it first).
+  It stops a session whose start message is not `default` or names another
+  credential source than the settings select, and a worker session whose
+  start message does not list that plugin at that path and both its skills,
+  or lists a load error of it, logging what was missing;
 - **sandboxes** each worker: its Bash commands run in the SDK's sandbox
   (bubblewrap and socat on Linux; on macOS the system's own sandbox), which
   must start or the session does not (`failIfUnavailable`), with no
@@ -262,9 +268,24 @@ too.
 
 ## Running the supervisor
 
-It runs on Linux or macOS. On Linux the workers' sandbox needs bubblewrap and
-socat installed (`sudo apt-get install bubblewrap socat` on Debian and
-Ubuntu); without them no worker session starts.
+It runs on Linux or macOS, from a checkout of this repository. You need:
+
+- Node 22 or later, and pnpm (`npm install -g pnpm`, or see
+  <https://pnpm.io/installation>);
+- on Linux, bubblewrap and socat for the workers' sandbox
+  (`sudo apt-get install bubblewrap socat` on Debian and Ubuntu; without
+  them no worker session starts). macOS needs nothing more: the sandbox is
+  the system's own;
+- git that can push to each listed repository's `origin`, and the GitHub
+  CLI `gh`, logged in (`gh auth login`): the supervisor pushes the workers'
+  branches and opens their pull requests with them, and workers never see
+  either login;
+- a credential file (step 2).
+
+Run it from a checkout that no worker works in: the supervisor refuses to
+start when its `plugin/` lies inside the board home, the worktree root or the
+main checkout of any repository listed in `repos`, so a clone you also list
+as a repository cannot run it. Clone this repository once more for that.
 
 1. Wire the program to a board home of its own (above).
 2. Make an API key for the adapter and put it in a file only you can read,
@@ -337,6 +358,56 @@ Ubuntu); without them no worker session starts.
 
 There is no service unit: it runs while its terminal does.
 
+### The plugin: `plugin/`
+
+`plugin/` is a Claude Code plugin named `claude-agg` with two skills and
+nothing else: no hooks, MCP servers, agents, commands or settings.
+
+- `skills/claude-agg-worker/SKILL.md` is the workers' rules: stay in the
+  worktree, the Bash command forms that are always refused and what to write
+  instead, hand work over only through `push_branch` and `open_pr`, leave the
+  board alone, and the JSON a worker hands back. Every worker session loads
+  the plugin through the SDK's `plugins` option. What the workers must not
+  do is enforced by the supervisor's own code (the sandbox, the permission
+  rules, the guard and the forge tools), not by this text.
+  - With this Claude Code version a Skill call needs no allow rule. That
+    holds for both skills here and for any other skill a worker session
+    can see. The worker skill loads because it carries only a name and a
+    description.
+  - A skill brings text only, and every tool it leads to is held to the
+    same rules as the rest of the session.
+- `skills/claude-agg-status/SKILL.md` is for you: in your own Claude Code
+  session it reads the supervisor's state files and tells you what it is
+  doing, what waits for you on the board, and how to pause and resume it.
+  It changes nothing.
+
+At start the supervisor resolves the plugin once and refuses to start when
+it is a symbolic link or holds one, holds any file but its manifest and the
+two `SKILL.md` files, when the manifest declares anything but its name and
+description, when a skill's frontmatter declares anything but its name and
+description, or when a skill holds a command that would run when it loads.
+
+To use the status skill you need Claude Code itself installed (the
+supervisor uses the copy bundled with its SDK, which is not on your `PATH`;
+see <https://code.claude.com/docs/en/overview>). Start it with the plugin
+directory of the same checkout:
+
+```sh
+claude --plugin-dir <checkout>/adapters/claude-agg/plugin
+```
+
+and ask for it with the settings file the supervisor runs with:
+
+```text
+/claude-agg:claude-agg-status <path to the settings file>
+```
+
+It tells you whether the supervisor runs, the questions waiting for you,
+tasks that are stuck and why, what runs and what waits, and the pull
+requests ready for you. You answer questions and do the steps it lists on
+the board's page. To pause, stop the supervisor (Ctrl-C, or `kill <pid>`);
+to resume, start it again with the same command.
+
 **Which repositories may be listed.** A worker session runs the hooks and
 permission rules committed in its repository's main checkout
 (`.claude/settings.json`, outside the sandbox, with your access), and GitHub
@@ -377,8 +448,9 @@ page's API, a few minutes ahead.
 
 `src/supervisor/real-claude.test.ts` runs the bundled `claude` binary itself
 (the sandbox starting, what a worker can and cannot reach, resume not loading
-a worktree's `.claude/`), so it runs only when `AGG_REAL_CLAUDE=1` is set and
-skips otherwise; see that file for what it needs.
+a worktree's `.claude/`, a worker loading the plugin and its skill), so it
+runs only when `AGG_REAL_CLAUDE=1` is set and skips otherwise; see that file
+for what it needs. Its plugin cases alone run with `-t "plugin skill"`.
 
 The `Claude aggregator` job in `.github/workflows/tests.yml` runs the same
 checks, plus the guards on the top-level `bin/`, the vendor lists and imports.

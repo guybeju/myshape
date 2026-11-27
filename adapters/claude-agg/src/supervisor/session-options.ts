@@ -3,9 +3,14 @@
 // sections 4.2, 4.3 and 5.3, and option A of the credential report): the
 // worker's Bash runs in the SDK's sandbox with no route to GitHub and no read
 // of the captain's credentials, its file tools stay in its worktree, and it
-// reaches the forge only through the supervisor's two tools. Every session
+// reaches the forge only through the supervisor's two tools. It loads one
+// plugin, the supervisor's own (plugin.ts), for the worker skill. Every session
 // starts in `default` (SESSION_MODE) with no approval surface: only what is
-// listed runs without a prompt, and everything else is denied. Every prompt
+// listed runs without a prompt, and everything else is denied. The one
+// exception is the Skill tool: in this CLI version (2.1.332) a Skill call
+// needs no allow rule (shown on the Mac), and the worker skill loads because
+// it carries only a name and a description. A skill brings text only, and
+// every tool it leads to is held to the same rules. Every prompt
 // carries board text (topic names and goals, messages, answers), so every
 // session takes its prompts as written (`verbatimPrompts`): no `@path` file
 // mention in them is expanded and no slash command runs.
@@ -245,6 +250,11 @@ export interface SessionContext {
    * resolved, short (see SESSION_TMP_ROOT).
    */
   tmpdir: string;
+  /**
+   * The supervisor's plugin directory as checkPlugin resolved it at start:
+   * the one plugin a worker loads.
+   */
+  plugin: string;
   /** The platform the sessions run on, which decides the system paths denied to them. */
   platform: NodeJS.Platform;
   /** The guard's context; each kind of session decides whether the guard approves Bash. */
@@ -339,9 +349,11 @@ export const SESSION_MODE = "default";
 
 /**
  * What a worker may do without a prompt: file edits and writes inside its
- * worktree, and, for a ship worker, the two forge tools by their full names.
- * Bash has no allow rule: a sandboxed command runs through the sandbox's
- * autoAllowBashIfSandboxed, so an unsandboxed one is never approved.
+ * worktree and, for a ship worker, the two forge tools by their full names.
+ * Bash has no allow rule: the guard approves a sandboxed command, so an
+ * unsandboxed one is never approved. The worker skill needs no rule: in this
+ * CLI version a Skill call needs no allow rule, and the skill loads because
+ * it carries only a name and a description.
  */
 export function workerAllowRules(worktree: string, ship: boolean): string[] {
   const files = [`Edit(/${worktree}/**)`, `Write(/${worktree}/**)`];
@@ -408,6 +420,7 @@ export function workerOptions(session: WorkerSession, ctx: SessionContext): Quer
     settingSources: ["project"],
     projectConfigRoot: session.mainCheckout,
     strictMcpConfig: true,
+    plugins: [{ type: "local", path: ctx.plugin, skipMcpDiscovery: true }],
     settings: workerSettings(session, ctx),
     sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
     verbatimPrompts: true,

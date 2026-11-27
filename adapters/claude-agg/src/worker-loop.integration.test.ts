@@ -54,6 +54,7 @@ import {
 } from "./supervisor/harness.test-helper.js";
 import { BoardCommand } from "./supervisor/commands.js";
 import { HASHTAG_REASON, Tagger } from "./supervisor/hashtags.js";
+import { PLUGIN_DIR } from "./supervisor/plugin.js";
 import { Supervisor } from "./supervisor/supervisor.js";
 import { REPO_ROOT } from "./test-home.js";
 
@@ -335,6 +336,7 @@ function startSupervisor(query: ScriptedQuery, fake: FakeCommands): Promise<Supe
       pid: process.pid,
       isAlive: () => false,
       tmpRoot: scratch.dir,
+      pluginDir: PLUGIN_DIR,
     },
   );
 }

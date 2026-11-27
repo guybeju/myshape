@@ -33,6 +33,7 @@ const CTX: SessionContext = {
   credential: { mode: "subscription-token", secret: CANARY },
   credentialFile: "/secrets/credential",
   readPaths: ["/opt/toolchain"],
+  plugin: "/opt/claude-agg/plugin",
   tmpdir: "/tmp/cagg-test",
   platform: "linux",
   guard,
@@ -193,6 +194,7 @@ describe("workerOptions", () => {
       settingSources: ["project"],
       projectConfigRoot: "/repos/app",
       strictMcpConfig: true,
+      plugins: [{ type: "local", path: "/opt/claude-agg/plugin", skipMcpDiscovery: true }],
       settings: SANDBOX_SETTINGS,
       sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
       verbatimPrompts: true,
@@ -336,6 +338,20 @@ describe("workerOptions", () => {
     });
     const [planner] = plannerOptions("/w/p", ["/repos/app"], CTX).hooks.PreToolUse[0]?.hooks ?? [];
     expect(await planner?.(bash, "u", { signal: abort.signal })).toEqual({});
+  });
+
+  it("loads exactly one plugin, the supervisor's own, with no Skill rule, for scouts too; the planner none", () => {
+    for (const forge of [FORGE, null]) {
+      const options = workerOptions({ ...SESSION, forge }, CTX);
+      expect(options.plugins).toEqual([
+        { type: "local", path: CTX.plugin, skipMcpDiscovery: true },
+      ]);
+      const skills = (options.allowedTools ?? []).filter((rule) => rule.startsWith("Skill"));
+      expect(skills).toEqual([]);
+    }
+    const planner = plannerOptions("/w/p", ["/repos/app"], CTX);
+    expect(planner).not.toHaveProperty("plugins");
+    expect(planner.allowedTools?.filter((rule) => rule.startsWith("Skill"))).toEqual([]);
   });
 
   it("names no model when the user set none", () => {

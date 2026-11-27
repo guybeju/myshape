@@ -11,6 +11,7 @@ import type { LedgerEvent, TaskEntry } from "#agg/state-files.js";
 
 import { existingRealPath } from "./guard.js";
 import { keyAt } from "./occurrences.js";
+import { PLUGIN_DIR } from "./plugin.js";
 import {
   boardHome,
   CANARY,
@@ -92,6 +93,7 @@ export class World {
       pid: this.pid,
       isAlive: (pid) => this.alive.has(pid),
       tmpRoot: this.root,
+      pluginDir: PLUGIN_DIR,
     };
   }
 

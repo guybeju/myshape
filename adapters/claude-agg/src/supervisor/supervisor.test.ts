@@ -1,7 +1,17 @@
 // Step 3 of the plan: one worker end to end, with a scripted query and the
 // fake commands. No model, no process, no board service.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir as systemTmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -11,20 +21,22 @@ import { runProgram } from "#agg/test-home.js";
 import { Git, type RunCommand } from "./commands.js";
 import { endingOf } from "./ending.js";
 import { Forge, FORGE_TEXT } from "./forge.js";
-import { BASH_RULE } from "./prompts.js";
+import { SKILL_RULE } from "./prompts.js";
 import {
   CANARY,
   ENV,
   errorResult,
   Gate,
   init,
+  LOADED_PLUGIN,
   maxTurns,
   plan,
   removeScratch,
   result,
   workerOutput,
 } from "./harness.test-helper.js";
-import { SettingsError } from "./settings.js";
+import { PLUGIN_DIR, PluginError } from "./plugin.js";
+import { LOCK_NAME, SettingsError } from "./settings.js";
 import { Supervisor, withForge } from "./supervisor.js";
 import { REPO, World } from "./world.test-helper.js";
 
@@ -145,6 +157,7 @@ describe("one worker end to end", () => {
         "mcp__forge__push_branch",
         "mcp__forge__open_pr",
       ],
+      plugins: [{ type: "local", path: LOADED_PLUGIN.path, skipMcpDiscovery: true }],
       verbatimPrompts: true,
     });
     expect(worker?.options.settings).toMatchObject({
@@ -166,7 +179,7 @@ describe("one worker end to end", () => {
     expect(worker?.prompts[0]).toContain("呼叫 push_branch 工具推送");
     expect(worker?.prompts[0]).toContain("open_pr 工具開 PR");
     expect(worker?.prompts[0]).not.toContain("git push origin");
-    expect(worker?.prompts[0]).toContain(BASH_RULE);
+    expect(worker?.prompts[0]).toContain(SKILL_RULE);
     for (const call of [planner, worker]) {
       const tmpdir = call?.options.env["TMPDIR"] ?? "";
       expect(tmpdir.startsWith(join(world.root, "cagg-"))).toBe(true);
@@ -231,6 +244,16 @@ describe("how a worker can end", () => {
     expect(world.commands.summaries[0]?.text).toBe(
       "session 的認證來源是 ANTHROPIC_API_KEY，不是設定的 none，已停下。",
     );
+    expect(world.query.aborted).toBe(1);
+  });
+
+  it("stops a worker whose start does not list the plugin, and logs what was missing", async () => {
+    const { plugins: _plugins, ...noPlugin } = init("w1");
+    const world = await runOne([noPlugin, result(workerOutput("report"))]);
+    const text = `session 開始時沒有載入 plugin claude-agg（${LOADED_PLUGIN.path}），已停下。`;
+    expect(world.tasks()["build-1"]?.state).toBe("failed");
+    expect(world.commands.summaries).toEqual([{ task: "build-1", kind: "failed", text }]);
+    expect(world.logs).toContain(`task build-1: ${text}`);
     expect(world.query.aborted).toBe(1);
   });
 
@@ -338,6 +361,37 @@ describe("the subscription token", () => {
     for (const call of world.commands.calls) {
       expect(JSON.stringify(call)).not.toContain(CANARY);
     }
+  });
+
+  it("starts nothing when its plugin fails the check or lies in a place a worker supplies", async () => {
+    const world = new World({ normal: ["build"] });
+    const elsewhere = mkdtempSync(join(systemTmpdir(), "cagg-repo-"));
+    try {
+      const repos = { app: { path: elsewhere, base: "origin/main", defaultBranch: "main" } };
+      const placed = [
+        ["the worktree root", join(world.root, "plugin"), world.root],
+        ["repo app", join(elsewhere, "plugin"), elsewhere],
+      ] as const;
+      for (const [what, dir, place] of placed) {
+        cpSync(PLUGIN_DIR, dir, { recursive: true });
+        const deps = { ...world.deps(), pluginDir: dir };
+        await expect(Supervisor.start({ ...world.settings(), repos }, deps)).rejects.toThrow(
+          `must lie outside ${what} (${realpathSync(place)})`,
+        );
+      }
+      const broken = join(elsewhere, "broken");
+      cpSync(PLUGIN_DIR, broken, { recursive: true });
+      writeFileSync(join(broken, "hooks.json"), "{}");
+      await expect(
+        Supervisor.start(world.settings(), { ...world.deps(), pluginDir: broken }),
+      ).rejects.toThrow(
+        new PluginError("hooks.json not allowed: the plugin carries two skills only"),
+      );
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+    expect(world.commands.calls).toEqual([]);
+    expect(existsSync(join(world.root, LOCK_NAME))).toBe(false);
   });
 
   it("starts nothing without a token", async () => {
