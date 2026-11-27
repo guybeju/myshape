@@ -7,8 +7,13 @@
 // (probeRewritten), and tests the sandbox only; item 7 stays model-driven
 // and records a step the model did not attempt as 沒有測到. The plugin skill
 // cases (`-t "plugin skill"`) check that a worker's start lists the
-// supervisor's plugin and both its skills, and that the worker loads its
-// rules with the Skill tool. These are: worker and planner sessions with the supervisor's
+// supervisor's plugin and its worker skill, and that the worker loads its
+// rules with the Skill tool. The explicit tools cases (`-t "explicit tools"`)
+// check that a worker has exactly WORKER_TOOLS (and the forge tools for a
+// ship), that it calls a forge tool directly, not through ToolSearch, and
+// that the Skill tool refuses the status skill in a worker; they record
+// whether the start's skills narrow to the worker skill. These are: worker
+// and planner sessions with the supervisor's
 // own options, run by the bundled `claude` binary against Haiku 5.5, in
 // sandbox repositories and a scratch HOME under this test's own temporary
 // directory (its path resolved, so /tmp as /private/tmp on macOS). They run
@@ -65,9 +70,11 @@ import {
 import { PromptStream } from "./session.js";
 import { sessionTmpdir } from "./supervisor.js";
 import {
+  FORGE_TOOLS,
   plannerOptions,
   SESSION_MODE,
   SESSION_TMP_ROOT,
+  WORKER_TOOLS,
   workerOptions,
   type SessionContext,
 } from "./session-options.js";
@@ -359,6 +366,12 @@ function reachedSandbox(label: string, use: ToolUse): string | undefined {
   return undefined;
 }
 
+/** The start's tools, sorted, to compare with the tools a worker should have. */
+function initTools(run: Run): string[] {
+  const tools = run.init?.["tools"];
+  return Array.isArray(tools) ? tools.map(String).toSorted() : [];
+}
+
 /** The session started in the expected mode with the settings' credential. */
 function expectStarted(run: Run, mode = SESSION_MODE): void {
   expect(run.init?.["permissionMode"]).toBe(mode);
@@ -624,7 +637,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
   });
 
   it(
-    "items 2, 3, 4, 10: the sandbox starts; no credential, no GitHub, no web tools, even with a loosening project setting",
+    "items 2, 3, 4, 10, explicit tools (ship): the sandbox starts; no credential, no GitHub, only the listed tools, even with a loosening project setting",
     async () => {
       const loosening = {
         sandbox: {
@@ -648,11 +661,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
         ]),
       );
       expectStarted(run);
-      const tools = (run.init?.["tools"] ?? []) as string[];
-      expect(tools).not.toContain("WebFetch");
-      expect(tools).not.toContain("WebSearch");
-      expect(tools).toContain("mcp__forge__push_branch");
-      expect(tools).toContain("mcp__forge__open_pr");
+      expect(initTools(run)).toEqual([...WORKER_TOOLS, ...FORGE_TOOLS].toSorted());
       const names = output(bashCall(run, "printenv | cut"));
       expect(names).toContain("PATH");
       expect(names).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
@@ -1374,7 +1383,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
   );
 
   it(
-    "plugin skill (start): a worker's start lists the supervisor's plugin and both its skills",
+    "plugin skill (start), explicit tools (scout): a worker's start lists the supervisor's plugin, its worker skill and only the listed tools",
     async () => {
       const repo = repository();
       const abort = new AbortController();
@@ -1397,13 +1406,16 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       expect(init["plugins"]).toContainEqual(
         expect.objectContaining({ name: PLUGIN_NAME, path: ctx.plugin }),
       );
-      expect(init["skills"]).toEqual(expect.arrayContaining([WORKER_SKILL, STATUS_SKILL]));
+      expect(init["skills"]).toContain(WORKER_SKILL);
+      const narrowed = JSON.stringify(init["skills"]) === JSON.stringify([WORKER_SKILL]);
+      findings.push(`  init skills narrowed to the worker skill: ${narrowed ? "yes" : "no"}`);
+      expect(initTools(run)).toEqual([...WORKER_TOOLS].toSorted());
     },
     STEP_MS,
   );
 
   it(
-    "plugin skill (load): the worker loads its rules with the Skill tool; what the status skill does there is recorded",
+    "plugin skill (load): the worker loads its rules with the Skill tool",
     async () => {
       const repo = repository();
       const run = await session(
@@ -1414,7 +1426,8 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
           scout: true,
           topic: { id: "t", name: "規矩", goal: "確認你讀得到規矩。" },
           title: "讀規矩",
-          prompt: `照上面的說明載入規矩後，再用 Skill 工具載入 ${STATUS_SKILL}（不管成不成功都不要重試），然後交回 outcome report，summary 原樣抄下規矩裡「## Bash」那一節的第一句，一個字都不改。`,
+          prompt:
+            "照上面的說明載入規矩後，交回 outcome report，summary 原樣抄下規矩裡「## Bash」那一節的第一句，一個字都不改。",
         }),
         { forge: null },
       );
@@ -1422,8 +1435,47 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       const worker = toolCall(run, "Skill", WORKER_SKILL);
       expect(stoppedBy(worker), "the worker skill loads without a prompt").toBeUndefined();
       expect(run.transcript).toContain("Bash 指令在 sandbox 裡跑，不用核准");
-      const status = attempted(run, "plugin skill (load) status", "Skill", STATUS_SKILL);
-      if (status !== undefined) findings.push(`  status skill: ${stoppedBy(status) ?? "ran"}`);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "explicit tools (forge): a ship worker calls push_branch directly, not through ToolSearch",
+    async () => {
+      const repo = repository();
+      const run = await session(
+        repo,
+        STEPS([`Call the ${FORGE_TOOLS[0]} tool once (it takes no input).`]),
+      );
+      expectStarted(run);
+      const push = toolCall(run, FORGE_TOOLS[0], "");
+      findings.push(`  push_branch: ${push.result.slice(0, 200).replaceAll("\n", " | ")}`);
+      expect(stoppedBy(push), "push_branch is offered and runs").toBeUndefined();
+      expect(run.tools.filter((each) => each.name === "ToolSearch")).toEqual([]);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "explicit tools (skills): the Skill tool refuses the status skill in a worker",
+    async (test) => {
+      const repo = repository();
+      const run = await session(
+        repo,
+        STEPS([`Use the Skill tool to load the skill ${STATUS_SKILL}.`]),
+        { forge: null },
+      );
+      expectStarted(run);
+      const status = attempted(run, "explicit tools (skills) status", "Skill", STATUS_SKILL);
+      if (status === undefined) {
+        test.skip("not exercised (model declined)");
+        return;
+      }
+      findings.push(`  status skill: ${status.result.slice(0, 200).replaceAll("\n", " | ")}`);
+      expect(status.isError, "the Skill tool refused it").toBe(true);
+      expect(run.transcript, "no text of the status skill reached the worker").not.toContain(
+        "The person asking runs claude-agg",
+      );
     },
     STEP_MS,
   );
