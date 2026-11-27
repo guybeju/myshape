@@ -1,5 +1,5 @@
 import { h } from "./dom.js";
-import { agentRow, closedFold, closedTodoEntries, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
+import { agentRow, closedFold, closedTodoEntries, fileMenu, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
 import { dropHint } from "./drop.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
@@ -65,14 +65,6 @@ function section(title, ...children) {
         .filter((child) => child !== null && child !== undefined && child !== false);
     return h("section", {}, h("h2", {}, title), content.length > 0 ? content : h("p", { class: "note" }, "目前沒有。"));
 }
-function tagMenu(view, actions, agent) {
-    const choose = (event) => {
-        const topic = event.target.value;
-        if (topic !== "")
-            actions.tag(agent.home, agent.task, topic);
-    };
-    return h("select", { class: "auto", onchange: choose }, h("option", { value: "" }, "歸併到…"), QUEUES.flatMap((queue) => view.queues[queue]).map((id) => h("option", { value: id }, topicName(view, id))));
-}
 const UNSORTED_REASON = {
     "no-tag": "沒有標記",
     "unknown-topic": "標記的議題不存在",
@@ -97,7 +89,7 @@ export function mergeConfirm(page, view, actions, key) {
     return h("div", { class: "confirm" }, `併入之後不能拆開，「${from}」的 agent 與更新都會顯示在「${into}」底下。`, mergeTagNote(view, String(pending.body["from"]), String(pending.body["into"])), h("div", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, `併入「${into}」`), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
 function unsortedRow(view, actions, agent) {
-    return h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), tagMenu(view, actions, agent));
+    return h("div", { class: "row" }, h("span", { class: "grow" }, h("b", {}, agent.task), " ", h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? "")), h("span", { class: "pill" }, agent.home), fileMenu(view, actions, agent, "歸併到…"));
 }
 /** The agents with no valid topic, split into running and finished. */
 function untaggedAgents(view) {

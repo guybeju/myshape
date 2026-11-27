@@ -13,7 +13,7 @@ import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
 import { closedNotice } from "./schedule-notices.js";
 import { todoState, todoTransitionProblem, withKept, withSettings, withStall, } from "./lifecycle.js";
 import { KEEP_DEFAULT_DAYS, KEEP_MAX_DAYS, changeSettings } from "./lifecycle-settings.js";
-import { deferStall, localDay } from "./stalls.js";
+import { askStall, deferStall, localDay } from "./stalls.js";
 /** The schedule on `id`, if any. */
 function scheduled(ctx, id) {
     return schedules.scheduleOfTopic(ctx.schedules, ctx.topics, id) !== null;
@@ -294,9 +294,10 @@ function keptUntil(ctx, args, result) {
 }
 /**
  * The captain's answer on one of the board's own cards: 先不關，到某天 on a
- * 沒人處理的議題 card (`card: "idle"`, `key` its topic id), or 延到 <日期> on a
- * 沒人接 card (`card: "stall"`, `key` its topic id or "-"). The other buttons
- * of both are operations the board already has (archive, move).
+ * 沒人處理的議題 card (`card: "idle"`, `key` its topic id), or on a 沒人接 card
+ * (`card: "stall"`, `key` its topic id or "-") 延到 <日期>, or with `ask: true`
+ * 請 <aggregator> 處理. The other buttons of both are operations the board
+ * already has (archive, move).
  */
 function deferAnswer(ctx, args) {
     const key = stringField(args, "key");
@@ -308,6 +309,16 @@ function deferAnswer(ctx, args) {
         return { ok: false, code: "usage", line: "card 要是 idle 或 stall。" };
     const nameOf = (id) => ctx.topics.doc.topics[id]?.name ?? id;
     const nowMs = Date.parse(ctx.now);
+    if (args["ask"] === true) {
+        const shown = ctx.stalls().find((stall) => stall.key === key);
+        const members = shown === undefined ? [] : shown.members;
+        const asked = askStall(ctx.lifecycle.stalls, key, { nameOf, nowMs, label: ctx.label, members });
+        if (!asked.ok)
+            return asked;
+        const store = withStall(ctx.lifecycle, key, asked.stall);
+        const { line, records, message } = asked;
+        return { ok: true, changed: true, store, line, records, message };
+    }
     const result = deferStall(ctx.lifecycle.stalls, key, args["days"] ?? KEEP_DEFAULT_DAYS, {
         nameOf,
         nowMs,
@@ -679,6 +690,7 @@ function answer(board, response) {
         notices: [],
         decisions: [],
         scheduleNotices: [],
+        messages: [],
     };
 }
 function refused(line) {
@@ -846,7 +858,11 @@ function applyLifecycleOp(target, board, actor, result) {
         next: result.store,
         records: withSuffix(result.records, "你在頁面上"),
     };
-    return commit(target, board, change, actor, result.line);
+    const applied = commit(target, board, change, actor, result.line);
+    // Saved first: the message goes only for an ask the board has recorded.
+    if (applied.committed === null || result.message === undefined)
+        return applied;
+    return { ...applied, messages: [result.message] };
 }
 function applyScheduleOp(target, board, request, actor, result) {
     if (!result.ok)

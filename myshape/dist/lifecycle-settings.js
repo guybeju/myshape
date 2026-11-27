@@ -8,7 +8,8 @@ import { isRecord } from "./files.js";
  * waiting on work the board cannot see; D8 an answer delivered but not closed;
  * D9 a decision the board cannot read; Q1 queued and ready; Q4 queued under an
  * archived topic; Q5 queued and stopped with no date or visible wait; Q8
- * queued waiting on work the board cannot see; NT queued work or an agent with
+ * queued waiting on work the board cannot see; Q9 a queued item the board
+ * cannot read; NT queued work or an agent with
  * no topic; A1 an agent working without any change; A2 parked or paused; A3 not
  * started; A4 blocked or failed; A5 done but not cleaned up; A6 an agent state
  * the board cannot read; W1 a worker question waiting for the aggregator; O3 a
@@ -24,6 +25,7 @@ export const TIMED_STATES = [
     "Q4",
     "Q5",
     "Q8",
+    "Q9",
     "NT",
     "A1",
     "A2",
@@ -56,6 +58,7 @@ export const DEFAULT_DEADLINES = {
     Q4: { remind: DAY, raise: 3 * DAY },
     Q5: { remind: DAY, raise: 3 * DAY },
     Q8: { remind: DAY, raise: 3 * DAY },
+    Q9: { remind: 0, raise: DAY },
     NT: { remind: DAY, raise: 3 * DAY },
     A1: { remind: 3 * DAY, raise: 7 * DAY },
     A2: { remind: DAY, raise: 3 * DAY },
@@ -68,6 +71,16 @@ export const DEFAULT_DEADLINES = {
     S3: { remind: 3 * DAY, raise: 7 * DAY },
     S6: { remind: 3, raise: 5 },
 };
+/**
+ * A queued item's dated wait (Q6) is the date's until one day past it; still
+ * there then, the date no longer explains the wait (Q5, or Q1 with nothing held).
+ */
+export const DATE_GRACE_MINUTES = DAY;
+/**
+ * How long the aggregator has after the captain's 〔請 <aggregator> 處理〕 on a
+ * 沒人接 card (N3) before the card is back in front of the captain, once only.
+ */
+export const ASK_MINUTES = DAY;
 /** Decision 3, option A: 先不關 keeps a topic this many days unless the captain picks another. */
 export const KEEP_DEFAULT_DAYS = 14;
 /** Decision 3: the longest 先不關 or 延到 the captain may pick. */
@@ -102,6 +115,7 @@ export const STATE_LABEL = {
     Q4: "封存議題底下的排隊項目",
     Q5: "停著、沒有日期也沒有等的項目",
     Q8: "等看板看不到的工作的排隊項目",
+    Q9: "讀不懂的排隊項目",
     NT: "沒有議題的排隊項目與 agent",
     A1: "進行中卻沒有任何變化的 agent",
     A2: "停著的 agent",

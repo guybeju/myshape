@@ -20,6 +20,10 @@ function onAnswerOf(value) {
     const found = ON_ANSWER.find((name) => name === value);
     return found === undefined ? null : found;
 }
+/** A value the board could not read, as it shows it: the JSON it got, cut to 64 characters. */
+function shownValue(value) {
+    return String(JSON.stringify(value)).slice(0, 64);
+}
 /** A hold with no bucket is due now; any other word the board does not know is unreadable. */
 function bucketOf(value) {
     if (value === undefined || value === null)
@@ -34,7 +38,7 @@ function parseHold(raw) {
     const bucket = bucketOf(word);
     const age = raw["hold_age_days"];
     return {
-        ...(bucket === "unknown" ? { unreadable: String(JSON.stringify(word)).slice(0, 64) } : {}),
+        ...(bucket === "unknown" ? { unreadable: shownValue(word) } : {}),
         id,
         title: textField(raw, "title"),
         question: textField(raw, "question"),
@@ -119,16 +123,42 @@ function parseTask(raw) {
         unstarted: raw["unstarted"] === true,
     }));
 }
+/** A date (YYYY-MM-DD) or a time in ISO 8601 with its zone. */
+const UNTIL = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
+/** A queued item's `hold_until`: absent or null is none; anything but a real date or time is unreadable. */
+function queuedUntil(value) {
+    if (value === undefined || value === null)
+        return { value: null };
+    if (typeof value === "string" && UNTIL.test(value) && !Number.isNaN(Date.parse(value)))
+        return { value };
+    return { unreadable: `hold_until: ${shownValue(value)}` };
+}
+/** A queued item's `turn`: absent or null is false; anything but a boolean is unreadable. */
+function queuedTurn(value) {
+    if (value === undefined || value === null)
+        return { value: false };
+    if (typeof value === "boolean")
+        return { value };
+    return { unreadable: `turn: ${shownValue(value)}` };
+}
 function parseQueued(raw) {
-    return withId(raw, (id) => ({
-        id,
-        kind: textField(raw, "kind"),
-        title: textField(raw, "title"),
-        hold: stringField(raw, "hold"),
-        captain: raw["captain"] === true,
-        blockers: strings(raw["blockers"]),
-        topic_hint: stringField(raw, "topic_hint"),
-    }));
+    return withId(raw, (id) => {
+        const until = queuedUntil(raw["hold_until"]);
+        const turn = queuedTurn(raw["turn"]);
+        const unreadable = [until, turn].flatMap((field) => "unreadable" in field ? [field.unreadable] : []);
+        return {
+            id,
+            kind: textField(raw, "kind"),
+            title: textField(raw, "title"),
+            hold: stringField(raw, "hold"),
+            captain: raw["captain"] === true,
+            blockers: strings(raw["blockers"]),
+            topic_hint: stringField(raw, "topic_hint"),
+            hold_until: "value" in until ? until.value : null,
+            turn: "value" in turn ? turn.value : false,
+            ...(unreadable.length === 0 ? {} : { unreadable: unreadable.join("；") }),
+        };
+    });
 }
 /** A number of seconds within `bounds`, or null when `value` is not a finite number. */
 function seconds(value, bounds) {
