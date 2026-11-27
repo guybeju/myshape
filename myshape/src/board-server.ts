@@ -404,9 +404,10 @@ function viewVersion(service: Service): string {
   const open = openKeys(service.board.schedules, nowMs);
   const metrics = metricFlags(
     boardMetrics(
-      service.poller
-        .snapshots()
-        .map((home) => ({ id: home.id, metrics: home.report?.metrics ?? null })),
+      service.poller.snapshots().map((home) => ({
+        id: home.id,
+        metrics: home.report === null ? null : home.report.metrics,
+      })),
       nowMs,
     ),
   );

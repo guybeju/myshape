@@ -961,7 +961,10 @@ function baseView(input: ViewInput): BoardView {
     idle: [],
     updates: updatesOf(input, placer),
     metrics: boardMetrics(
-      input.homes.map((home) => ({ id: home.id, metrics: home.report?.metrics ?? null })),
+      input.homes.map((home) => ({
+        id: home.id,
+        metrics: home.report === null ? null : home.report.metrics,
+      })),
       input.nowMs,
     ),
     summaries: input.summaries

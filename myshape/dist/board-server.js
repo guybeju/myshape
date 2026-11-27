@@ -290,9 +290,10 @@ function viewVersion(service) {
     // occurrence passing its closes_by is one even when the clock saves nothing;
     // nor does a metric's crossing its stale limit or its reset time.
     const open = openKeys(service.board.schedules, nowMs);
-    const metrics = metricFlags(boardMetrics(service.poller
-        .snapshots()
-        .map((home) => ({ id: home.id, metrics: home.report?.metrics ?? null })), nowMs));
+    const metrics = metricFlags(boardMetrics(service.poller.snapshots().map((home) => ({
+        id: home.id,
+        metrics: home.report === null ? null : home.report.metrics,
+    })), nowMs));
     const reach = crypto
         .createHash("sha256")
         .update(JSON.stringify([blockedReasons(service), programsToConfirm(service), open, metrics]))
