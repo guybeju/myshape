@@ -11,7 +11,14 @@ import {
   todoTransitionProblem,
   visibleWait,
 } from "./lifecycle.js";
-import type { Card, CardState, Clock, LifecycleContext, LifecycleStore } from "./lifecycle.js";
+import type {
+  Card,
+  CardState,
+  Clock,
+  LifecycleContext,
+  LifecycleStore,
+  TodoCardState,
+} from "./lifecycle.js";
 import {
   DEFAULT_DEADLINES,
   TIMED_STATES,
@@ -20,6 +27,7 @@ import {
   durationWords,
   parseSettings,
 } from "./lifecycle-settings.js";
+import type { JournalEvent } from "./journal.js";
 import type { HomeReport, ReportHold, ReportQueued, ReportTask } from "./report.js";
 import { emptySchedules } from "./schedules.js";
 import type { Series } from "./schedules.js";
@@ -141,13 +149,18 @@ function context(store: LifecycleStore, extra: Partial<LifecycleContext> = {}): 
 function look(
   homes: HomeSnapshot[],
   store: LifecycleStore = emptyLifecycle(),
-  extra: { todos?: TodoStore; context?: Partial<LifecycleContext>; cap?: number | null } = {},
+  extra: {
+    todos?: TodoStore;
+    context?: Partial<LifecycleContext>;
+    cap?: number | null;
+    events?: JournalEvent[];
+  } = {},
 ) {
   const input: ViewInput = {
     topics: topics(),
     todos: extra.todos ?? emptyTodos(),
     homes,
-    events: [],
+    events: extra.events ?? [],
     summaries: [],
     nowMs: NOW,
     staleMs: 180_000,
@@ -382,7 +395,6 @@ describe("clocks", () => {
     home: key.split("\t")[1] ?? null,
     label: key,
     sig,
-    count: 0,
   });
   const where = { fresh: new Set(["main"]), present: new Set(["main", "sm1"]), nowMs: NOW };
 
@@ -598,7 +610,7 @@ describe("the hands-on transitions", () => {
   });
 
   it("refuses every operation from a state the table does not list, naming what may run", () => {
-    const states: CardState[] = ["O1", "O2", "O3", "O4", "O6"];
+    const states: TodoCardState[] = ["O1", "O2", "O3", "O4", "O6"];
     for (const [op, from] of Object.entries(TODO_TRANSITIONS))
       for (const state of states) {
         const problem = todoTransitionProblem(op, "it", state);
@@ -688,10 +700,13 @@ describe("scheduleLines", () => {
       { kind: "schedule.paused", topic: "a", by: "captain" },
       { kind: "schedule.resumed", topic: "a", by: "captain" },
       { kind: "schedule.paused", topic: "a", by: "aggregator" },
+      { kind: "schedule.edited", topic: "a", by: "captain" },
+      { kind: "schedule.paused", topic: null, by: "captain" },
+      { kind: "schedule.paused", topic: "b", by: "captain" },
     ]);
-    expect(lines.map((line) => [line.id, line.pausedBy, line.unanswered])).toEqual([
-      ["a", "aggregator", 0],
-      ["b", null, 3],
+    expect(lines.map((line) => [line.id, line.pausedByAggregator, line.unanswered])).toEqual([
+      ["a", true, 0],
+      ["b", false, 3],
     ]);
     const { evaluation } = look([home("main")], emptyLifecycle(), {
       context: { schedules: lines },
@@ -756,5 +771,237 @@ describe("invariant I, over random reads and time", () => {
         store = { ...store, ...evaluation.memory };
       }
     }
+  });
+});
+
+describe("the edges of each rule", () => {
+  it("takes the board's latest answer to the question asked now", () => {
+    const write = (state: string) => ({
+      kind: "answer",
+      home: "main",
+      task: "a",
+      topic: null,
+      state,
+      question_sha256: "sha",
+    });
+    const { evaluation } = look(
+      [home("main", { report: report({ holds: [hold("a")] }) })],
+      emptyLifecycle(),
+      {
+        context: {
+          writes: [write("failed"), write("delivered")],
+          questions: new Map([["main\ta", "sha"]]),
+        },
+      },
+    );
+    expect(stateOf(evaluation.cards, "hold\tmain\ta")).toBe("D8");
+  });
+
+  it("does not take another home's card of the same id as one it waits for", () => {
+    const { view } = look([
+      home("main", { report: report({ queued: [queued("a", { blockers: ["x"] })] }) }),
+      home("sm1", { report: report({ holds: [hold("x")], queued: [queued("y")] }) }),
+    ]);
+    expect(visibleWait(view, "main", ["x"])).toBe(false);
+    expect(visibleWait(view, "main", ["y"])).toBe(false);
+    expect(visibleWait(view, "sm1", ["x"])).toBe(true);
+  });
+
+  it("gives a finished agent no topic flag, and does not count it as work", () => {
+    const dispatched = (taskId: string): JournalEvent => ({
+      src: "ledger",
+      home: "main",
+      ts: NOW / 1000 - 100,
+      event: "task.dispatched",
+      task: taskId,
+      fields: { kind: "ship" },
+    });
+    const homes = [
+      home("main", {
+        report: report({
+          tasks: [task("live", "working")],
+          topics: { done: "idle 2026-11-01T00:00:00Z" },
+        }),
+      }),
+    ];
+    const { evaluation } = look(homes, emptyLifecycle(), {
+      events: [dispatched("live"), dispatched("done"), dispatched("loose")],
+    });
+    expect(stateOf(evaluation.cards, "agent\tmain\tlive\tNT")).toBe("NT");
+    expect(stateOf(evaluation.cards, "agent\tmain\tloose")).toBe("A9");
+    expect(stateOf(evaluation.cards, "agent\tmain\tloose\tNT")).toBeUndefined();
+    expect(stateOf(evaluation.cards, "agent\tmain\tdone")).toBe("A9");
+    expect(stateOf(evaluation.cards, "topic\tidle")).toBe("T2");
+    expect(evaluation.memory.homes).toEqual({});
+  });
+
+  it("tells a topic's own schedule from another's, and 先不關 from one that just ran out", () => {
+    const line = (topic: string) => ({
+      id: topic,
+      topic,
+      title: topic,
+      state: "on" as const,
+      pausedByAggregator: false,
+      waitsEnable: false,
+      unanswered: 0,
+      open: false,
+    });
+    const other = look([home("main")], emptyLifecycle(), { context: { schedules: [line("hi")] } });
+    expect(stateOf(other.evaluation.cards, "topic\tlt")).toBe("T6");
+    const own = look([home("main")], emptyLifecycle(), { context: { schedules: [line("lt")] } });
+    expect(stateOf(own.evaluation.cards, "topic\tlt")).toBe("T7");
+    const ending = { ...emptyLifecycle(), kept: { idle: ago(0) } };
+    expect(stateOf(look([home("main")], ending).evaluation.cards, "topic\tidle")).toBe("T2");
+  });
+
+  it("knows no topic has no work before the root home's first good read, and keeps its clock", () => {
+    const store = seen([["topic\tidle", "T2", 5 * DAY]]);
+    const boot = look([], store, { context: { fresh: new Set(), present: new Set() } });
+    expect(stateOf(boot.evaluation.cards, "topic\tidle")).toBe("T5");
+    expect(boot.view.idle).toEqual([]);
+    expect(boot.evaluation.memory.clocks["topic\tidle"]?.since).toBe(ago(5 * DAY));
+  });
+
+  it("stops a stored card's clock even when a home has the same name as its id", () => {
+    const previous = { "todo\tmain": { state: "O3" as const, since: ago(DAY), sig: "" } };
+    expect(
+      nextClocks(previous, [], { fresh: new Set(), present: new Set(["main"]), nowMs: NOW }),
+    ).toEqual({});
+  });
+
+  it("escalates exactly at the deadline, by time or by the run of unanswered occurrences", () => {
+    const at = seen([["queued\tmain\tparked", "Q5", 3 * DAY]]);
+    const homes = [home("main", { report: report({ queued: [queued("parked", { hold: "x" })] }) })];
+    expect(look(homes, at).view.stalls.map((stall) => stall.key)).toEqual(["hi"]);
+    const before = seen([["queued\tmain\tparked", "Q5", 3 * DAY - MINUTE]]);
+    expect(look(homes, before).view.stalls).toEqual([]);
+    const run = (unanswered: number) =>
+      look([home("main")], emptyLifecycle(), {
+        context: {
+          schedules: [
+            {
+              id: "s",
+              topic: "hi",
+              title: "S",
+              state: "on",
+              pausedByAggregator: false,
+              waitsEnable: false,
+              unanswered,
+              open: false,
+            },
+          ],
+        },
+      }).view.stalls.map((stall) => stall.members.map((member) => `${member.id}:${member.states}`));
+    expect(run(4)).toEqual([]);
+    expect(run(5)).toEqual([["s:S6"]]);
+  });
+
+  it("names each member by its card, with all its reasons since the earliest, two to a card", () => {
+    const store = seen([
+      ["queued\tmain\tloose", "Q5", 4 * DAY],
+      ["queued\tmain\tloose\tNT", "NT", 3 * DAY],
+      ["queued\tmain\tother", "Q1", 8 * DAY],
+    ]);
+    const homes = [
+      home("main", {
+        report: report({
+          queued: [
+            queued("loose", { hold: "x", topic_hint: null }),
+            queued("other", { topic_hint: null }),
+          ],
+        }),
+      }),
+    ];
+    const [stall] = look(homes, store).view.stalls;
+    expect(stall).toMatchObject({ key: "-", topic: null, state: "N2", deferred_until: null });
+    expect(stall?.members).toEqual([
+      {
+        key: "queued\tmain\tloose",
+        kind: "queued",
+        home: "main",
+        id: "loose",
+        label: "main/loose",
+        states: ["Q5", "NT"],
+        since: ago(4 * DAY),
+      },
+      {
+        key: "queued\tmain\tother",
+        kind: "queued",
+        home: "main",
+        id: "other",
+        label: "main/other",
+        states: ["Q1"],
+        since: ago(8 * DAY),
+      },
+    ]);
+  });
+
+  it("names a member whose home cannot report from its key, and settles a card of a topic gone", () => {
+    const store = {
+      ...seen([["queued\tsm1\tparked", "Q5", 4 * DAY]]),
+      stalls: {
+        hi: { since: ago(DAY), members: ["queued\tsm1\tparked"] },
+        ghost: { since: ago(DAY), members: ["queued\tmain\tgone"] },
+      },
+    };
+    const { view, evaluation } = look([home("main"), home("sm1", { report: null })], store, {
+      context: { present: new Set(["main", "sm1"]) },
+    });
+    expect(view.stalls[0]).toMatchObject({ key: "hi", topic: "hi" });
+    expect(view.stalls[0]?.members).toEqual([
+      {
+        key: "queued\tsm1\tparked",
+        kind: "queued",
+        home: "sm1",
+        id: "parked",
+        label: "sm1/parked",
+        states: ["Q5"],
+        since: ago(4 * DAY),
+      },
+    ]);
+    expect(evaluation.records.map((record) => record.text)).toEqual([
+      "「沒人接」議題「ghost」已不需要：每張卡都離開了逾期的狀態",
+    ]);
+  });
+
+  it("shows a card the captain put off as N4, out of the queue, until a new member comes", () => {
+    const store = {
+      ...seen([["queued\tmain\tparked", "Q5", 4 * DAY]]),
+      stalls: {
+        hi: {
+          since: ago(DAY),
+          members: ["queued\tmain\tparked"],
+          deferred: { until: ago(-DAY), members: ["queued\tmain\tparked"] },
+        },
+      },
+    };
+    const homes = [home("main", { report: report({ queued: [queued("parked", { hold: "x" })] }) })];
+    const { view } = look(homes, store);
+    expect(view.stalls).toMatchObject([{ key: "hi", state: "N4", deferred_until: ago(-DAY) }]);
+    expect(view.turns).toEqual([]);
+  });
+
+  it("asks the captain to enable only what the setting says waits for it", () => {
+    const store = emptySchedules();
+    store.series = {
+      a: {
+        topic: "a",
+        title: "a",
+        rule: "daily 10:00",
+        tz: "UTC",
+        duration_min: null,
+        lead_min: null,
+        rt: "none",
+        rt_locked: false,
+        state: "on",
+        locked: false,
+        by: "aggregator",
+        seen: false,
+        created_at: "T",
+      },
+    };
+    expect(scheduleLines(store, (id) => id, [])[0]?.waitsEnable).toBe(false);
+    store.settings.aggregator_needs_enable = true;
+    expect(scheduleLines(store, (id) => id, [])[0]?.waitsEnable).toBe(true);
   });
 });

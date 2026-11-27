@@ -589,12 +589,15 @@ function lifecycleContext(service: Service): LifecycleContext {
 /**
  * One lifecycle look (lifecycle.ts evaluate): saves what the board saw and the
  * transitions it made, by the board, through commitChange, and tells the page
- * when what is in front of the captain changed. A failure is logged; the next
- * read or clock check looks again.
+ * when what is in front of the captain changed. It waits for a good read of
+ * the root home. A failure is logged; the next read or clock check looks again.
  */
 function lifecycleTick(service: Service): void {
   try {
-    const { view, evaluation } = evaluateBoard(viewInput(service));
+    const input = viewInput(service);
+    // Before the root home's first good read the board knows no home's cards: nothing to save.
+    if (input.lifecycle?.fresh.has(MAIN_HOME) !== true) return;
+    const { view, evaluation } = evaluateBoard(input);
     const { clocks, homes, stalls, idle } = service.board.lifecycle;
     const same =
       JSON.stringify({ clocks, homes, stalls, idle }) === JSON.stringify(evaluation.memory);
