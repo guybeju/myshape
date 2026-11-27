@@ -277,6 +277,12 @@ describe("sandboxApprovable", () => {
     "rm -rf node_modules dist/old",
     'echo "$HOME" > note.txt',
     "/usr/bin/git status",
+    "if test -f package.json; then npm test; fi",
+    "{ npm test; npm run lint; }",
+    "! git diff --quiet",
+    "while read line; do echo x; done < list.txt",
+    "make test",
+    "make -j4 all",
   ])("approves %s", (command) => {
     expect(sandboxApprovable(command)).toBe(true);
   });
@@ -315,6 +321,26 @@ describe("sandboxApprovable", () => {
     ["rm with a variable", "rm -rf $DIR"],
     ["rm with no operand", "rm -rf"],
     ["rmdir of an absolute path", "rmdir /tmp/x"],
+    ["env inside if/then", "if true; then env curl x; fi"],
+    ["eval after else", "if false; then ls; else eval ls; fi"],
+    ["env after elif", "if false; then ls; elif true; then env x; fi"],
+    ["env in a { } group", "{ env curl x; }"],
+    ["env after !", "! env curl x"],
+    ["eval in while/do", "while true; do eval ls; done"],
+    ["eval in until/do", "until false; do eval ls; done"],
+    ["an assignment after then", "if true; then CI=1 npm test; fi"],
+    ["nested wrappers", "if true; then { ! while true; do env x; done; }; fi"],
+    ["a wrapper after a pipe", "ls | { env x; }"],
+    ["a case statement", "case x in x) ls;; esac"],
+    ["a for loop", "for f in a b; do ls $f; done"],
+    ["a select loop", "select x in a; do ls; done"],
+    ["a function keyword", "function f { ls; }"],
+    ["coproc", "coproc ls"],
+    ["[[ test", "[[ -f x ]] && ls"],
+    ["[[ after if", "if [[ -f x ]]; then ls; fi"],
+    ["make with an assignment", "make CC=clang"],
+    ["make with an assignment after a target", "make all CFLAGS=-O2"],
+    ["make by path with an assignment", "/usr/bin/make CC=clang"],
   ])("does not approve %s", (_what, command) => {
     expect(sandboxApprovable(command)).toBe(false);
   });

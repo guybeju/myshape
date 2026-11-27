@@ -96,12 +96,42 @@ function plainRemovable(operand: string): boolean {
   return parts.length > 0 && parts.every((part) => part !== ".." && part !== "." && part !== "*");
 }
 
+/** Shell reserved words that only lead into a command; the command after them is what runs. */
+const LEADING_RESERVED = new Set([
+  "!",
+  "{",
+  "}",
+  "if",
+  "then",
+  "elif",
+  "else",
+  "fi",
+  "do",
+  "done",
+  "while",
+  "until",
+]);
+
+/** Constructs whose runs the guard cannot read word by word: never approved. */
+const NEVER_APPROVED_CONSTRUCTS = new Set(["case", "for", "select", "function", "coproc", "[["]);
+
+/** A word that sets a variable, such as `CC=clang` or `PATH+=x`. */
+function isAssignment(word: string): boolean {
+  return /^[A-Za-z_]\w*\+?=/.test(word);
+}
+
 /** Whether one simple command's words are a shape the guard may approve. */
-function approvableWords(words: readonly string[]): boolean {
-  const [first = "", ...rest] = words;
-  if (/^[A-Za-z_]\w*\+?=/.test(first)) return false;
+function approvableWords(segment: readonly string[]): boolean {
+  let start = 0;
+  while (start < segment.length && LEADING_RESERVED.has(segment[start] ?? "")) start += 1;
+  const words = segment.slice(start);
+  const [first, ...rest] = words;
+  if (first === undefined) return true;
+  if (NEVER_APPROVED_CONSTRUCTS.has(first)) return false;
+  if (isAssignment(first)) return false;
   const name = first.replace(/^.*\//, "");
   if (NEVER_APPROVED.has(name)) return false;
+  if (name === "make" && rest.some(isAssignment)) return false;
   if (name === "rm" || name === "rmdir") {
     return rest.some((word) => !word.startsWith("-")) && rest.every(plainRemovable);
   }
@@ -110,8 +140,11 @@ function approvableWords(words: readonly string[]): boolean {
 
 /**
  * Whether a Bash command is a shape the guard may approve: never wider than
- * Claude Code's own sandbox auto-allow. Refused shapes: a first word in
- * NEVER_APPROVED, a leading VAR=, a here-document, ${!…} or ${ |…}, anything
+ * Claude Code's own sandbox auto-allow. Each simple command is read after its
+ * leading reserved words (`!`, `{`, `}`, if, then, elif, else, fi, do, done,
+ * while, until). Refused shapes: a command starting with case, for, select,
+ * function, coproc or [[; a first word in NEVER_APPROVED; a leading VAR=;
+ * `make` with a NAME= argument; a here-document, ${!…} or ${ |…}, anything
  * naming /proc/…/environ or /dev/tcp|udp, command substitution, a background
  * `&`, and rm/rmdir of anything but plain relative paths.
  */
