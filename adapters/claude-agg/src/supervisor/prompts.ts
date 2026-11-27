@@ -2,7 +2,11 @@
 // names and goals, which anyone with the page's token or the board's socket
 // can write; the captain's messages, directs and answers, from whoever holds
 // the page's token) and from the planner goes inside a marked data frame, as
-// JSON, never as instructions (plan section 5.3).
+// JSON, never as instructions (plan section 5.3). A worker's rules are its
+// skill's (plugin/skills/claude-agg-worker/SKILL.md); its prompt holds only
+// what is this task's own.
+
+import { WORKER_SKILL } from "./plugin.js";
 
 export interface FramedData {
   source: string;
@@ -28,37 +32,22 @@ export interface WorkerBrief {
   prompt: string;
 }
 
-/**
- * The command forms the sandbox never approves by itself (Claude Code sends
- * them to an approval nobody here can give), and what to write instead.
- */
-export const BASH_RULE =
-  '- Bash 指令在 sandbox 裡不用核准就會跑，但這幾種寫法一定被拒：在指令前面設變數（FOO=bar npm test；要設定就用指令自己的參數或專案的設定檔）、用 here-document 寫 commit 訊息（改成 git commit -m "一行訊息"）、以 env、time、nohup、timeout 或 eval 開頭的指令。被拒時換成簡單的寫法再跑一次。';
+/** The line that has a worker load its rules before anything else. */
+export const SKILL_RULE = `先用 Skill 工具載入 ${WORKER_SKILL}，再做別的事：那是你在這裡工作的規矩（檔案、Bash、交出改動、找使用者、交回的 JSON），每一條都照做。`;
 
-const SCOUT_RULE = "- 這個 task 只交報告：不推任何分支、不開 PR。";
+const SCOUT_RULE = "這個 task 只交報告：不推任何分支、不開 PR。";
 
 /** How a ship task hands its work over: through the supervisor's two forge tools. */
-function shipRules(branch: string): string[] {
-  return [
-    `- 要交出改動時，在這個 worktree 裡提交到 ${branch}，再呼叫 push_branch 工具推送，推送成功後呼叫 open_pr 工具開 PR。`,
-    "- 你沒有 GitHub 的憑證，也連不到 GitHub：不要自己跑 git push 或 gh。沒有合併的工具，合併由 captain 決定。",
-    "- 不要改 .github/ 底下的任何檔：改到的分支 supervisor 會拒絕推送，CI 的改動交給 captain。",
-  ];
+function shipRule(branch: string): string {
+  return `這個 task 要開 PR：要交出改動時，在這個 worktree 裡提交到 ${branch}，再呼叫 push_branch 工具推送，推送成功後呼叫 open_pr 工具開 PR。`;
 }
 
 /** The first prompt of a new worker session. */
 export function workerPrompt(brief: WorkerBrief): string {
   return [
     `你是 claude-agg 的 worker，負責 task ${brief.task}。你在自己的 git worktree 裡工作，分支是 ${brief.branch}。`,
-    "規矩：",
-    "- 只在這個 worktree 裡改檔案。",
-    ...(brief.scout ? [SCOUT_RULE] : shipRules(brief.branch)),
-    "- 不跑 myshape.sh，不碰看板的 home，不連看板的埠：看板只有 supervisor 會寫。",
-    BASH_RULE,
-    "- 要 captain 親手做的事（sudo、登入）寫進 todos，要 captain 決定的事寫進 question，不要自己繞過。",
-    "- 要等 captain 決定才能接著做時：question 寫問題與選項，outcome 寫 report，summary 寫做到哪裡；supervisor 會把答案交回給你接著做。",
-    "- 要等 captain 動手才能接著做時：todos 列出要做的事，outcome 寫 report；captain 做完以後 supervisor 會叫你回來確認。確認還沒好的，再列進 todos；好了的就不要再列。",
-    "- 結束時照指定的 JSON 格式交回：outcome 是 ready（PR 開好了，pr_url 寫 open_pr 回的網址）、report（只交報告）、failed 或 landed；summary 一到三句。",
+    SKILL_RULE,
+    brief.scout ? SCOUT_RULE : shipRule(brief.branch),
     DATA_RULE,
     frame({ source: "看板上的議題", data: brief.topic }),
     frame({

@@ -20,6 +20,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import type { CommandRequest, CommandResult, PlainEnv, RunCommand } from "./commands.js";
 import { removeHomes, writeHome } from "./fixtures.test-helper.js";
+import { PLUGIN_DIR, PLUGIN_NAME, STATUS_SKILL, WORKER_SKILL } from "./plugin.js";
 import type { QueryFn, QueryOptions, UserMessage } from "./sdk.js";
 import { PLANNER_DIR } from "./supervisor.js";
 
@@ -34,6 +35,10 @@ export const ENV: PlainEnv = {
 
 // --- messages ------------------------------------------------------------------
 
+/** The plugin as a session that loaded it lists it: this checkout's plugin, links resolved. */
+export const LOADED_PLUGIN = { name: PLUGIN_NAME, path: realpathSync(PLUGIN_DIR) };
+
+/** A start message; it lists the supervisor's plugin and its two skills as loaded. */
 export function init(
   session: string,
   mode = "default",
@@ -47,6 +52,8 @@ export function init(
     permissionMode: mode,
     apiKeySource,
     model,
+    plugins: [LOADED_PLUGIN],
+    skills: ["update-config", WORKER_SKILL, STATUS_SKILL],
   };
 }
 

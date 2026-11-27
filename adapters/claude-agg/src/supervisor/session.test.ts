@@ -4,12 +4,14 @@ import { endingOf, TEXT } from "./ending.js";
 import {
   errorResult,
   init,
+  LOADED_PLUGIN,
   maxTurns,
   promptText,
   rejected,
   result,
   workerOutput,
 } from "./harness.test-helper.js";
+import { STATUS_SKILL, WORKER_SKILL } from "./plugin.js";
 import type { InitMessage, QueryRun } from "./sdk.js";
 import { endOf, followSession, PromptStream, quotaSignal, refuseStart } from "./session.js";
 
@@ -193,6 +195,76 @@ describe("refuseStart", () => {
     expect(refuseStart(init("s", "auto") as InitMessage, subscription)).toBe(
       "session 開始時的權限模式是 auto，不是 default，已停下。",
     );
+  });
+});
+
+describe("a worker's start message and its plugin", () => {
+  async function start(message: object) {
+    const abort = new AbortController();
+    const starts: InitMessage[] = [];
+    const report = await followSession(
+      messages([message, result({ ok: 1 })]),
+      new PromptStream("go"),
+      abort,
+      {
+        mode: "default",
+        apiKeySource: "none",
+        plugin: LOADED_PLUGIN.path,
+        onStart: (each) => starts.push(each),
+      },
+    );
+    return { report, aborted: abort.signal.aborted, starts };
+  }
+  const ALL_MISSING = `session 開始時沒有載入 plugin claude-agg（${LOADED_PLUGIN.path}）、skill ${WORKER_SKILL}、skill ${STATUS_SKILL}，已停下。`;
+
+  it("goes on when the start lists the plugin at its path and both skills", async () => {
+    const { report, starts, aborted } = await start(init("w"));
+    expect(report.end).toEqual({ kind: "output", output: { ok: 1 } });
+    expect(starts[0]?.plugins).toEqual([LOADED_PLUGIN]);
+    expect(starts[0]?.skills).toContain(WORKER_SKILL);
+    expect(aborted).toBe(false);
+  });
+
+  it("stops and aborts a start that lists no plugin, saying what was missing", async () => {
+    const { plugins: _plugins, skills: _skills, ...bare } = init("w");
+    const { report, starts, aborted } = await start(bare);
+    expect(report.end).toEqual({ kind: "refused", reason: ALL_MISSING });
+    expect(starts).toEqual([]);
+    expect(aborted).toBe(true);
+  });
+
+  it("reads the start's plugin fields as outside data", async () => {
+    const odd = { ...init("w"), plugins: "claude-agg", skills: { [WORKER_SKILL]: true } };
+    expect((await start(odd)).report.end).toEqual({ kind: "refused", reason: ALL_MISSING });
+    const rows = {
+      ...init("w"),
+      plugins: [null, 7, { name: LOADED_PLUGIN.name, path: 7 }],
+      skills: [7, null, WORKER_SKILL, STATUS_SKILL],
+      plugin_errors: [null, { plugin: 7, type: 7 }],
+    };
+    expect((await start(rows)).report.end).toEqual({
+      kind: "refused",
+      reason: `session 開始時沒有載入 plugin claude-agg（${LOADED_PLUGIN.path}），已停下。`,
+    });
+  });
+
+  it("stops a start that reports a load error of the plugin", async () => {
+    const failed = {
+      ...init("w"),
+      plugin_errors: [
+        { plugin: "inline[0]", type: "hook-load-failed", message: "m", path: LOADED_PLUGIN.path },
+      ],
+    };
+    expect((await start(failed)).report.end).toEqual({
+      kind: "refused",
+      reason: "session 開始時沒有載入 載入錯誤 hook-load-failed，已停下。",
+    });
+  });
+
+  it("asks nothing of a planner's start, which loads no plugin", async () => {
+    const { plugins: _plugins, skills: _skills, ...bare } = init("p");
+    const { report } = await follow([bare, result({ ok: 1 })]);
+    expect(report.end).toEqual({ kind: "output", output: { ok: 1 } });
   });
 });
 

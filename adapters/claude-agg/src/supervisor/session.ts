@@ -1,7 +1,9 @@
 // Following one `query()` session to its end: the streaming prompt, the
-// start-message checks (permission mode, credential source), the quota and
-// rate-limit signals, and what the session's result means.
+// start-message checks (permission mode, credential source, a worker's
+// plugin and skills), the quota and rate-limit signals, and what the
+// session's result means.
 
+import { missingFromInit } from "./plugin.js";
 import type { InitMessage, QueryRun, ResultMessage, UserMessage } from "./sdk.js";
 
 /**
@@ -82,6 +84,12 @@ export interface Expectation {
   mode: InitMessage["permissionMode"];
   /** The `apiKeySource` its start message must name: the settings' credential. */
   apiKeySource: string;
+  /**
+   * The plugin directory a worker loads (resolved, as checkPlugin returns
+   * it), whose plugin and skills its start message must list; undefined for
+   * the planner, which loads none.
+   */
+  plugin?: string;
   /** Called once with the start message, after it passed the checks. */
   onStart: (init: InitMessage) => void;
 }
@@ -92,16 +100,33 @@ function isRecord(value: unknown): value is Json {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/** The records of a list field, each with the named fields as strings ("" when not one). */
+function rows<Key extends string>(value: unknown, keys: readonly Key[]): Record<Key, string>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((row) => {
+    const picked = {} as Record<Key, string>;
+    for (const key of keys) picked[key] = text(row[key]);
+    return picked;
+  });
+}
+
 function parseInit(message: Json): InitMessage | undefined {
   if (message["type"] !== "system" || message["subtype"] !== "init") return undefined;
-  const { session_id: id, permissionMode, apiKeySource, model } = message;
+  const { session_id: id, permissionMode, apiKeySource, model, skills } = message;
   if (typeof id !== "string" || typeof permissionMode !== "string") return undefined;
   const init: InitMessage = {
     type: "system",
     subtype: "init",
     session_id: id,
     permissionMode: permissionMode as InitMessage["permissionMode"],
-    apiKeySource: typeof apiKeySource === "string" ? apiKeySource : "",
+    apiKeySource: text(apiKeySource),
+    plugins: rows(message["plugins"], ["name", "path"]),
+    skills: Array.isArray(skills) ? skills.filter((skill) => typeof skill === "string") : [],
+    pluginErrors: rows(message["plugin_errors"], ["plugin", "type", "path"]),
   };
   if (typeof model === "string") init.model = model;
   return init;
@@ -116,6 +141,9 @@ export function refuseStart(init: InitMessage, expect: Omit<Expectation, "onStar
     const source = init.apiKeySource || "（沒寫）";
     return `session 的認證來源是 ${source}，不是設定的 ${expect.apiKeySource}，已停下。`;
   }
+  if (expect.plugin === undefined) return undefined;
+  const missing = missingFromInit(init, expect.plugin);
+  if (missing.length > 0) return `session 開始時沒有載入 ${missing.join("、")}，已停下。`;
   return undefined;
 }
 

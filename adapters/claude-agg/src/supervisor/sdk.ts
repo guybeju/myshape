@@ -23,7 +23,10 @@ export type UserMessage = SDKUserMessage;
 /** What the PreToolUse callback returns. */
 export type PreToolUseOutput = SyncHookJSONOutput;
 
-/** The first message of a session: its permission mode and where its credential came from. */
+/**
+ * The first message of a session: its permission mode, where its credential
+ * came from, and the plugins and skills it loaded.
+ */
 export interface InitMessage {
   type: "system";
   subtype: "init";
@@ -35,6 +38,12 @@ export interface InitMessage {
    */
   apiKeySource: string;
   model?: string;
+  /** The plugins the session loaded: the SDK's `plugins` rows, name and path. */
+  plugins: { name: string; path: string }[];
+  /** The skills the session offers, a plugin's as `<plugin>:<skill>`. */
+  skills: string[];
+  /** The SDK's `plugin_errors`: a plugin that did not load, or loaded without a part. */
+  pluginErrors: { plugin: string; type: string; path?: string }[];
 }
 
 /** The result fields the supervisor reads, as the SDK's `SDKResultMessage` names them. */

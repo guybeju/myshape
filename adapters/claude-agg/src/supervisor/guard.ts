@@ -71,7 +71,7 @@ export const REASONS = {
  * First words that Claude Code 2.1.332's sandbox auto-allow never covers:
  * programs that run another program, and the awk family.
  */
-const NEVER_APPROVED = new Set([
+export const NEVER_APPROVED = new Set([
   "env",
   "time",
   "nohup",
@@ -113,7 +113,14 @@ const LEADING_RESERVED = new Set([
 ]);
 
 /** Constructs whose runs the guard cannot read word by word: never approved. */
-const NEVER_APPROVED_CONSTRUCTS = new Set(["case", "for", "select", "function", "coproc", "[["]);
+export const NEVER_APPROVED_CONSTRUCTS = new Set([
+  "case",
+  "for",
+  "select",
+  "function",
+  "coproc",
+  "[[",
+]);
 
 /** A word that sets a variable, such as `CC=clang` or `PATH+=x`. */
 function isAssignment(word: string): boolean {

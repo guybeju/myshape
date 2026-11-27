@@ -5,7 +5,10 @@
 // reads and the session's own TMPDIR), and the check that the scrub forces
 // the start mode. The main checkout's .git case uses T1, a test-only hook
 // (probeRewritten), and tests the sandbox only; item 7 stays model-driven
-// and records a step the model did not attempt as 沒有測到. These are: worker and planner sessions with the supervisor's
+// and records a step the model did not attempt as 沒有測到. The plugin skill
+// cases (`-t "plugin skill"`) check that a worker's start lists the
+// supervisor's plugin and both its skills, and that the worker loads its
+// rules with the Skill tool. These are: worker and planner sessions with the supervisor's
 // own options, run by the bundled `claude` binary against Haiku 5.5, in
 // sandbox repositories and a scratch HOME under this test's own temporary
 // directory (its path resolved, so /tmp as /private/tmp on macOS). They run
@@ -51,6 +54,14 @@ import {
 import { ensurePushRepo, Forge, FORGE_TEXT } from "./forge.js";
 import { existingRealPath, REASONS } from "./guard.js";
 import { plannerPrompt, resumePrompt, workerPrompt } from "./prompts.js";
+import {
+  checkPlugin,
+  missingFromInit,
+  PLUGIN_DIR,
+  PLUGIN_NAME,
+  STATUS_SKILL,
+  WORKER_SKILL,
+} from "./plugin.js";
 import { PromptStream } from "./session.js";
 import { sessionTmpdir } from "./supervisor.js";
 import {
@@ -60,7 +71,7 @@ import {
   workerOptions,
   type SessionContext,
 } from "./session-options.js";
-import type { QueryOptions } from "./sdk.js";
+import type { InitMessage, QueryOptions } from "./sdk.js";
 
 const ON = process.env["AGG_REAL_CLAUDE"] === "1";
 /** The test's model: Haiku 5.5, for every session here. */
@@ -181,6 +192,7 @@ function context(abort: AbortController, plain: PlainEnv = env()): SessionContex
     credential,
     credentialFile: process.env["AGG_REAL_CREDENTIAL_FILE"] ?? "",
     readPaths: [join(home(), ".gitconfig")],
+    plugin: checkPlugin(PLUGIN_DIR),
     tmpdir: tmpdirFor(abort),
     platform: process.platform,
     guard: {
@@ -1352,6 +1364,61 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       expect(readFileSync(configPath).equals(config)).toBe(true);
       expect(existsSync(hook)).toBe(false);
       expectRefusedOn(test, "sandbox-blocks-git (iii-c)", bashCall(run, probe), configPath);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "plugin skill (start): a worker's start lists the supervisor's plugin and both its skills",
+    async () => {
+      const repo = repository();
+      const abort = new AbortController();
+      const ctx = context(abort);
+      const options = workerOptions(
+        { worktree: repo.worktree, mainCheckout: repo.main, resume: undefined, forge: null },
+        ctx,
+      );
+      const run = await drive(denyRealHome(options), "Reply with the JSON result only.", true);
+      expectStarted(run);
+      const init = run.init ?? {};
+      findings.push(`  init plugins: ${JSON.stringify(init["plugins"] ?? null)}`);
+      findings.push(`  init skills: ${JSON.stringify(init["skills"] ?? null)}`);
+      findings.push(`  init plugin_errors: ${JSON.stringify(init["plugin_errors"] ?? null)}`);
+      const start = {
+        ...(init as unknown as InitMessage),
+        pluginErrors: (init["plugin_errors"] ?? []) as InitMessage["pluginErrors"],
+      };
+      expect(missingFromInit(start, ctx.plugin)).toEqual([]);
+      expect(init["plugins"]).toContainEqual(
+        expect.objectContaining({ name: PLUGIN_NAME, path: ctx.plugin }),
+      );
+      expect(init["skills"]).toEqual(expect.arrayContaining([WORKER_SKILL, STATUS_SKILL]));
+    },
+    STEP_MS,
+  );
+
+  it(
+    "plugin skill (load): the worker loads its rules with the Skill tool; what the status skill does there is recorded",
+    async () => {
+      const repo = repository();
+      const run = await session(
+        repo,
+        workerPrompt({
+          task: repo.task,
+          branch: `agg/${repo.task}`,
+          scout: true,
+          topic: { id: "t", name: "規矩", goal: "確認你讀得到規矩。" },
+          title: "讀規矩",
+          prompt: `照上面的說明載入規矩後，再用 Skill 工具載入 ${STATUS_SKILL}（不管成不成功都不要重試），然後交回 outcome report，summary 原樣抄下規矩裡「## Bash」那一節的第一句，一個字都不改。`,
+        }),
+        { forge: null },
+      );
+      expectStarted(run);
+      const worker = toolCall(run, "Skill", WORKER_SKILL);
+      expect(stoppedBy(worker), "the worker skill loads without a prompt").toBeUndefined();
+      expect(run.transcript).toContain("Bash 指令在 sandbox 裡跑，不用核准");
+      const status = attempted(run, "plugin skill (load) status", "Skill", STATUS_SKILL);
+      if (status !== undefined) findings.push(`  status skill: ${stoppedBy(status) ?? "ran"}`);
     },
     STEP_MS,
   );
