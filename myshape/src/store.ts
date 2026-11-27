@@ -886,7 +886,20 @@ function parseClock(raw: unknown): Clock | null {
   const state = TIMED_STATES.find((name) => name === raw["state"]);
   const since = stringField(raw, "since");
   if (state === undefined || since === null || Number.isNaN(Date.parse(since))) return null;
-  return { state, since, sig: textField(raw, "sig") };
+  return {
+    state,
+    since,
+    sig: textField(raw, "sig"),
+    ...(raw["reminded"] === true ? { reminded: true as const } : {}),
+  };
+}
+
+/** A window the captain gave a 沒人接 card: its time field and the members it covers, or null. */
+function windowOf(raw: unknown, field: "until" | "at"): { time: string; members: string[] } | null {
+  if (!isRecord(raw)) return null;
+  const time = stringField(raw, field);
+  const members = stringList(raw["members"]);
+  return time === null || members === null ? null : { time, members };
 }
 
 function parseStall(raw: unknown): Stall | null {
@@ -894,13 +907,14 @@ function parseStall(raw: unknown): Stall | null {
   const since = stringField(raw, "since");
   const members = stringList(raw["members"]);
   if (since === null || members === null) return null;
-  const deferred = raw["deferred"];
-  if (!isRecord(deferred)) return { since, members };
-  const until = stringField(deferred, "until");
-  const put = stringList(deferred["members"]);
-  return until === null || put === null
-    ? { since, members }
-    : { since, members, deferred: { until, members: put } };
+  const deferred = windowOf(raw["deferred"], "until");
+  const asked = windowOf(raw["asked"], "at");
+  return {
+    since,
+    members,
+    ...(deferred === null ? {} : { deferred: { until: deferred.time, members: deferred.members } }),
+    ...(asked === null ? {} : { asked: { at: asked.time, members: asked.members } }),
+  };
 }
 
 /** Each entry of an object that `parse` reads; the others are skipped. */

@@ -47,7 +47,8 @@ export type NoticeEvent =
   | "schedule.due"
   | "schedule.missed"
   | "schedule.closed"
-  | "decision.front";
+  | "decision.front"
+  | "stall.nudge";
 
 export interface NoticeItem {
   id: string;

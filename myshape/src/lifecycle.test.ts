@@ -473,6 +473,7 @@ describe("escalation", () => {
     expect(first.evaluation.memory.clocks["topic\tidle"]?.since).toBe(ago(0));
     expect(first.view.stalls).toEqual([]);
     expect(first.view.idle).toEqual([]);
+    expect(first.evaluation.nudge).toBeNull();
   });
 
   it("puts overdue work under its topic's 沒人接 card, once, with every overdue reason on one line", () => {
@@ -596,6 +597,121 @@ describe("escalation", () => {
     ).toEqual([["hi", ["vpn:O3"]]]);
     expect(view.todos[0]?.state).toBe("claimed");
     expect(evaluation.records.map((record) => record.kind)).toEqual(["stall.raised"]);
+  });
+});
+
+describe("reminders", () => {
+  const homes = [
+    home("main", {
+      report: report({
+        queued: [
+          queued("parked", { hold: "x" }),
+          queued("young", { hold: "x" }),
+          queued("loose", { topic_hint: null }),
+        ],
+      }),
+    }),
+  ];
+  const store = (): LifecycleStore =>
+    seen([
+      ["topic\tidle", "T2", DAY],
+      ["queued\tmain\tparked", "Q5", DAY],
+      ["queued\tmain\tyoung", "Q5", DAY / 2],
+      ["queued\tmain\tloose", "Q1", DAY],
+      ["queued\tmain\tloose\tNT", "NT", DAY],
+    ]);
+
+  it("reminds the aggregator once of every card past its reminder deadline, in one notice", () => {
+    const { evaluation } = look(homes, store());
+    expect(evaluation.nudge?.text).toBe(
+      "看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：" +
+        "議題「Idle」（id idle）沒有任何開著的工作，滿 3 天交給使用者；" +
+        "議題「High」（id hi）的 main/parked（停著、沒有日期也沒有等的項目，滿 3 天交給使用者）；" +
+        "沒有議題的 main/loose（沒有議題的排隊項目與 agent，滿 3 天交給使用者）。",
+    );
+    expect(evaluation.nudge?.id).toMatch(/^w-n-[0-9a-f]{16}$/);
+    const reminded = Object.entries(evaluation.memory.clocks)
+      .filter(([, clock]) => clock.reminded === true)
+      .map(([key]) => key);
+    expect(reminded.toSorted()).toEqual([
+      "queued\tmain\tloose\tNT",
+      "queued\tmain\tparked",
+      "topic\tidle",
+    ]);
+    expect(evaluation.records).toEqual([]);
+    const again = look(homes, { ...store(), ...evaluation.memory });
+    expect(again.evaluation.nudge).toBeNull();
+    expect(again.evaluation.memory).toEqual(evaluation.memory);
+  });
+
+  it("gives the same reminder the same id, and another run of a card another", () => {
+    const first = look(homes, store()).evaluation.nudge;
+    expect(look(homes, store()).evaluation.nudge?.id).toBe(first?.id);
+    const later = store();
+    later.clocks["queued\tmain\tparked"] = { state: "Q5", since: ago(DAY + MINUTE), sig: "" };
+    expect(look(homes, later).evaluation.nudge?.id).not.toBe(first?.id);
+  });
+
+  it("reminds again once a card leaves its state and comes back to one past the reminder", () => {
+    const reminded = store();
+    reminded.clocks["queued\tmain\tparked"] = {
+      state: "Q8",
+      since: ago(2 * DAY),
+      sig: "",
+      reminded: true,
+    };
+    const { evaluation } = look(homes, reminded);
+    expect(evaluation.memory.clocks["queued\tmain\tparked"]).toEqual({
+      state: "Q5",
+      since: ago(0),
+      sig: "",
+    });
+  });
+
+  it("does not remind of a card whose home was not read well, nor of one already overdue", () => {
+    const quiet = look(homes, store(), { context: { fresh: new Set() } });
+    expect(quiet.evaluation.nudge).toBeNull();
+    const late = seen([["queued\tmain\tparked", "Q5", 3 * DAY]]);
+    const { evaluation, view } = look(homes, late);
+    expect(view.stalls.map((stall) => stall.key)).toEqual(["hi"]);
+    expect(evaluation.nudge?.text ?? "").not.toContain("main/parked");
+    expect(evaluation.memory.clocks["queued\tmain\tparked"]?.reminded).toBeUndefined();
+  });
+
+  it("reminds at once of what the board cannot read, and of a schedule nobody takes by occurrences", () => {
+    const { evaluation } = look([
+      home("main", {
+        report: report({
+          holds: [hold("weird", { hold_bucket: "unknown", unreadable: '"snoozed"' })],
+          tasks: [task("odd", "napping")],
+          topics: { odd: "hi 2026-01-01T00:00:00Z", weird: "hi 2026-01-01T00:00:00Z" },
+        }),
+      }),
+    ]);
+    expect(evaluation.nudge?.text).toBe(
+      "看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：" +
+        "議題「High」（id hi）的 main/weird（讀不懂的待決事項，滿 1 天交給使用者）；" +
+        "議題「High」（id hi）的 main/odd（狀態讀不懂的 agent，滿 1 天交給使用者）。",
+    );
+    const schedule = look([home("main")], emptyLifecycle(), {
+      context: {
+        schedules: [
+          {
+            id: "sync",
+            topic: "hi",
+            title: "Sync",
+            state: "on",
+            pausedByAggregator: false,
+            waitsEnable: false,
+            unanswered: 3,
+            open: false,
+          },
+        ],
+      },
+    });
+    expect(schedule.evaluation.nudge?.text).toContain(
+      "議題「High」（id hi）的 Sync（沒有人接的排程，連續第 5 場沒有人接就交給使用者）",
+    );
   });
 });
 

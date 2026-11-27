@@ -4,9 +4,13 @@
 // puts it in front of the captain, the captain's 延到 <日期> puts the members
 // listed then off (N4), and it settles once no member is overdue. The
 // 沒人處理的議題 card: a topic in 高 or 一般 with no work past its deadline.
-// Pure: the service commits what these return.
-import { KEEP_MAX_DAYS } from "./lifecycle-settings.js";
-import type { Stall } from "./lifecycle.js";
+// Before either, the reminder (stall.nudge) tells the aggregator once of each
+// card past its reminder deadline. Pure: the service commits what these
+// return and hands over the notice.
+import crypto from "node:crypto";
+import { ASK_MINUTES, KEEP_MAX_DAYS, STATE_LABEL, durationWords } from "./lifecycle-settings.js";
+import type { LifecycleSettings, TimedState } from "./lifecycle-settings.js";
+import type { Stall, StallMember } from "./lifecycle.js";
 import type { Draft, Frozen } from "./records.js";
 
 /** The stall key of a topic, and of work with no topic. */
@@ -70,7 +74,13 @@ export function stallStep(
   return { stalls, records };
 }
 
-/** A 沒人接 card with these members: its first time kept, a 延到 kept while it runs. */
+/** The captain's ask, kept with its card for as long as the card lasts. */
+function askedOf(stall: Frozen<Stall> | undefined): Pick<Stall, "asked"> {
+  const asked = stall?.asked;
+  return asked === undefined ? {} : { asked: { at: asked.at, members: [...asked.members] } };
+}
+
+/** A 沒人接 card with these members: its first time and the captain's ask kept, a 延到 kept while it runs. */
 function nextStall(
   old: Frozen<Stall> | undefined,
   members: readonly string[],
@@ -82,6 +92,7 @@ function nextStall(
     since: old === undefined ? new Date(nowMs).toISOString() : old.since,
     members: [...members],
     ...(running ? { deferred: { until: put.until, members: [...put.members] } } : {}),
+    ...askedOf(old),
   };
 }
 
@@ -94,11 +105,30 @@ function raisedRecord(nameOf: NameOf, key: string, count: number): Draft {
   };
 }
 
-/** N4 while the captain's 延到 still covers every member, N2 otherwise. */
-export function stallState(stall: Frozen<Stall>, nowMs: number): "N2" | "N4" {
-  const { deferred } = stall;
-  if (deferred === undefined || Date.parse(deferred.until) <= nowMs) return "N2";
-  return stall.members.every((member) => deferred.members.includes(member)) ? "N4" : "N2";
+/** Whether a window the captain gave, ending at `endMs`, still runs and covers every member. */
+function covers(
+  stall: Frozen<Stall>,
+  window: Frozen<{ members: string[] }>,
+  endMs: number,
+  nowMs: number,
+): boolean {
+  return endMs > nowMs && stall.members.every((member) => window.members.includes(member));
+}
+
+/**
+ * N4 while the captain's 延到 covers every member, N3 while the day the
+ * captain gave the aggregator does, N2 otherwise: in front of the captain.
+ */
+export function stallState(stall: Frozen<Stall>, nowMs: number): "N2" | "N3" | "N4" {
+  const { deferred, asked } = stall;
+  if (deferred !== undefined && covers(stall, deferred, Date.parse(deferred.until), nowMs))
+    return "N4";
+  if (
+    asked !== undefined &&
+    covers(stall, asked, Date.parse(asked.at) + ASK_MINUTES * 60_000, nowMs)
+  )
+    return "N3";
+  return "N2";
 }
 
 export type DeferResult =
@@ -125,6 +155,7 @@ export function deferStall(
       since: stall.since,
       members: [...stall.members],
       deferred: { until, members: [...stall.members] },
+      ...askedOf(stall),
     },
     line: `ok ${key} 延到 ${shown}`,
     records: [
@@ -135,6 +166,139 @@ export function deferStall(
         text: `「沒人接」${where(context.nameOf, key)}：延到 ${shown}，只延現在列出的 ${stall.members.length} 張`,
       },
     ],
+  };
+}
+
+/** One card a reminder names: its key, where it is, how it is named, and each late state since when. */
+export interface NudgeLine {
+  key: string;
+  topic: string | null;
+  label: string;
+  reasons: readonly { state: TimedState; since: string }[];
+}
+
+/** The reminder of one look: its fixed write id and its one fixed sentence. */
+export interface Nudge {
+  id: string;
+  text: string;
+}
+
+/** When a late state goes to the user, as the reminder says it. */
+function raiseWords(state: TimedState, settings: Frozen<LifecycleSettings>): string {
+  const { raise } = settings[state];
+  return state === "S6"
+    ? `連續第 ${raise} 場沒有人接就交給使用者`
+    : `滿 ${durationWords(raise)}交給使用者`;
+}
+
+function nudgeLine(line: NudgeLine, settings: Frozen<LifecycleSettings>, nameOf: NameOf): string {
+  const said = line.reasons
+    .map(({ state }) => `${STATE_LABEL[state]}，${raiseWords(state, settings)}`)
+    .join("；");
+  if (line.topic === null) return `沒有議題的 ${line.label}（${said}）`;
+  const place = `議題「${nameOf(line.topic)}」（id ${line.topic}）`;
+  if (line.key.startsWith("topic\t"))
+    return `${place}沒有任何開著的工作，${raiseWords("T2", settings)}`;
+  return `${place}的 ${line.label}（${said}）`;
+}
+
+/**
+ * The one reminder (stall.nudge) of a look: every card that passed its
+ * reminder deadline in it, a line each, under a fixed id made of each card's
+ * key, state and since, so the same reminder is handed over once.
+ */
+export function nudgeOf(
+  lines: readonly NudgeLine[],
+  settings: Frozen<LifecycleSettings>,
+  nameOf: NameOf,
+): Nudge | null {
+  if (lines.length === 0) return null;
+  const identity = lines
+    .flatMap((line) => line.reasons.map(({ state, since }) => `${line.key}\t${state}\t${since}`))
+    .toSorted()
+    .join("\n");
+  const digest = crypto.createHash("sha256").update(identity).digest("hex").slice(0, 16);
+  const said = lines.map((line) => nudgeLine(line, settings, nameOf)).join("；");
+  return {
+    id: `w-n-${digest}`,
+    text: `看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：${said}。`,
+  };
+}
+
+/** The message 〔請 <aggregator> 處理〕 sends: under the card's topic, with a fixed id. */
+export interface AskMessage {
+  id: string;
+  topic: string;
+  text: string;
+}
+
+export type AskResult =
+  | { ok: true; stall: Stall; line: string; records: [Draft]; message: AskMessage }
+  | { ok: false; code: "refused"; line: string };
+
+function refuseAsk(line: string): AskResult {
+  return { ok: false, code: "refused", line };
+}
+
+/** Why the captain may not ask again about a card in front of them, or null when it may. */
+function askProblem(
+  stall: Frozen<Stall>,
+  context: { label: string; members: readonly StallMember[] },
+): string | null {
+  if (stall.asked !== undefined)
+    return `這張「沒人接」卡已經請 ${context.label} 處理過一次了；現在只能延到或移到待辦。`;
+  return context.members.length === 0 ? "看板現在列不出這張卡的成員，稍後再按一次。" : null;
+}
+
+/**
+ * The captain's 〔請 <aggregator> 處理〕 on a topic's 沒人接 card in front of
+ * them: the card goes to the aggregator for ASK_MINUTES (N3), once per card,
+ * with one fixed message naming its members as the page lists them.
+ */
+export function askStall(
+  stalls: Frozen<Record<string, Stall>>,
+  key: string,
+  context: { nameOf: NameOf; nowMs: number; label: string; members: readonly StallMember[] },
+): AskResult {
+  if (key === NO_TOPIC)
+    return refuseAsk("沒有議題的「沒人接」卡沒有這個按鈕：訊息一定在一個議題底下。");
+  const stall = stalls[key];
+  if (stall === undefined || stallState(stall, context.nowMs) !== "N2")
+    return refuseAsk("這張「沒人接」卡現在沒有在等你決定。");
+  const problem = askProblem(stall, context);
+  if (problem !== null) return refuseAsk(problem);
+  const wait = durationWords(ASK_MINUTES);
+  const listed = context.members
+    .map(
+      (member) =>
+        `${member.label}（${member.states.map((state) => STATE_LABEL[state]).join("；")}）`,
+    )
+    .join("；");
+  const name = context.nameOf(key);
+  const digest = crypto.createHash("sha256").update(`${key}\n${stall.since}`).digest("hex");
+  return {
+    ok: true,
+    stall: {
+      since: stall.since,
+      members: [...stall.members],
+      asked: { at: new Date(context.nowMs).toISOString(), members: [...stall.members] },
+    },
+    line: `ok ${key} 已請 ${context.label} 處理`,
+    records: [
+      {
+        kind: "lifecycle.answered",
+        topic: key,
+        outcome: "asked",
+        text: `「沒人接」議題「${name}」：請 ${context.label} 處理這 ${context.members.length} 張，${wait}內沒有變化就回到你面前`,
+      },
+    ],
+    message: {
+      id: `w-a-${digest.slice(0, 16)}`,
+      topic: key,
+      text:
+        `使用者請你處理議題「${name}」（id ${key}）的「沒人接」卡：${listed}。` +
+        `${wait}內這些卡沒有離開逾期的狀態，卡會回到使用者面前，那時不能再請你處理。`,
+    },
   };
 }
 

@@ -57,6 +57,7 @@ import type { CommitTarget, LeftoverProposal, StoredBoard } from "./store.js";
 import * as topics from "./topics.js";
 import type { TodoNotice } from "./todos.js";
 import { buildView, evaluateBoard, placeTask, turnNoticeText, turnsTaken } from "./view.js";
+import type { AskMessage } from "./stalls.js";
 import type { BoardView, TurnView, ViewInput } from "./view.js";
 import { scheduleLines } from "./lifecycle.js";
 import { DEFAULT_DEADLINES, STATE_LABEL, TIMED_STATES } from "./lifecycle-settings.js";
@@ -588,9 +589,11 @@ function lifecycleContext(service: Service): LifecycleContext {
 
 /**
  * One lifecycle look (lifecycle.ts evaluate): saves what the board saw and the
- * transitions it made, by the board, through commitChange, and tells the page
- * when what is in front of the captain changed. It waits for a good read of
- * the root home. A failure is logged; the next read or clock check looks again.
+ * transitions it made, by the board, through commitChange, then hands the
+ * aggregator the look's reminder (stall.nudge) under its fixed id, and tells
+ * the page when what is in front of the captain changed. It waits for a good
+ * read of the root home. A failure is logged; the next read or clock check
+ * looks again, and a reminder whose save failed is made again then.
  */
 function lifecycleTick(service: Service): void {
   try {
@@ -615,6 +618,11 @@ function lifecycleTick(service: Service): void {
       service.board = saved.board;
       if (saved.appendError !== null) log(`records wait in the outbox: ${saved.appendError}`);
     }
+    const { nudge } = evaluation;
+    if (nudge !== null)
+      submitNotice(service, { kind: "notice", event: "stall.nudge", text: nudge.text }, null, {
+        id: nudge.id,
+      });
     const shown = JSON.stringify([view.turns, view.stalls, view.idle]);
     if (shown !== service.lifecycleShown || evaluation.records.length > 0) service.version += 1;
     service.lifecycleShown = shown;
@@ -1236,6 +1244,7 @@ function topicOp(
     now: now(),
     records: boardRecords(service),
     zone: machineTimeZone(),
+    stalls: () => evaluateBoard(viewInput(service)).view.stalls,
   };
   const applied = applyOperation(commitTarget(service), before, { op, args, fromPage }, who);
   if (applied.committed !== null) {
@@ -1250,8 +1259,24 @@ function topicOp(
   notifyDecision(service, applied.decisions);
   for (const notice of applied.notices) submitTodoNotice(service, notice);
   for (const notice of applied.scheduleNotices) submitScheduleNotice(service, notice);
+  for (const ask of applied.messages) submitAsk(service, ask);
   if (applied.committed !== null) voidEndedNotices(service);
   return applied.response;
+}
+
+/** Hands the aggregator the captain's 請 <aggregator> 處理 as a message under its topic, once by its fixed id. */
+function submitAsk(service: Service, ask: AskMessage): void {
+  service.writes.submit(
+    {
+      channel: "browser",
+      home: MAIN_HOME,
+      task: null,
+      topic: ask.topic,
+      text: ask.text,
+      action: { kind: "message", topic: topicRef(service, ask.topic), text: ask.text },
+    },
+    { id: ask.id },
+  );
 }
 
 /** Starts answering browser requests on the port this process already holds. */

@@ -1149,9 +1149,21 @@ describe("lifecycle.json", () => {
         kept: { a: "2026-12-01T00:00:00Z", b: 3 },
         clocks: {
           ok: { state: "Q5", since: "2026-11-27T00:00:00Z" },
+          told: { state: "Q9", since: "2026-11-27T00:00:00Z", reminded: true },
+          unsure: { state: "Q5", since: "2026-11-27T00:00:00Z", reminded: "yes" },
           bad: { state: "Q99", since: "x" },
         },
-        stalls: { a: { since: "s", members: ["m"], deferred: { until: "u", members: [1] } }, b: 3 },
+        stalls: {
+          a: { since: "s", members: ["m"], deferred: { until: "u", members: [1] } },
+          c: {
+            since: "s",
+            members: ["m"],
+            deferred: { until: "u", members: ["m"] },
+            asked: { at: "t", members: ["m"] },
+          },
+          d: { since: "s", members: ["m"], asked: { members: ["m"] } },
+          b: 3,
+        },
         idle: { a: "s" },
       }),
     );
@@ -1161,8 +1173,19 @@ describe("lifecycle.json", () => {
     expect(lifecycle.kept).toEqual({ a: "2026-12-01T00:00:00Z" });
     expect(lifecycle.clocks).toEqual({
       ok: { state: "Q5", since: "2026-11-27T00:00:00Z", sig: "" },
+      told: { state: "Q9", since: "2026-11-27T00:00:00Z", sig: "", reminded: true },
+      unsure: { state: "Q5", since: "2026-11-27T00:00:00Z", sig: "" },
     });
-    expect(lifecycle.stalls).toEqual({ a: { since: "s", members: ["m"] } });
+    expect(lifecycle.stalls).toEqual({
+      a: { since: "s", members: ["m"] },
+      c: {
+        since: "s",
+        members: ["m"],
+        deferred: { until: "u", members: ["m"] },
+        asked: { at: "t", members: ["m"] },
+      },
+      d: { since: "s", members: ["m"] },
+    });
     expect(lifecycle.idle).toEqual({ a: "s" });
     fs.writeFileSync(paths.lifecycle, JSON.stringify({ v: 2 }));
     expect(() => readBoard(paths)).toThrow(/lifecycle\.json 讀不懂/);

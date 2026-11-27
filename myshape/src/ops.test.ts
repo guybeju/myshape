@@ -25,7 +25,14 @@ import type { HashtagRecord, HashtagStore } from "./hashtags.js";
 import type { TopicState } from "./topics.js";
 
 const NOW = "2026-11-21T00:00:00Z";
-const WHO = { label: "plain", agent: "plain-agent", now: NOW, records: [], zone: "Asia/Taipei" };
+const WHO = {
+  label: "plain",
+  agent: "plain-agent",
+  now: NOW,
+  records: [],
+  zone: "Asia/Taipei",
+  stalls: () => [],
+};
 /** The record of the aggregator pausing schedule f, which schedule-revert takes back. */
 const PAUSED_F: HashtagRecord[] = [];
 
@@ -950,6 +957,54 @@ describe("the lifecycle operations", () => {
     });
     expect(apply(board, "lifecycle-answer", { card: "idle" }).response).toMatchObject({
       code: "usage",
+    });
+  });
+
+  it("請 <aggregator> 處理 saves the ask with its record and hands over one message, once", () => {
+    const board = readBoard(paths).board;
+    const since = "2026-11-20T00:00:00Z";
+    const stalled = {
+      ...board,
+      lifecycle: { ...board.lifecycle, stalls: { a: { since, members: ["queued\tmain\tq"] } } },
+    };
+    const member = {
+      key: "queued\tmain\tq",
+      kind: "queued" as const,
+      home: "main",
+      id: "q",
+      label: "main/q",
+      states: ["Q5" as const],
+      since,
+    };
+    const view = {
+      key: "a",
+      topic: "a",
+      state: "N2" as const,
+      since,
+      deferred_until: null,
+      asked_at: null,
+      members: [member],
+    };
+    const who = { ...WHO, stalls: () => [view] };
+    const request = { op: "lifecycle-answer", args: { card: "stall", key: "a", ask: true } };
+    const result = applyOperation(target, stalled, { ...request, fromPage: true }, who);
+    expect(result.response).toEqual({ ok: true, line: "ok a 已請 plain 處理" });
+    expect(result.board.lifecycle.stalls["a"]?.asked).toEqual({
+      at: "2026-11-21T00:00:00.000Z",
+      members: ["queued\tmain\tq"],
+    });
+    expect(result.records).toMatchObject([
+      { kind: "lifecycle.answered", topic: "a", outcome: "asked", by: "captain" },
+    ]);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ topic: "a" });
+    expect(result.messages[0]?.text).toContain("main/q（停著、沒有日期也沒有等的項目）");
+    const again = applyOperation(target, result.board, { ...request, fromPage: true }, who);
+    expect(again.response).toMatchObject({ ok: false, code: "refused" });
+    expect(again.messages).toEqual([]);
+    expect(apply(stalled, "lifecycle-answer", request.args).response).toMatchObject({
+      code: "refused",
+      line: "看板現在列不出這張卡的成員，稍後再按一次。",
     });
   });
 

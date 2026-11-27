@@ -14,7 +14,8 @@ import type { Draft, Frozen } from "./records.js";
 import { MAIN_HOME } from "./journal.js";
 import { isNew } from "./schedules.js";
 import type { ScheduleStore } from "./schedules.js";
-import { NO_TOPIC, idleStep, stallKeyOf, stallState, stallStep } from "./stalls.js";
+import { NO_TOPIC, idleStep, nudgeOf, stallKeyOf, stallState, stallStep } from "./stalls.js";
+import type { Nudge, NudgeLine } from "./stalls.js";
 import type { AgentView, BoardView, HoldView, QueuedView, TodoView, TopicView } from "./view.js";
 
 /** Who makes a state's next move (spec/lifecycle.markdown section 1). */
@@ -22,11 +23,12 @@ export type Owner = "captain" | "aggregator" | "board" | "time" | "none";
 
 /**
  * One state's rule: its owner and, for a state the aggregator owns, the
- * setting that times it ("members" for a 沒人接 card, timed by its members).
+ * setting that times it ("members" for a 沒人接 card, timed by its members;
+ * "ask" for one the captain asked the aggregator to handle, ASK_MINUTES).
  */
 export interface Rule {
   owner: Owner;
-  deadline: TimedState | "members" | null;
+  deadline: TimedState | "members" | "ask" | null;
 }
 
 const captain: Rule = { owner: "captain", deadline: null };
@@ -98,6 +100,7 @@ export const LIFECYCLE = {
   // 沒人接 cards (stored)
   N1: { owner: "aggregator", deadline: "members" },
   N2: captain,
+  N3: { owner: "aggregator", deadline: "ask" },
   N4: time,
 } as const satisfies Record<string, Rule>;
 
@@ -123,18 +126,24 @@ export interface Card {
   sig: string;
 }
 
-/** When the board first saw a card in the timed state it is in. */
+/** When the board first saw a card in the timed state it is in, and whether it reminded the aggregator of it since. */
 export interface Clock {
   state: TimedState;
   since: string;
   sig: string;
+  reminded?: true;
 }
 
-/** A 沒人接 card in front of the captain, and the members the captain put off, if any. */
+/**
+ * A 沒人接 card in front of the captain, the members the captain put off, if
+ * any, and when the captain asked the aggregator to handle the members listed
+ * then (N3), which stays with the card so it is asked once only.
+ */
 export interface Stall {
   since: string;
   members: string[];
   deferred?: { until: string; members: string[] };
+  asked?: { at: string; members: string[] };
 }
 
 /** What the board saw: first-seen times, where topics had work, and its 沒人接 cards. */
@@ -367,12 +376,7 @@ const QUEUED_RULES: Rules<QueuedFacts> = [
   ["Q5", ({ item }) => item.held],
 ];
 
-function queuedState(
-  view: BoardView,
-  item: QueuedView,
-  stale: boolean,
-  nowMs: number,
-): CardState {
+function queuedState(view: BoardView, item: QueuedView, stale: boolean, nowMs: number): CardState {
   const topic = item.topic === null ? undefined : view.topics[item.topic];
   const visible = (): boolean => visibleWait(view, item.home, item.blockers, new Set([item.task]));
   return firstState(QUEUED_RULES, { item, topic, stale, visible, nowMs }, "Q1");
@@ -643,19 +647,28 @@ export function homeOfKey(key: string): string | null {
 }
 
 /**
- * Whether a timed card is past its escalation deadline, by the captain's
- * settings: time since its clock started, or for S6 the run of occurrences
- * nobody took (its sig). The reminder deadline has no use until the board
- * sends reminders (spec/lifecycle.markdown section 7).
+ * Whether a timed card is past its reminder (`remind`) or its escalation
+ * (`raise`) deadline, by the captain's settings: time since its clock
+ * started, or for S6 the run of occurrences nobody took (its sig).
  */
+export function pastDeadline(
+  clock: Frozen<Clock>,
+  settings: Frozen<LifecycleSettings>,
+  nowMs: number,
+  which: "remind" | "raise",
+): boolean {
+  const limit = settings[clock.state][which];
+  if (clock.state === "S6") return Number(clock.sig) >= limit;
+  return nowMs - Date.parse(clock.since) >= limit * 60_000;
+}
+
+/** Whether a timed card is past its escalation deadline. */
 export function overdue(
   clock: Frozen<Clock>,
   settings: Frozen<LifecycleSettings>,
   nowMs: number,
 ): boolean {
-  const { raise } = settings[clock.state];
-  if (clock.state === "S6") return Number(clock.sig) >= raise;
-  return nowMs - Date.parse(clock.since) >= raise * 60_000;
+  return pastDeadline(clock, settings, nowMs, "raise");
 }
 
 /**
@@ -695,9 +708,11 @@ export interface IdleView {
 export interface StallView {
   key: string;
   topic: string | null;
-  state: "N2" | "N4";
+  state: "N2" | "N3" | "N4";
   since: string;
   deferred_until: string | null;
+  /** When the captain asked the aggregator to handle it, or null: then it may still ask, once. */
+  asked_at: string | null;
   members: StallMember[];
 }
 
@@ -712,6 +727,8 @@ export interface Evaluation {
   /** Keys of decisions waiting on work the board cannot see, now in the queue (D5). */
   queued: Set<string>;
   stalls: StallView[];
+  /** The reminder to hand the aggregator once this look is saved, or null. */
+  nudge: Nudge | null;
 }
 
 /** The topics each good read showed work under; a home not read well keeps what it had. */
@@ -804,6 +821,9 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
   };
   const step = stallStep(store.stalls, raised.members, nameOf, nowMs);
   const idle = idleStep(store.idle, raised.idle, nameOf, nowMs);
+  const reminded = remindedNow(cards, clocks, context);
+  for (const found of reminded)
+    clocks[found.key] = { ...(clocks[found.key] as Clock), reminded: true };
   const text = idleText(store.settings, context.label);
   const byKey = new Map(cards.map((found) => [found.key, found]));
   return {
@@ -823,9 +843,47 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
       state: stallState(stall, nowMs),
       since: stall.since,
       deferred_until: stall.deferred === undefined ? null : stall.deferred.until,
+      asked_at: stall.asked === undefined ? null : stall.asked.at,
       members: memberLines(stall.members, byKey, clocks),
     })),
+    nudge: nudgeOf(nudgeLines(reminded, clocks), store.settings, nameOf),
   };
+}
+
+/**
+ * The cards this look reminds the aggregator of: past the reminder deadline,
+ * not yet past the escalation one (those go to the captain instead), not
+ * reminded since their clock started, and, for a read card, of a home read well.
+ */
+function remindedNow(
+  cards: readonly Card[],
+  clocks: Frozen<Record<string, Clock>>,
+  context: LifecycleContext,
+): Card[] {
+  const { settings } = context.store;
+  return cards.filter((found) => {
+    const clock = isTimed(found.state) ? clocks[found.key] : undefined;
+    if (clock === undefined || clock.reminded === true) return false;
+    const due = pastDeadline(clock, settings, context.nowMs, "remind");
+    if (!due || overdue(clock, settings, context.nowMs)) return false;
+    return found.home === null || context.fresh.has(found.home);
+  });
+}
+
+/** The reminded cards as the reminder names them: one line a card, its late states together (X6). */
+function nudgeLines(cards: readonly Card[], clocks: Frozen<Record<string, Clock>>): NudgeLine[] {
+  return [...groupBy(cards, (found) => baseKey(found.key))].map(([key, list]) => {
+    const [first] = list as [Card];
+    return {
+      key,
+      topic: first.topic,
+      label: first.label,
+      reasons: list.map((found) => ({
+        state: found.state as TimedState,
+        since: (clocks[found.key] as Clock).since,
+      })),
+    };
+  });
 }
 
 /** Where this look sends the overdue cards: 沒人接 members by stall key, topics with no work, decisions. */

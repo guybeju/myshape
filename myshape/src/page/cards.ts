@@ -5,7 +5,7 @@ import type { StallMember, StallView } from "#board/lifecycle.js";
 import type { TurnView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
-import { holdCard, topicLink, when, writeRows } from "./parts.js";
+import { fileMenu, holdCard, topicLink, when, writeRows } from "./parts.js";
 import { BAD_WRITES, agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
@@ -111,6 +111,7 @@ const STATE_WORDS: Record<string, string> = {
   Q4: "議題已封存，這筆還開著",
   Q5: "停著，沒有日期也沒有等的項目",
   Q8: "等的工作看板找不到",
+  Q9: "讀不懂",
   NT: "沒有議題",
   A1: "進行中卻沒有任何變化",
   A2: "停著",
@@ -119,18 +120,25 @@ const STATE_WORDS: Record<string, string> = {
   A5: "做完還沒收",
   A6: "狀態讀不懂",
   W1: "worker 的問題沒人回",
+  O3: "按了做完了，等驗證",
   S3: "aggregator 暫停了排程",
   S6: "排程一直沒有人接",
 };
 
-/** The one button the board already has for a member, when it has one. */
+/**
+ * The one button the board already has for a member, when it has one: a
+ * schedule's resume or pause, and filing work with no topic under one (a tag
+ * write: 歸到… for a queued item, 歸併到… for an agent).
+ */
 function memberAction(view: View, actions: Actions, member: StallMember): Child {
   const topic = view.schedules.series.find((series) => series.id === member.id)?.topic;
   if (member.states.includes("S3") && topic !== undefined)
     return h("button", { onclick: () => actions.send("schedules/resume", { topic }) }, "恢復排程");
   if (member.states.includes("S6") && topic !== undefined)
     return h("button", { onclick: () => actions.send("schedules/pause", { topic }) }, "暫停排程");
-  return null;
+  if (!member.states.includes("NT") || member.home === null) return null;
+  const target = { home: member.home, task: member.id };
+  return fileMenu(view, actions, target, member.kind === "queued" ? "歸到…" : "歸併到…");
 }
 
 function memberRow(view: View, actions: Actions, member: StallMember): Child {
@@ -148,11 +156,38 @@ function memberRow(view: View, actions: Actions, member: StallMember): Child {
   );
 }
 
-/** The board's 沒人接 card: the cards under a topic past their deadline, with 延到 and 移到待辦. */
+/**
+ * 〔請 <aggregator> 處理〕 on a topic's card the captain has not asked about
+ * yet, or the line that says it was asked once and came back.
+ */
+function askPart(actions: Actions, stall: StallView): { note: Child; button: Child } {
+  if (stall.asked_at !== null)
+    return {
+      note: h(
+        "div",
+        { class: "note" },
+        `已退回過一次：${when(Date.parse(stall.asked_at) / 1000)} 請 ${agentName()} 處理過，期限內沒有變化。`,
+      ),
+      button: null,
+    };
+  if (stall.topic === null) return { note: null, button: null };
+  const ask = { card: "stall", key: stall.key, ask: true };
+  return {
+    note: null,
+    button: h(
+      "button",
+      { onclick: () => actions.send("lifecycle/answer", ask) },
+      `請 ${agentName()} 處理`,
+    ),
+  };
+}
+
+/** The board's 沒人接 card: the cards under a topic past their deadline, with 延到, 移到待辦 and 請 <aggregator> 處理. */
 export function stallCard(page: Page, view: View, actions: Actions, stall: StallView): Child {
   const key = `stall-days:${stall.key}`;
   const days = daysOf(page, key);
   const live = stall.topic !== null && view.topics[stall.topic]?.status !== "archived";
+  const ask = askPart(actions, stall);
   return h(
     "div",
     { class: "card", "data-stall": stall.key },
@@ -166,9 +201,11 @@ export function stallCard(page: Page, view: View, actions: Actions, stall: Stall
     ),
     h("div", {}, `這些卡過了期限，${agentName()} 都沒有接手：`),
     stall.members.map((member) => memberRow(view, actions, member)),
+    ask.note,
     h(
       "div",
       { class: "btns" },
+      ask.button,
       h(
         "button",
         {

@@ -245,6 +245,49 @@ describe("queued", () => {
     });
   });
 
+  it("carries a queued item's date, turn and what it could not read, and says the date it waits for", () => {
+    const view = buildView(
+      input({
+        homes: [
+          home("main", {
+            report: report({
+              queued: [
+                item("dated", { hold: "等 CI", hold_until: "2026-12-05" }),
+                item("turn", { hold: "等空位（2/2）", turn: true }),
+                item("odd", { unreadable: 'turn: "yes"' }),
+              ],
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(
+      view.queued.map(({ task, waiting, hold_until, turn, unreadable }) => ({
+        task,
+        waiting,
+        hold_until,
+        turn,
+        unreadable,
+      })),
+    ).toEqual([
+      {
+        task: "dated",
+        waiting: "停著：等 CI（延到 2026-12-05）",
+        hold_until: "2026-12-05",
+        turn: false,
+        unreadable: null,
+      },
+      {
+        task: "turn",
+        waiting: "停著：等空位（2/2）",
+        hold_until: null,
+        turn: true,
+        unreadable: null,
+      },
+      { task: "odd", waiting: null, hold_until: null, turn: false, unreadable: 'turn: "yes"' },
+    ]);
+  });
+
   it("lists every home's queued items under their topics with what each waits for", () => {
     const view = buildView(
       input({
@@ -287,7 +330,18 @@ describe("queued", () => {
       "merged-away:false:false:",
       "far:false:false:",
     ]);
-    expect(view.queued.map(({ captain: _c, held: _h, blockers: _b, ...rest }) => rest)).toEqual([
+    const shown = view.queued.map(
+      ({
+        captain: _c,
+        held: _h,
+        blockers: _b,
+        hold_until: _u,
+        turn: _t,
+        unreadable: _r,
+        ...rest
+      }) => rest,
+    );
+    expect(shown).toEqual([
       {
         home: "main",
         task: "ready",

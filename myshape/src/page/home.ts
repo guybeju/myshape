@@ -8,6 +8,7 @@ import {
   agentRow,
   closedFold,
   closedTodoEntries,
+  fileMenu,
   holdCard,
   inFront,
   liveTodos,
@@ -167,21 +168,6 @@ function section(title: string, ...children: Child[]): Child {
   );
 }
 
-function tagMenu(view: View, actions: Actions, agent: AgentView): Child {
-  const choose = (event: Event): void => {
-    const topic = (event.target as HTMLSelectElement).value;
-    if (topic !== "") actions.tag(agent.home, agent.task, topic);
-  };
-  return h(
-    "select",
-    { class: "auto", onchange: choose },
-    h("option", { value: "" }, "歸併到…"),
-    QUEUES.flatMap((queue) => view.queues[queue]).map((id) =>
-      h("option", { value: id }, topicName(view, id)),
-    ),
-  );
-}
-
 const UNSORTED_REASON: Record<string, string> = {
   "no-tag": "沒有標記",
   "unknown-topic": "標記的議題不存在",
@@ -234,7 +220,7 @@ function unsortedRow(view: View, actions: Actions, agent: AgentView): Child {
       h("span", { class: "note" }, UNSORTED_REASON[agent.unsorted_reason ?? ""] ?? ""),
     ),
     h("span", { class: "pill" }, agent.home),
-    tagMenu(view, actions, agent),
+    fileMenu(view, actions, agent, "歸併到…"),
   );
 }
 

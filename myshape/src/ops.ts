@@ -28,9 +28,10 @@ import {
   withSettings,
   withStall,
 } from "./lifecycle.js";
-import type { LifecycleStore } from "./lifecycle.js";
+import type { LifecycleStore, StallView } from "./lifecycle.js";
 import { KEEP_DEFAULT_DAYS, KEEP_MAX_DAYS, changeSettings } from "./lifecycle-settings.js";
-import { deferStall, localDay } from "./stalls.js";
+import { askStall, deferStall, localDay } from "./stalls.js";
+import type { AskMessage } from "./stalls.js";
 
 /** What an operation reads: the board as it is, who the agent side is, and the time. */
 export interface OpContext {
@@ -44,6 +45,8 @@ export interface OpContext {
   records: readonly HashtagRecord[];
   /** This machine's time zone, for a schedule made without one. */
   zone: string;
+  /** The 沒人接 cards as the page shows them now, members and all. */
+  stalls: () => readonly StallView[];
   /** Who asks: the captain on the page or the aggregator over the socket. */
   by: "captain" | "aggregator";
   /** The agent side's label, which its records and texts use. */
@@ -105,9 +108,19 @@ export interface ScheduleOperation {
   run: (ctx: OpContext, args: Record<string, unknown>) => ScheduleResult;
 }
 
-/** What a captain's lifecycle change did: the deadlines, or a 延到 on a 沒人接 card. */
+/**
+ * What a captain's lifecycle change did: the deadlines, or a 延到 or a
+ * 請 <aggregator> 處理 on a 沒人接 card, which also hands over one message.
+ */
 type LifecycleResult =
-  | { ok: true; changed: true; store: LifecycleStore; line: string; records: Records }
+  | {
+      ok: true;
+      changed: true;
+      store: LifecycleStore;
+      line: string;
+      records: Records;
+      message?: AskMessage;
+    }
   | { ok: true; changed: false; line: string }
   | { ok: false; code: "refused" | "usage"; line: string };
 
@@ -418,9 +431,10 @@ function keptUntil(
 
 /**
  * The captain's answer on one of the board's own cards: 先不關，到某天 on a
- * 沒人處理的議題 card (`card: "idle"`, `key` its topic id), or 延到 <日期> on a
- * 沒人接 card (`card: "stall"`, `key` its topic id or "-"). The other buttons
- * of both are operations the board already has (archive, move).
+ * 沒人處理的議題 card (`card: "idle"`, `key` its topic id), or on a 沒人接 card
+ * (`card: "stall"`, `key` its topic id or "-") 延到 <日期>, or with `ask: true`
+ * 請 <aggregator> 處理. The other buttons of both are operations the board
+ * already has (archive, move).
  */
 function deferAnswer(ctx: OpContext, args: Record<string, unknown>): LifecycleResult {
   const key = stringField(args, "key");
@@ -430,6 +444,15 @@ function deferAnswer(ctx: OpContext, args: Record<string, unknown>): LifecycleRe
     return { ok: false, code: "usage", line: "card 要是 idle 或 stall。" };
   const nameOf = (id: string): string => ctx.topics.doc.topics[id]?.name ?? id;
   const nowMs = Date.parse(ctx.now);
+  if (args["ask"] === true) {
+    const shown = ctx.stalls().find((stall) => stall.key === key);
+    const members = shown === undefined ? [] : shown.members;
+    const asked = askStall(ctx.lifecycle.stalls, key, { nameOf, nowMs, label: ctx.label, members });
+    if (!asked.ok) return asked;
+    const store = withStall(ctx.lifecycle, key, asked.stall);
+    const { line, records, message } = asked;
+    return { ok: true, changed: true, store, line, records, message };
+  }
   const result = deferStall(ctx.lifecycle.stalls, key, args["days"] ?? KEEP_DEFAULT_DAYS, {
     nameOf,
     nowMs,
@@ -840,6 +863,8 @@ export interface Applied {
   decisions: PageNotice[];
   /** For the aggregator: the captain ended an occurrence on the page after its notices went out. */
   scheduleNotices: ScheduleNotice[];
+  /** For the aggregator: the captain's 請 <aggregator> 處理 on a 沒人接 card. */
+  messages: AskMessage[];
 }
 
 function answer(board: StoredBoard, response: BoardResponse): Applied {
@@ -853,6 +878,7 @@ function answer(board: StoredBoard, response: BoardResponse): Applied {
     notices: [],
     decisions: [],
     scheduleNotices: [],
+    messages: [],
   };
 }
 
@@ -1075,7 +1101,10 @@ function applyLifecycleOp(
     next: result.store,
     records: withSuffix(result.records, "你在頁面上"),
   };
-  return commit(target, board, change, actor, result.line);
+  const applied = commit(target, board, change, actor, result.line);
+  // Saved first: the message goes only for an ask the board has recorded.
+  if (applied.committed === null || result.message === undefined) return applied;
+  return { ...applied, messages: [result.message] };
 }
 
 function applyScheduleOp(
@@ -1113,6 +1142,7 @@ export interface Who {
   now: string;
   records: readonly HashtagRecord[];
   zone: string;
+  stalls: () => readonly StallView[];
 }
 
 /**
