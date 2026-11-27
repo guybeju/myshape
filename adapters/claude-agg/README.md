@@ -46,19 +46,27 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   source than the settings select;
 - **sandboxes** each worker: its Bash commands run in the SDK's sandbox
   (bubblewrap and socat on Linux; on macOS the system's own sandbox), which
-  must start or the session does not
-  (`failIfUnavailable`), with no unsandboxed retry. They reach only the npm,
-  PyPI and crates registries (`github.com` and `api.github.com` are denied),
-  read nothing under the home directory but the worktree, the main
-  checkout's `.git` and the settings' `readPaths` (the gh login, `~/.ssh`,
-  Claude's own credentials, the credential file and the board home are denied
-  by name too), and write only the worktree, the main checkout's shared
-  `.git` (not its `hooks/` or `config`: the sandbox allows that for a linked
-  worktree) and the sandbox's own temporary directory. Its file tools stay in
-  the worktree (`block{Reads,Writes}OutsideWorkingDirectories`), the same paths
-  are denied to `Read`, `Grep` and `Glob`, it has no `WebFetch` or
-  `WebSearch`, and `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` takes the credential
-  out of every command, hook and MCP server it starts;
+  must start or the session does not (`failIfUnavailable`), with no
+  unsandboxed retry. They reach only the npm, PyPI and crates registries
+  (`github.com` and `api.github.com` are denied). They read nothing in the
+  home directory, the other users' and mounted directories (`/home`,
+  `/Users`, `/root`, `/Volumes`, `/mnt`, `/media`) or the shared temporary
+  and log directories (`/tmp`, `/var/tmp`, `/dev/shm`, `/run/user`,
+  `/var/log`; on macOS also `/private/tmp`, `/private/var/folders`,
+  `/private/var/log`), except the worktree, the main checkout's `.git`, the
+  settings' `readPaths` and the session's own temporary directory. The gh
+  login, `~/.ssh`, Claude's own credentials, the credential file and the
+  board home are denied by name too. They write only the worktree, the main
+  checkout's shared `.git` (not its `hooks/` or `config`: the sandbox allows
+  that for a linked worktree) and the session's own temporary directory,
+  which the supervisor makes for each session alone (`/tmp/cagg-…`, its
+  `TMPDIR` and `CLAUDE_CODE_TMPDIR`) and removes when the session ends. Its
+  file tools cannot write outside the worktree
+  (`blockWritesOutsideWorkingDirectories`), have no read allow rule, so a
+  read outside the worktree waits for an approval nobody gives, and are
+  denied the credential paths by name. It has no `WebFetch` or `WebSearch`,
+  and `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` takes the credential out of every
+  command, hook and MCP server it starts;
 - **pushes and opens PRs for the worker**: a ship worker has no forge
   credential and gets two tools, `push_branch` and `open_pr`, that the
   supervisor runs with its own login (`forge.ts`); there is no tool that
