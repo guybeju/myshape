@@ -79,15 +79,24 @@ export class Poller {
         if (this.timer !== null)
             clearInterval(this.timer);
         this.timer = null;
+        this.timerMs = 0;
     }
     /** Makes the timer tick at the pace of now: often while someone looks, slowly otherwise. */
     arm() {
         const every = this.active ? TICK_MS : Math.min(SLOW_TICK_MS, this.timings.slowMs);
-        if (this.timer !== null && this.timerMs === every)
+        if (this.timerMs === every)
             return;
         this.stop();
         this.timerMs = every;
         this.timer = setInterval(() => this.tick(), every);
+    }
+    /** How long after its last read a home is read while someone looks: its hint, else the default. */
+    everyMs(home) {
+        return home.everyMs === null ? this.timings.readMs : home.everyMs;
+    }
+    /** How long one read of a home may take: its hint, else the default. */
+    timeoutMs(home) {
+        return home.timeoutMs === null ? this.timings.timeoutMs : home.timeoutMs;
     }
     /** How long after its last read a home is read with nobody looking. */
     slowEveryMs(home) {
@@ -136,7 +145,7 @@ export class Poller {
         home.reading ??= this.readHome(home).finally(() => {
             home.reading = null;
             home.readAt = Date.now();
-            home.dueAt = home.readAt + (home.everyMs ?? this.timings.readMs);
+            home.dueAt = home.readAt + this.everyMs(home);
         });
         return home.reading;
     }
@@ -171,7 +180,7 @@ export class Poller {
         try {
             if (this.homes.get(id) !== home || !this.mayAskTopics(home) || Date.now() >= deadline)
                 return null;
-            const result = await this.run({ kind: "topics", home: id, tasks }, home.timeoutMs ?? this.timings.timeoutMs);
+            const result = await this.run({ kind: "topics", home: id, tasks }, this.timeoutMs(home));
             if (result.code === FEED_USAGE)
                 home.topicsRefusedAt = home.report?.code_commit ?? UNREAD;
             return result.code === 0 ? parseTopicsAnswer(result.stdout, tasks) : null;
@@ -251,7 +260,7 @@ export class Poller {
         const { offset, sha } = this.offsets.get(home.id);
         const closed = this.host.closedCursor(home.id);
         const startedMs = Date.now();
-        const result = await this.run({ kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) }, home.timeoutMs ?? this.timings.timeoutMs);
+        const result = await this.run({ kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) }, this.timeoutMs(home));
         // The feed may not run now: nothing was read, and the page says why.
         if (result.blocked !== undefined)
             return "blocked";

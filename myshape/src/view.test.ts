@@ -8,6 +8,7 @@ import type { TodoItem, TodoStore } from "./todos.js";
 import {
   LEDGER_PER_TOPIC,
   buildView,
+  isFresh,
   parseOptions,
   parseTags,
   placeTask,
@@ -199,6 +200,24 @@ describe("homes", () => {
         error: "gone",
       },
     ]);
+  });
+});
+
+describe("isFresh", () => {
+  it("takes a home's last good read as current up to its limit, the input's when it gives none", () => {
+    const at = (ms: number, extra: Partial<HomeSnapshot> = {}): boolean =>
+      isFresh(home("a", { lastOkAt: NOW - ms, ...extra }), NOW, 180_000);
+    expect([at(180_000), at(180_001)]).toEqual([true, false]);
+    expect([
+      at(1_800_000, { staleAfterMs: 1_800_000 }),
+      at(1_800_001, { staleAfterMs: 1_800_000 }),
+    ]).toEqual([true, false]);
+    expect(isFresh(home("a", { lastOkAt: null }), NOW, 180_000)).toBe(false);
+    expect(isFresh(home("a", { report: null }), NOW, 180_000)).toBe(false);
+    const quiet = buildView(
+      input({ homes: [home("main", { lastOkAt: NOW - 600_000, staleAfterMs: 1_800_000 })] }),
+    );
+    expect(quiet.homes[0]?.stale).toBe(false);
   });
 });
 

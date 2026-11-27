@@ -615,7 +615,8 @@ export class WriteEngine {
     record.attempt = typeof attempt === "number" ? attempt : record.attempt;
     record.error = stringField(entry.fields, "error");
     record.nextAt = null;
-    const at = Date.parse(stringField(entry.fields, "ts") ?? "");
+    const ts = stringField(entry.fields, "ts");
+    const at = ts === null ? Number.NaN : Date.parse(ts);
     if (Number.isNaN(at)) this.settled.delete(entry.id);
     else this.settled.set(entry.id, at);
   }

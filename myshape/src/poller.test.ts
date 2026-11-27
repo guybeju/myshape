@@ -30,6 +30,8 @@ interface Setup {
   /** The closed decisions' cursor the host hands out per home, the homes it was told of, and refusals. */
   cursors: Map<string, { offset: number; sha: string }>;
   reported: string[];
+  /** The start of each read the host was handed, in epoch seconds. */
+  started: number[];
   refused: string[];
 }
 
@@ -75,6 +77,7 @@ function setup(timings: PollTimings = TIMINGS, blocked: string | null = null): S
   const aggregators: unknown[] = [];
   const cursors: Setup["cursors"] = new Map();
   const reported: string[] = [];
+  const started: number[] = [];
   const refused: string[] = [];
   const poller = new Poller(
     async (command, timeout) => {
@@ -92,7 +95,10 @@ function setup(timings: PollTimings = TIMINGS, blocked: string | null = null): S
       },
       onAggregator: (aggregator) => aggregators.push(aggregator),
       closedCursor: (home) => cursors.get(home) ?? null,
-      onReport: (home, parsed) => reported.push(`${home}:${parsed.closed_holds.length}`),
+      onReport: (home, parsed, startedAt) => {
+        reported.push(`${home}:${parsed.closed_holds.length}`);
+        started.push(startedAt);
+      },
       onCursorRefused: (home) => refused.push(home),
     },
     () => blocked,
@@ -108,6 +114,7 @@ function setup(timings: PollTimings = TIMINGS, blocked: string | null = null): S
     aggregators,
     cursors,
     reported,
+    started,
     refused,
   };
 }
@@ -636,13 +643,41 @@ describe("reading with nobody looking", () => {
     const s = setup();
     s.poller.start();
     s.poller.touch();
+    // Someone looks for 600 ms: reads at the 250 ms ticks, the last one at 500 ms.
     await vi.advanceTimersByTimeAsync(TIMINGS.idleMs - 1);
-    const viewed = count(s, "main");
-    expect(viewed).toBeGreaterThan(1);
-    await vi.advanceTimersByTimeAsync(899_000);
-    expect(count(s, "main")).toBe(viewed);
-    await vi.advanceTimersByTimeAsync(TIMINGS.idleMs + 15_000);
-    expect(count(s, "main")).toBe(viewed + 1);
+    expect(count(s, "main")).toBe(2);
+    // Nobody looks: the next read is 900 s after that one, at the next slow tick (every 15 s from 750 ms).
+    await vi.advanceTimersByTimeAsync(900_600 - (TIMINGS.idleMs - 1));
+    expect(count(s, "main")).toBe(2);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(count(s, "main")).toBe(3);
+  });
+
+  it("reads hourly only a home hinted slower than the default", async () => {
+    const s = setup({ ...TIMINGS, readMs: 2000 });
+    s.answers.set("main", () =>
+      report({
+        secondmates: [
+          { id: "faster", read_every_s: 1 },
+          { id: "same", read_every_s: 2 },
+          { id: "slower", read_every_s: 3 },
+        ],
+      }),
+    );
+    await s.poller.readNow("main");
+    expect(s.poller.snapshots().map((home) => [home.id, home.staleAfterMs])).toEqual([
+      ["main", 1_800_000],
+      ["faster", 1_800_000],
+      ["same", 1_800_000],
+      ["slower", 7_200_000],
+    ]);
+  });
+
+  it("counts a read the feed could not start as not good", async () => {
+    const s = setup();
+    s.answers.set("main", () => ({ code: null, stdout: "", stderr: "", blocked: "not confirmed" }));
+    expect(await s.poller.readNow("main")).toBe(false);
+    expect(s.poller.goodReadsFrom()).toEqual(new Map());
   });
 
   it("reads nothing once stopped", async () => {
@@ -659,6 +694,7 @@ describe("reading with nobody looking", () => {
     const start = Date.now();
     await s.poller.readNow("main");
     expect(s.poller.goodReadsFrom()).toEqual(new Map([["main", start]]));
+    expect(s.started).toEqual([Math.floor(start / 1000)]);
     vi.setSystemTime(start + 5000);
     s.answers.set("main", () => ({ code: 1, stdout: "", stderr: "down" }));
     await s.poller.readNow("main");

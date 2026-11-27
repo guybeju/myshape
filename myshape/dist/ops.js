@@ -320,9 +320,17 @@ function deferAnswer(ctx, args) {
     const store = withStall(ctx.lifecycle, key, result.stall);
     return { ok: true, changed: true, store, line: result.line, records: result.records };
 }
+/** A topic's name, an archived one's too, or its id for one the board does not know. */
+function topicNameOf(state, id) {
+    const live = state.doc.topics[id];
+    if (live !== undefined)
+        return live.name;
+    const archived = state.archive.topics[id];
+    return archived === undefined ? id : archived.name;
+}
 /** 請 <aggregator> 處理 on a 沒人接 card, naming its members as the page lists them now. */
 function askAnswer(ctx, key) {
-    const nameOf = (id) => ctx.topics.doc.topics[id]?.name ?? id;
+    const nameOf = (id) => topicNameOf(ctx.topics, id);
     const shown = ctx.stalls().find((stall) => stall.key === key);
     const members = shown === undefined ? [] : shown.members;
     const context = { nameOf, nowMs: Date.parse(ctx.now), label: ctx.label, members };

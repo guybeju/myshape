@@ -1006,6 +1006,48 @@ describe("the lifecycle operations", () => {
       code: "refused",
       line: "看板現在列不出這張卡的成員，稍後再按一次。",
     });
+    // 延到 sends no message.
+    const put = apply(stalled, "lifecycle-answer", { card: "stall", key: "a", days: 3 });
+    expect(put.response).toMatchObject({ ok: true });
+    expect(put.messages).toEqual([]);
+  });
+
+  it("請 <aggregator> 處理 names an archived topic by its name, and one the board does not know by its id", () => {
+    const board = readBoard(paths).board;
+    const since = "2026-11-20T00:00:00Z";
+    const member = {
+      key: "queued\tmain\tq",
+      kind: "queued" as const,
+      home: "main",
+      id: "q",
+      label: "main/q",
+      states: ["Q4" as const],
+      since,
+    };
+    const card = (key: string) => ({
+      key,
+      topic: key,
+      state: "N2" as const,
+      since,
+      deferred_until: null,
+      asked_at: null,
+      members: [member],
+    });
+    const stalls = {
+      z: { since, members: ["queued\tmain\tq"] },
+      nope: { since, members: ["queued\tmain\tq"] },
+    };
+    const stalled = { ...board, lifecycle: { ...board.lifecycle, stalls } };
+    const who = { ...WHO, stalls: () => [card("z"), card("nope")] };
+    const ask = (key: string) =>
+      applyOperation(
+        target,
+        stalled,
+        { op: "lifecycle-answer", args: { card: "stall", key, ask: true }, fromPage: true },
+        who,
+      ).messages[0]?.text;
+    expect(ask("z")).toMatch(/^使用者請你處理議題「Z」（id z）/);
+    expect(ask("nope")).toMatch(/^使用者請你處理議題「nope」（id nope）/);
   });
 
   it("refuses a hands-on operation from a state it may not start from, and changes nothing", () => {
