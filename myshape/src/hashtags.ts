@@ -654,8 +654,7 @@ export interface ViewInput {
   none: readonly string[];
   text: string;
   untagged: boolean;
-  /** 照優先順序 when not given. */
-  order?: CardOrder;
+  order: CardOrder;
 }
 
 function viewOf(store: Frozen<HashtagStore>, input: ViewInput): SavedView | string {
@@ -667,7 +666,7 @@ function viewOf(store: Frozen<HashtagStore>, input: ViewInput): SavedView | stri
   if (!Array.isArray(any)) return any.problem;
   const none = shownNames(store, input.none);
   if (!Array.isArray(none)) return none.problem;
-  return { name, any, none, text, untagged: input.untagged, order: input.order ?? "priority" };
+  return { name, any, none, text, untagged: input.untagged, order: input.order };
 }
 
 /** The shown spellings of `raw`, each once, or why one of them is not a hashtag the board has. */

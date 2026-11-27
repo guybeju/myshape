@@ -519,7 +519,7 @@ function viewOf(store, input) {
     const none = shownNames(store, input.none);
     if (!Array.isArray(none))
         return none.problem;
-    return { name, any, none, text, untagged: input.untagged, order: input.order ?? "priority" };
+    return { name, any, none, text, untagged: input.untagged, order: input.order };
 }
 /** The shown spellings of `raw`, each once, or why one of them is not a hashtag the board has. */
 function shownNames(store, raw) {

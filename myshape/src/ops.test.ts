@@ -885,6 +885,7 @@ describe("each hashtag operation's arguments", () => {
     usage("view-save", { name: "x", id: 3 });
     usage("view-save", { name: "x", order: "sideways" });
     usage("view-save", { name: "x", order: 1 });
+    usage("view-save", { name: "x", order: "" });
     usage("view-delete", {});
     expect(journalLines()).toEqual([]);
   });

@@ -228,6 +228,7 @@ describe("the captain's changes to a whole hashtag", () => {
         none: ["AI_INFRA"],
         text: "",
         untagged: false,
+        order: "priority",
       }),
     );
   }
@@ -308,6 +309,7 @@ describe("saved views", () => {
         none: [],
         text: " gpu ",
         untagged: false,
+        order: "priority",
       }),
     );
     expect(store.views).toEqual({
@@ -326,6 +328,7 @@ describe("saved views", () => {
       none: [],
       text: "gpu",
       untagged: false,
+      order: "priority",
     });
     expect(again).toMatchObject({ changed: false });
     const defaulted = after(changeSettings(captain(store), { default_view: "ai" }));
@@ -346,9 +349,6 @@ describe("saved views", () => {
     expect(saveView(captain(store), { ...view, id, order: "newest" })).toMatchObject({
       changed: false,
     });
-    expect(Object.values(after(saveView(captain(tagged()), view)).views)[0]?.order).toBe(
-      "priority",
-    );
   });
 
   it("read a view's order from the file, and 照優先順序 when it is missing or unknown", () => {
@@ -368,7 +368,14 @@ describe("saved views", () => {
   });
 
   it("refuse an unknown hashtag, a bad id and a name that is not one line", () => {
-    const view = { name: "x", any: ["NOPE"], none: [], text: "", untagged: false };
+    const view = {
+      name: "x",
+      any: ["NOPE"],
+      none: [],
+      text: "",
+      untagged: false,
+      order: "priority" as const,
+    };
     expect(saveView(captain(tagged()), view)).toMatchObject({ ok: false });
     expect(saveView(captain(tagged()), { ...view, any: [], id: "all" })).toMatchObject({
       code: "usage",
@@ -591,7 +598,14 @@ describe("the edges", () => {
   });
 
   it("a view gets v1 when its name has no slug, and a rewrite records the view it replaced", () => {
-    const view = { name: "工作", any: [], none: [], text: "", untagged: false };
+    const view = {
+      name: "工作",
+      any: [],
+      none: [],
+      text: "",
+      untagged: false,
+      order: "priority" as const,
+    };
     const first = saveView(captain(tagged()), view);
     expect(first).toMatchObject({ line: "ok v1 視圖「工作」已存下", records: [{ before: "" }] });
     const second = saveView(captain(after(first)), { ...view, text: "gpu" });
@@ -631,7 +645,14 @@ describe("the edges", () => {
 describe("view ids", () => {
   it("count up past the ones taken, and a bad one is a usage refusal", () => {
     const captain = (store: Frozen<HashtagStore>) => ctx(store, { by: "captain" });
-    const view = (name: string) => ({ name, any: [], none: [], text: "", untagged: false });
+    const view = (name: string) => ({
+      name,
+      any: [],
+      none: [],
+      text: "",
+      untagged: false,
+      order: "priority" as const,
+    });
     const one = after(saveView(captain(emptyHashtags()), view("工作")));
     const two = saveView(captain(one), view("家裡"));
     expect(two).toMatchObject({ line: "ok v2 視圖「家裡」已存下" });
