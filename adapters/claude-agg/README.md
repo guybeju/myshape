@@ -22,7 +22,7 @@ It reads a board home's `data/topics.json`, `data/topics-archive.json`,
 order new work is handed out in (`dispatch-order.ts`), and then:
 
 - **plans** each dispatchable topic that has no task with one read-only
-  planner session (`Read`, `Grep`, `Glob`, `dontAsk`) in an empty directory of
+  planner session (`Read`, `Grep`, `Glob`, no prompts) in an empty directory of
   its own, allowed to read only the listed repositories' main checkouts,
   keeping only tasks for those repositories;
 - **dispatches** at most 2 sessions in all and 1 per topic (`scheduler.ts`);
@@ -33,13 +33,20 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   agg/<task-id> <base>` in the repository's main checkout, with the worktree
   root outside the board home;
 - **runs** one worker session per task with the options of
-  `session-options.ts`: auto mode with no prompts, the deny rules and the
-  PreToolUse guard of `guard.ts`, the target repository's project settings
-  from its main checkout, no MCP but its own, 200 turns, a structured output;
-  and stops a session whose start message is not `auto` or names another
-  credential source than the settings select;
+  `session-options.ts`: the `default` permission mode with no prompts (with
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set, which it always is, Claude Code
+  starts every session in `default` whatever is asked), so only what is
+  listed runs: file edits and writes inside the worktree, the two forge
+  tools, and Bash commands the sandbox runs (`autoAllowBashIfSandboxed`; no
+  Bash allow rule). Everything else is denied, as are edits of the
+  worktree's `.git`. Also the deny rules and the PreToolUse guard of
+  `guard.ts`, the target repository's project settings from its main
+  checkout, no MCP but its own, 200 turns, a structured output. It stops a
+  session whose start message is not `default` or names another credential
+  source than the settings select;
 - **sandboxes** each worker: its Bash commands run in the SDK's sandbox
-  (bubblewrap and socat on Linux), which must start or the session does not
+  (bubblewrap and socat on Linux; on macOS the system's own sandbox), which
+  must start or the session does not
   (`failIfUnavailable`), with no unsandboxed retry. They reach only the npm,
   PyPI and crates registries (`github.com` and `api.github.com` are denied),
   read nothing under the home directory but the worktree, the main
