@@ -1244,7 +1244,7 @@ export class Supervisor {
   private async cleanUp(id: string): Promise<void> {
     const task = this.task(id);
     if (task.worktree === undefined) return;
-    const unpushed = await this.git.unpushedCommits(task.worktree);
+    const unpushed = await this.git.unpushedCommits(this.repoOf(task).path, task.branch ?? "");
     if (unpushed !== 0) {
       this.setState(id, "blocked", DETAIL.unpushed);
       return;

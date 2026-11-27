@@ -218,7 +218,7 @@ describe("how a worker can end", () => {
 
   it("keeps a worktree that holds unpushed commits and says so", async () => {
     const world = oneTask([init("w1"), result(workerOutput("failed"))]);
-    world.commands.unpushed.set(join(world.root, "build-1"), 2);
+    world.commands.unpushed.set("agg/build-1", 2);
     const supervisor = await world.start();
     supervisor.tick();
     await supervisor.idle();

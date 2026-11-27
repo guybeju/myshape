@@ -418,9 +418,8 @@ export class FakeCommands {
       const lines = [dir, ...listed].map((path) => `worktree ${path}\n`);
       return done(0, lines.join("\n"));
     }
-    if (sub === "rev-list --count HEAD --not --remotes") {
-      return done(0, `${this.unpushed.get(dir) ?? 0}\n`);
-    }
+    const unpushed = /^rev-list --count refs\/heads\/(\S+) --not --remotes$/.exec(sub);
+    if (unpushed !== null) return done(0, `${this.unpushed.get(unpushed[1] ?? "") ?? 0}\n`);
     return done(2, "", `unplayed git ${sub}`);
   }
 
