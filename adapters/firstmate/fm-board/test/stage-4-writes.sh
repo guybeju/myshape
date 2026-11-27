@@ -78,12 +78,19 @@ settle() {
   done
 }
 
+# The board's own reminders (the note of a stall.nudge, request id tb-w-n-…)
+# are left out: the stand-in hold tool never closes an answered hold, so the
+# board reminds firstmate of it (D8) after the tests that answer one.
+stand_in_calls() {  # <play key>: that stand-in's lines, the board's reminders left out
+  grep "^cmd=$1	" "$TB_LOG" | grep -Fv -- '|tb-w-n-' || true
+}
+
 calls() {  # <play key>: how many times that stand-in was called
-  grep -c "^cmd=$1	" "$TB_LOG" || true
+  stand_in_calls "$1" | grep -c '' || true
 }
 
 last_call() {  # <play key>
-  grep "^cmd=$1	" "$TB_LOG" | tail -n 1
+  stand_in_calls "$1" | tail -n 1
 }
 
 play() {  # <play key> <step>...
@@ -128,7 +135,7 @@ test_message_to_firstmate() {
   play fm-inbox.sh '3\tsaved but not woken' '3' '0'
   id=$(write message topic billing text "再說一次")
   settle "$id" delivered
-  assert_equals 1 "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 3 | cut -f2 | sort -u | wc -l | tr -d ' ')" \
+  assert_equals 1 "$(stand_in_calls fm-inbox.sh | tail -n 3 | cut -f2 | sort -u | wc -l | tr -d ' ')" \
     "a note that was saved but did not wake firstmate must be replayed with the same request id"
   play fm-inbox.sh '1'
   id=$(write message topic billing text "會失敗")
@@ -645,11 +652,11 @@ test_dispatchable_notice() {
   t move parked2 high >/dev/null
   sleep 2.5
   assert_equals $((before + 2)) "$(calls fm-inbox.sh)" "each topic that becomes dispatchable must get its own notice"
-  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked」離開「待辦」，排在「一般」最後，現在可派" \
+  assert_contains "$(stand_in_calls fm-inbox.sh | tail -n 2)" "stdin=議題「Parked」離開「待辦」，排在「一般」最後，現在可派" \
     "the notice must say where the topic now stands"
-  assert_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "stdin=議題「Parked two」離開「待辦」，排在「高」最後，現在可派" \
+  assert_contains "$(stand_in_calls fm-inbox.sh | tail -n 2)" "stdin=議題「Parked two」離開「待辦」，排在「高」最後，現在可派" \
     "the notice must say where the topic now stands"
-  assert_not_contains "$(grep '^cmd=fm-inbox.sh' "$TB_LOG" | tail -n 2)" "order" "the notice must not tell firstmate what to run"
+  assert_not_contains "$(stand_in_calls fm-inbox.sh | tail -n 2)" "order" "the notice must not tell firstmate what to run"
   t archive parked >/dev/null
   t reopen parked >/dev/null
   sleep 2.5

@@ -568,6 +568,30 @@ test_decision_front_notice_is_a_note() {
   pass "the notice that a decision's turn came is its exact text as a note, under tb-<id>"
 }
 
+# The board's reminder (contracts 7.1, stall.nudge) and the captain's
+# 〔請 <aggregator> 處理〕 (a message under the topic) are ordinary notes too:
+# exactly their text, under tb-<their fixed ids>.
+test_lifecycle_notices_are_notes() {
+  local nudge='看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：議題「帳務重構」（id billing）的 main/foo（停著、沒有日期也沒有等的項目，滿 3 天交給使用者）。'
+  local ask='使用者請你處理議題「帳務重構」（id billing）的「沒人接」卡：main/foo（停著、沒有日期也沒有等的項目）。1 天內這些卡沒有離開逾期的狀態，卡會回到使用者面前，那時不能再請你處理。'
+  fresh
+  assert_equals "$DELIVERED" \
+    "$(deliver "$(jq -c --arg text "$nudge" '.id = "w-n-0123456789abcdef" | .event = "stall.nudge" | .text = $text | del(.topic)' \
+      "$CONTRACT/action-notice.json")")" \
+    "the board's reminder must be delivered"
+  assert_equals "$(line fm-inbox.sh 'note|--request-id|tb-w-n-0123456789abcdef|-|' "$MAIN" "$nudge")" \
+    "$(cat "$TB_LOG")" "a reminder must run only fm-inbox.sh note, with request id tb-<id>"
+  raw_is fm-inbox.sh "$nudge" "a reminder must reach the note byte for byte"
+  fresh
+  assert_equals "$DELIVERED" \
+    "$(deliver "$(jq -c --arg text "$ask" '.id = "w-a-0123456789abcdef" | .text = $text' "$CONTRACT/action-message.json")")" \
+    "the captain's 請 <aggregator> 處理 must be delivered"
+  assert_equals "$(line fm-inbox.sh 'note|--request-id|tb-w-a-0123456789abcdef|-|' "$MAIN" "［議題：帳務重構（billing）］\\n$ask")" \
+    "$(cat "$TB_LOG")" "請 <aggregator> 處理 must be a message note under its topic, with request id tb-<id>"
+  raw_is fm-inbox.sh "［議題：帳務重構（billing）］"$'\n'"$ask" "請 <aggregator> 處理 must reach the note byte for byte"
+  pass "the board's reminder and the captain's 請 <aggregator> 處理 are exact notes, under tb-<id>"
+}
+
 # notes_for <home> <request id>: the notes the real inbox holds under that request id, waiting or handled.
 notes_for() {
   grep -rlxF --include='*.note' "request_id=$2" "$1/state/inbox" 2>/dev/null || true
@@ -618,5 +642,5 @@ fm_test_run test_message_and_notice_become_notes test_note_outcomes test_direct_
   test_direct_outcomes test_answer_runs_the_hold_tool_then_a_note test_answer_outcomes \
   test_tag_runs_fm_board_tag test_tag_outcomes test_remote_tag_sends_the_copy_first test_malformed_records_fail \
   test_answer_with_the_real_hold_tool test_closed_item_is_only_a_note \
-  test_unknown_notice_event_is_a_note test_decision_front_notice_is_a_note \
+  test_unknown_notice_event_is_a_note test_decision_front_notice_is_a_note test_lifecycle_notices_are_notes \
   test_schedule_notice_with_the_real_inbox
