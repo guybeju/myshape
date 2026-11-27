@@ -845,6 +845,7 @@ describe("the deadline settings", () => {
     ])
       expect(parseSettings({ N3: raw }).N3, JSON.stringify(raw)).toEqual({ raise: 1440 });
     expect(parseSettings({ N3: { raise: 129_600 } }).N3).toEqual({ raise: 129_600 });
+    expect(parseSettings({ N3: { raise: 1 } }).N3).toEqual({ raise: 1 });
     const current = defaultSettings();
     const changed = changeSettings(current, { N3: { raise: 2880 } });
     if (!changed.ok || !changed.changed) throw new Error("expected a change");
