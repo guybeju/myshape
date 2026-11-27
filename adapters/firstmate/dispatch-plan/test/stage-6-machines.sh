@@ -94,8 +94,10 @@ test_asks_each_far_machine() {
   echo garbage > "$STUB/far4.mode"
   out=$(machines "$MAIN" 2> "$TMP_ROOT/far.err") || fail "machines failed with far machines"
   assert_equals "" "$(cat "$TMP_ROOT/far.err")" "machines must not write to stderr"
+  # The main home's order reads the far homes' summaries through the same stub
+  # (upstream's snapshot, as before), so only the record calls are counted.
   assert_equals "far1 fm-dispatch-plan.sh machine --json|far2 fm-dispatch-plan.sh machine --json|far3 fm-dispatch-plan.sh machine --json|far4 fm-dispatch-plan.sh machine --json" \
-    "$(paste -sd '|' "$STUB/calls")" "each far secondmate must be asked once for its machine's record"
+    "$(grep ' fm-dispatch-plan.sh ' "$STUB/calls" | paste -sd '|' -)" "each far secondmate must be asked once for its machine's record"
   assert_contains "$out" "（far1）：可以加（rule-v1）。" "a far machine that answers must get a verdict"
   assert_contains "$out" "far2 那台：不知道（連不到（fm-on.sh 回 255））；不算也不轉交。" "an unreachable machine must be unknown"
   assert_contains "$out" "far3 那台：不知道（那邊的 fm-dispatch-plan.sh 還沒有 machine（回 2）；那台的程式更新到這一版就有）；不算也不轉交。" \
