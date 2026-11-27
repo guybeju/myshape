@@ -154,7 +154,6 @@ describe("one worker end to end", () => {
       allowedTools: [
         `Edit(/${join(world.root, "build-1")}/**)`,
         `Write(/${join(world.root, "build-1")}/**)`,
-        "Skill(claude-agg:claude-agg-worker)",
         "mcp__forge__push_branch",
         "mcp__forge__open_pr",
       ],

@@ -370,13 +370,12 @@ nothing else: no hooks, MCP servers, agents, commands or settings.
   the plugin through the SDK's `plugins` option. What the workers must not
   do is enforced by the supervisor's own code (the sandbox, the permission
   rules, the guard and the forge tools), not by this text.
-  - With this Claude Code version a Skill call runs without an allow rule.
-    That holds for both skills here and for any other skill a worker
-    session can see.
+  - With this Claude Code version a Skill call needs no allow rule. That
+    holds for both skills here and for any other skill a worker session
+    can see. The worker skill loads because it carries only a name and a
+    description.
   - A skill brings text only, and every tool it leads to is held to the
     same rules as the rest of the session.
-  - The worker's options keep the rule `Skill(claude-agg:claude-agg-worker)`,
-    but it is not a gate.
 - `skills/claude-agg-status/SKILL.md` is for you: in your own Claude Code
   session it reads the supervisor's state files and tells you what it is
   doing, what waits for you on the board, and how to pause and resume it.

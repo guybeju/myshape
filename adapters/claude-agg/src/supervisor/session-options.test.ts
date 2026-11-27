@@ -181,7 +181,6 @@ describe("workerOptions", () => {
       allowedTools: [
         "Edit(//work/t-1/**)",
         "Write(//work/t-1/**)",
-        "Skill(claude-agg:claude-agg-worker)",
         "mcp__forge__push_branch",
         "mcp__forge__open_pr",
       ],
@@ -280,11 +279,7 @@ describe("workerOptions", () => {
       "Agent",
     ]);
     expect(options).not.toHaveProperty("mcpServers");
-    expect(options.allowedTools).toEqual([
-      "Edit(//work/t-1/**)",
-      "Write(//work/t-1/**)",
-      "Skill(claude-agg:claude-agg-worker)",
-    ]);
+    expect(options.allowedTools).toEqual(["Edit(//work/t-1/**)", "Write(//work/t-1/**)"]);
     expect(options.settings).toEqual(SANDBOX_SETTINGS);
     const [hook] = options.hooks.PreToolUse[0]?.hooks ?? [];
     const input = preToolUseInput("Bash", { command: "git push origin agg/t-1" }, "/work/t-1");
@@ -345,14 +340,14 @@ describe("workerOptions", () => {
     expect(await planner?.(bash, "u", { signal: abort.signal })).toEqual({});
   });
 
-  it("loads exactly one plugin, the supervisor's own, for scouts too, and the planner none", () => {
+  it("loads exactly one plugin, the supervisor's own, with no Skill rule, for scouts too; the planner none", () => {
     for (const forge of [FORGE, null]) {
       const options = workerOptions({ ...SESSION, forge }, CTX);
       expect(options.plugins).toEqual([
         { type: "local", path: CTX.plugin, skipMcpDiscovery: true },
       ]);
       const skills = (options.allowedTools ?? []).filter((rule) => rule.startsWith("Skill"));
-      expect(skills).toEqual(["Skill(claude-agg:claude-agg-worker)"]);
+      expect(skills).toEqual([]);
     }
     const planner = plannerOptions("/w/p", ["/repos/app"], CTX);
     expect(planner).not.toHaveProperty("plugins");

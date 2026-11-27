@@ -8,7 +8,8 @@
 // starts in `default` (SESSION_MODE) with no approval surface: only what is
 // listed runs without a prompt, and everything else is denied. The one
 // exception is the Skill tool: in this CLI version (2.1.332) a Skill call
-// runs with no allow rule (shown on the Mac). A skill brings text only, and
+// needs no allow rule (shown on the Mac), and the worker skill loads because
+// it carries only a name and a description. A skill brings text only, and
 // every tool it leads to is held to the same rules. Every prompt
 // carries board text (topic names and goals, messages, answers), so every
 // session takes its prompts as written (`verbatimPrompts`): no `@path` file
@@ -26,7 +27,6 @@ import type { PlainEnv } from "./commands.js";
 import { AUTH_VARIABLE, CREDENTIAL_PATHS, type Credential } from "./credential.js";
 import type { Forge, ToolAnswer } from "./forge.js";
 import { preToolUseHook, type GuardContext } from "./guard.js";
-import { WORKER_SKILL } from "./plugin.js";
 import type { QueryOptions } from "./sdk.js";
 
 export const WORKER_MAX_TURNS = 200;
@@ -351,13 +351,13 @@ export const SESSION_MODE = "default";
  * What a worker may do without a prompt: file edits and writes inside its
  * worktree and, for a ship worker, the two forge tools by their full names.
  * Bash has no allow rule: the guard approves a sandboxed command, so an
- * unsandboxed one is never approved. The rule for the worker skill is not
- * a gate: in this CLI version a Skill call runs without any rule, and the
- * skill brings text only.
+ * unsandboxed one is never approved. The worker skill needs no rule: in this
+ * CLI version a Skill call needs no allow rule, and the skill loads because
+ * it carries only a name and a description.
  */
 export function workerAllowRules(worktree: string, ship: boolean): string[] {
-  const own = [`Edit(/${worktree}/**)`, `Write(/${worktree}/**)`, `Skill(${WORKER_SKILL})`];
-  return ship ? [...own, ...FORGE_TOOLS] : own;
+  const files = [`Edit(/${worktree}/**)`, `Write(/${worktree}/**)`];
+  return ship ? [...files, ...FORGE_TOOLS] : files;
 }
 
 /** The worktree's .git file: the file tools never change it, though it lies in the worktree. */
