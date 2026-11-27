@@ -54,9 +54,8 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   `guard.ts`, the target repository's project settings from its main
   checkout, no MCP but its own, 200 turns, a structured output, and one
   plugin, `plugin/` of the checkout the supervisor runs from, whose worker
-  skill holds the worker's rules (the prompt has the worker load it first,
-  and one allow rule, `Skill(claude-agg:claude-agg-worker)`, lets it). It
-  stops a session whose start message is not `default` or names another
+  skill holds the worker's rules (the prompt has the worker load it first).
+  It stops a session whose start message is not `default` or names another
   credential source than the settings select, and a worker session whose
   start message does not list that plugin at that path and both its skills,
   or lists a load error of it, logging what was missing;
@@ -371,6 +370,13 @@ nothing else: no hooks, MCP servers, agents, commands or settings.
   the plugin through the SDK's `plugins` option. What the workers must not
   do is enforced by the supervisor's own code (the sandbox, the permission
   rules, the guard and the forge tools), not by this text.
+  - With this Claude Code version a Skill call runs without an allow rule.
+    That holds for both skills here and for any other skill a worker
+    session can see.
+  - A skill brings text only, and every tool it leads to is held to the
+    same rules as the rest of the session.
+  - The worker's options keep the rule `Skill(claude-agg:claude-agg-worker)`,
+    but it is not a gate.
 - `skills/claude-agg-status/SKILL.md` is for you: in your own Claude Code
   session it reads the supervisor's state files and tells you what it is
   doing, what waits for you on the board, and how to pause and resume it.

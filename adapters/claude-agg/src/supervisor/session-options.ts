@@ -6,7 +6,10 @@
 // reaches the forge only through the supervisor's two tools. It loads one
 // plugin, the supervisor's own (plugin.ts), for the worker skill. Every session
 // starts in `default` (SESSION_MODE) with no approval surface: only what is
-// listed runs without a prompt, and everything else is denied. Every prompt
+// listed runs without a prompt, and everything else is denied. The one
+// exception is the Skill tool: in this CLI version (2.1.332) a Skill call
+// runs with no allow rule (shown on the Mac). A skill brings text only, and
+// every tool it leads to is held to the same rules. Every prompt
 // carries board text (topic names and goals, messages, answers), so every
 // session takes its prompts as written (`verbatimPrompts`): no `@path` file
 // mention in them is expanded and no slash command runs.
@@ -346,10 +349,11 @@ export const SESSION_MODE = "default";
 
 /**
  * What a worker may do without a prompt: file edits and writes inside its
- * worktree, loading the worker skill by its full name, and, for a ship
- * worker, the two forge tools by their full names. Bash has no allow rule:
- * the guard approves a sandboxed command, so an unsandboxed one is never
- * approved.
+ * worktree and, for a ship worker, the two forge tools by their full names.
+ * Bash has no allow rule: the guard approves a sandboxed command, so an
+ * unsandboxed one is never approved. The rule for the worker skill is not
+ * a gate: in this CLI version a Skill call runs without any rule, and the
+ * skill brings text only.
  */
 export function workerAllowRules(worktree: string, ship: boolean): string[] {
   const own = [`Edit(/${worktree}/**)`, `Write(/${worktree}/**)`, `Skill(${WORKER_SKILL})`];
