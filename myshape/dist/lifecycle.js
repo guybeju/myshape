@@ -360,11 +360,14 @@ export function nextClocks(previous, cards, context) {
         const same = old !== undefined && old.state === found.state && old.sig === found.sig;
         clocks[found.key] = same ? { ...old } : { state: found.state, since: now, sig: found.sig };
     }
+    return { ...carriedClocks(previous, cards, context), ...clocks };
+}
+/** The clocks that outlast a look that cannot see their card: it is 看不清 now, or its home was not read well. */
+function carriedClocks(previous, cards, context) {
     const unseen = new Set(cards.filter((found) => UNCLEAR.has(found.state)).map((found) => found.key));
-    for (const [key, clock] of Object.entries(previous))
-        if (clocks[key] === undefined && (unseen.has(key) || unreadHome(homeOfKey(key), context)))
-            clocks[key] = { ...clock };
-    return clocks;
+    return Object.fromEntries(Object.entries(previous)
+        .filter(([key]) => unseen.has(key) || unreadHome(homeOfKey(key), context))
+        .map(([key, clock]) => [key, { ...clock }]));
 }
 /** The states that say the board cannot see now: a card in one keeps its clock as it was. */
 const UNCLEAR = new Set(["T5", "D10", "Q10", "A8"]);

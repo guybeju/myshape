@@ -13,7 +13,7 @@ import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
 import { closedNotice } from "./schedule-notices.js";
 import { todoState, todoTransitionProblem, withKept, withSettings, withStall, } from "./lifecycle.js";
 import { KEEP_DEFAULT_DAYS, KEEP_MAX_DAYS, changeSettings } from "./lifecycle-settings.js";
-import { deferStall } from "./stalls.js";
+import { deferStall, localDay } from "./stalls.js";
 /** The schedule on `id`, if any. */
 function scheduled(ctx, id) {
     return schedules.scheduleOfTopic(ctx.schedules, ctx.topics, id) !== null;
@@ -53,6 +53,10 @@ function transitionProblem(op, ctx, args) {
     const id = stringField(args, "task");
     const item = id === null || !Object.hasOwn(ctx.todos.items, id) ? undefined : ctx.todos.items[id];
     if (id === null || item === undefined)
+        return null;
+    // The same verdict again changes nothing, and a redo is not refused (contracts section 9).
+    const reason = topics.oneLine(stringField(args, "reason") ?? "", topics.GOAL_MAX);
+    if (op === "todo-failed" && item.state === "rejected" && item.reason === reason)
         return null;
     return todoTransitionProblem(op, id, todoState(item));
 }
@@ -322,7 +326,7 @@ function keepIdle(ctx, topic, days) {
     const until = new Date(Date.parse(ctx.now) + days * 86_400_000).toISOString();
     const store = withKept(ctx.lifecycle, topic, until);
     const name = ctx.topics.doc.topics[topic]?.name ?? topic;
-    const day = until.slice(5, 10);
+    const day = localDay(until);
     return {
         ok: true,
         changed: true,
