@@ -274,6 +274,8 @@ function readQueued(agg) {
       captain: entry["captain"] ?? false,
       blockers: entry["blockers"] ?? [],
       topic_hint: entry["topic_hint"] ?? null,
+      hold_until: entry["hold_until"] ?? null,
+      turn: entry["turn"] ?? false,
     };
   });
 }

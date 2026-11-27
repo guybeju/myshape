@@ -66,6 +66,10 @@ export interface QueuedEntry {
   captain?: boolean;
   blockers?: string[];
   topic_hint?: string | null;
+  /** When a dated wait ends (a date or a UTC time). */
+  hold_until?: string | null;
+  /** True when the supervisor starts the item by itself once a place frees. */
+  turn?: boolean;
 }
 
 /** `queued.json`; the array order is the dispatch order. */

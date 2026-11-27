@@ -161,6 +161,8 @@ describe("feed", () => {
         captain: false,
         blockers: [],
         topic_hint: null,
+        hold_until: null,
+        turn: false,
       },
     ]);
     expect(report.topics).toEqual({ t1: "build 2026-11-25T00:00:00Z" });
@@ -168,6 +170,22 @@ describe("feed", () => {
     expect(report["status_decisions"]).toEqual([]);
     expect(report["secondmates"]).toEqual([]);
     expect(report.aggregator.name).toBe(AGENT_NAME);
+  });
+
+  it("passes on a queued item's date and turn as the supervisor wrote them", () => {
+    const h = makeHome();
+    writeQueued(h.agg, {
+      v: 1,
+      queued: [
+        { id: "q1", kind: "ship", title: "等空位", hold: "等空位（2/2）", turn: true },
+        { id: "q2", kind: "ship", title: "延到", hold: "等額度", hold_until: "2026-12-05" },
+      ],
+    });
+    const report = feed(h);
+    expect(report.queued.map(({ id, hold_until, turn }) => [id, hold_until, turn])).toEqual([
+      ["q1", null, true],
+      ["q2", "2026-12-05", false],
+    ]);
   });
 
   it("is an empty report for a home whose state files are not written yet", () => {

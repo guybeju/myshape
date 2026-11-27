@@ -74,6 +74,8 @@ write_main_fleet() {
 - [ ] q-ready - Ready item (repo: sample) (kind: ship)
   topic: billing
 - [ ] q-after - After run-a (repo: sample) (kind: ship) (blocked-by: run-a)
+- [ ] q-load - Waits for a place (repo: sample) (kind: ship) (hold: 等空位) (hold-kind: load)
+- [ ] q-dated - Waits for a vendor (repo: sample) (kind: ship) (hold: 等廠商回覆) (hold-kind: external) (hold-until: 2026-12-05)
 
 ## Done
 - [x] call-done - Ship it? (repo: sample) (kind: captain) (done 2026-07-21) (hold: 要出貨嗎？) (hold-kind: captain)
@@ -166,11 +168,14 @@ test_main_report_carries_the_backlog() {
     "holds[] must carry each captain hold with its bucket, answer outcome, origin, question and title"
   assert_equals '2026-12-01' "$(jq -r '.holds[] | select(.id == "call-later") | .hold_until' <<< "$out")" \
     "a dated hold must carry its date"
-  assert_equals 'call-close|true|null call-later|true|null q-parked|false|null q-ready|false|billing q-after|false|null' \
+  assert_equals 'call-close|true|null call-later|true|null q-parked|false|null q-ready|false|billing q-after|false|null q-load|false|null q-dated|false|null' \
     "$(jq -r '[.queued[] | "\(.id)|\(.captain)|\(.topic_hint)"] | join(" ")' <<< "$out")" \
     "queued[] must list every queued item, whether the captain holds it, and its topic_hint"
   assert_equals '等 CI 修好' "$(jq -r '.queued[] | select(.id == "q-parked") | .hold' <<< "$out")" \
     "a parked item must carry its hold reason"
+  assert_equals 'q-parked|null|false q-load|null|true q-dated|2026-12-05|false' \
+    "$(jq -r '[.queued[] | select(.id | IN("q-parked", "q-load", "q-dated")) | "\(.id)|\(.hold_until)|\(.turn)"] | join(" ")' <<< "$out")" \
+    "queued[] must carry a dated hold's date, and turn only for a hold of kind load, which first mate dispatches once a place frees"
   assert_equals '["run-a"]' "$(jq -c '.queued[] | select(.id == "q-after") | .blockers' <<< "$out")" \
     "an item blocked by an unfinished task must name it"
   assert_equals 'run-a|default|choose an API shape' \

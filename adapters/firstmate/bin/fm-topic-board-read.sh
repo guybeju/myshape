@@ -439,6 +439,7 @@ main() {
                   | select(.structured == true and .state == "queued")
                   | {id, kind: (.kind // ""), title: (.title // ""), hold: .hold_reason,
                      captain: (.hold_kind == "captain"),
+                     hold_until: (.hold_until // null), turn: (.hold_kind == "load"),
                      blockers: (.unresolved_blocker_ids // []),
                      topic_hint: ([ (.body_lines // [])[]
                                     | capture("^topic: *(?<topic>[A-Za-z0-9._-]+) *$") | .topic ][0] // null)} ],

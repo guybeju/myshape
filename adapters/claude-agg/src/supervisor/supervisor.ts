@@ -64,7 +64,7 @@ import {
   type ResumeInput,
 } from "./prompts.js";
 import { ScheduleStep, type MakeUp } from "./schedule-step.js";
-import { schedule, type Candidate, type Slot, type TopicStatus } from "./scheduler.js";
+import { WAIT, schedule, type Candidate, type Slot, type TopicStatus } from "./scheduler.js";
 import type { QueryFn } from "./sdk.js";
 import { followSession, PromptStream, type SessionReport } from "./session.js";
 import { plannerOptions, workerOptions, type SessionContext } from "./session-options.js";
@@ -777,12 +777,20 @@ export class Supervisor {
     return task?.state === "paused" && (task.detail ?? "").startsWith(TEXT.quota);
   }
 
+  /**
+   * Writes why each planned task waits. One that waits only for a free place
+   * says `turn: true`: the supervisor starts it by itself once one frees, so
+   * the board times it as ready to run (Q1), not as stopped.
+   */
   private writeWaiting(waiting: ReadonlyMap<string, string>): void {
     let changed = false;
     for (const entry of this.queued) {
       const hold = waiting.get(entry.id) ?? null;
-      if ((entry.hold ?? null) === hold) continue;
+      const turn = hold === WAIT.full;
+      if ((entry.hold ?? null) === hold && (entry.turn === true) === turn) continue;
       entry.hold = hold;
+      if (turn) entry.turn = true;
+      else delete entry.turn;
       changed = true;
     }
     if (changed) this.store.writeQueued(this.queued);
