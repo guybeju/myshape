@@ -1,19 +1,19 @@
-<!-- myshape:begin v14（由 fm-board.sh install-rules 維護，要改請改範本） -->
+<!-- myshape:begin v15（由 fm-board.sh install-rules 維護，要改請改範本） -->
 ## 議題看板（主 home）
-- 新工作先用 `myshape.sh list` 找議題 id；沒有合適的就跑 `myshape.sh create <名稱> --goal <一行>` 建一個再 `fm-board.sh tag`；我指定佇列才加 `--queue`。議題要窄：一件具體的事一個議題，不開大雜燴議題。
+- 新工作先用 `myshape.sh list` 找議題 id；沒有合適的就跑 `myshape.sh create <名稱> --goal <一行>` 建一個再 `fm-board.sh tag`；我指定佇列才加 `--queue`。議題要窄：一件具體的事一個，不開大雜燴。
 - hashtag 你可自己貼撕，事後說明；開新的特別點出。
-- 你判斷議題的目標已經達成時，跑 `myshape.sh close-propose <議題 id> --reason <一句話>`，由我決定關不關。
-- 重新評估排隊的工作前先跑 `fm-dispatch-plan.sh order`：先照「該 hold」「該解除」執行，再照「可派」的順序派。停著的項目不派、不轉交；我明講要做的，解除 hold 再派。議題進了待辦或封存，在跑的 worker 不要停。看板通知議題可派時也重新評估，並請手上有它的項目的 secondmate 也跑 order。
-- 我問起某個議題或 task 後來怎樣，或你用的議題 id 被拒絕、找不到時：跑 `myshape.sh find <關鍵字>`，照它印的回答（要完整經過加 `--all`）；平常不用記議題的合併、拆分、改名。
-- 要拆開一個議題時：跑 `fm-board.sh split <議題 id> <新名稱> --goal <一行> <要搬的 task…>`（本機 secondmate 的 task 寫成 `<secondmate-id>/<task-id>`），不要自己提議新議題再逐一改標。`split` 和 `merge` 都加 `--reason <一行>`。
-- 轉交給 secondmate 的項目，內文加一行 `topic: <議題 id>`。
+- 你判斷議題的目標達成時，跑 `myshape.sh close-propose <議題 id> --reason <一句話>`，由我決定關不關。
+- 重新評估排隊的工作前先跑 `fm-dispatch-plan.sh order`：先照「該 hold」「該解除」執行，再照「可派」的順序派，最後跑 `fm-dispatch-plan.sh machines` 照「該轉告」「該通知」做。停著的項目不派、不轉交；我明講要做的，解除 hold 再派。議題進待辦或封存，在跑的 worker 不要停。看板通知議題可派時也重新評估，並請手上有它項目的 secondmate 也跑 order。
+- 我問起某個議題或 task 後來怎樣，或議題 id 被拒絕、找不到時：跑 `myshape.sh find <關鍵字>`，照它印的回答（要完整經過加 `--all`）；平常不用記議題的合併、拆分、改名。
+- 拆開議題時：跑 `fm-board.sh split <議題 id> <新名稱> --goal <一行> <要搬的 task…>`（本機 secondmate 的 task 寫成 `<secondmate-id>/<task-id>`），不要自己提議新議題再逐一改標。`split` 和 `merge` 都加 `--reason <一行>`。
+- 轉交給 secondmate 的項目內文加一行 `topic: <議題 id>`。
 - PR 或分支就緒、scout 交報告、worker 失敗、合併或落地時：跑 `myshape.sh summary [--home <id>] <task-id> <ready|report|failed|landed> -` 寫一到三句，再在聊天發一行 `<議題名稱>：<一句話>`。就緒那行附完整 PR 或 review 網址與風險等級。`summary` 或 `which` 失敗時提醒照發，改用 task id 開頭，摘要不補寫。
 - 摘要寫錯了（例如沒有落地）：跑 `myshape.sh retract`（參數同 `summary`）撤回，原因從 stdin 給；不要改檔。
 - 開了等我回答的決定時：跑 `myshape.sh which` 查議題名稱，在聊天發一行 `<議題名稱>：等你決定：<問題與選項>`。
-- 要我親手做的事（sudo、登入）不要只寫在聊天：跑 `myshape.sh todo add <task-id> <標題> --topic <議題 id> --do <一行>`，每個要我跑的指令一個 `--cmd`，其他說明放 `--note`。我說做完了就驗證，再跑 `myshape.sh todo done <task-id>` 或 `todo failed <task-id> --reason <一行>`；不再需要時跑 `todo obsolete <task-id> --reason <一行>`。
+- 要我親手做的事（sudo、登入）不要只寫在聊天：跑 `myshape.sh todo add <task-id> <標題> --topic <議題 id> --do <一行>`，每個要我跑的指令一個 `--cmd`，其他說明放 `--note`。我說做完了就驗證，再跑 `todo done <task-id>` 或 `todo failed <task-id> --reason <一行>`；不再需要時跑 `todo obsolete <task-id> --reason <一行>`。
 - 看板提醒時：「沒人處理的議題」派工、`close-propose` 或我明講後封存；等驗證的動手項目只能驗證後 `todo done`／`todo failed`；其他照 captain-hold-lifecycle。
-- secondmate 回報某則「轉給」的訊息送不出去時，在聊天說是哪一則、為什麼。
-- 上面這幾種通知一件一行，細節留在看板。
+- secondmate 回報「轉給」的訊息送不出去時，在聊天說哪一則、為什麼。
+- 上面這些通知一件一行，細節留在看板。
 - `merge`、`split`、`rename`、`goal`、`archive`、`reopen`、`stop`、`restart`、`reset-token`、`install-rules` 只在我明講時跑。
-- `myshape.sh` 或 `fm-board.sh` 回 3 就原樣重做一次；回 69 就把它印的那行原文轉告我，其他工作照常，不自己修或重試，等我修好再重做。
+- `myshape.sh` 或 `fm-board.sh` 回 3 就原樣重做一次；回 69 就把印的那行原文轉告我，其他工作照常，不自己修或重試，我修好再重做。
 <!-- myshape:end -->
