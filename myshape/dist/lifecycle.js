@@ -75,7 +75,7 @@ export const LIFECYCLE = {
     // 沒人接 cards (stored)
     N1: { owner: "aggregator", deadline: "members" },
     N2: captain,
-    N3: { owner: "aggregator", deadline: "ask" },
+    N3: { owner: "aggregator", deadline: "N3" },
     N4: time,
 };
 export function emptyLifecycle() {
@@ -530,7 +530,7 @@ export function evaluate(view, context) {
         stalls: Object.entries(step.stalls).map(([key, stall]) => ({
             key,
             topic: key === NO_TOPIC ? null : key,
-            state: stallState(stall, nowMs),
+            state: stallState(stall, nowMs, store.settings.N3.raise),
             since: stall.since,
             deferred_until: stall.deferred === undefined ? null : stall.deferred.until,
             asked_at: stall.asked === undefined ? null : stall.asked.at,

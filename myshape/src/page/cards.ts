@@ -268,7 +268,7 @@ export function undelivered(page: Page, actions: Actions): Child {
   );
 }
 
-/** One deadline setting: its two numbers and their defaults. */
+/** One deadline setting: its two numbers and their defaults; a reminder that does not apply shows as 不適用. */
 function settingRow(
   page: Page,
   actions: Actions,
@@ -277,9 +277,12 @@ function settingRow(
   const remindKey = `deadline-remind:${row.state}`;
   const raiseKey = `deadline-raise:${row.state}`;
   const value = (key: string, current: number): number => Number(page.drafts.get(key) ?? current);
+  const raise = (): number => value(raiseKey, row.raise);
+  const { remind } = row;
   const save = (): void =>
     actions.send("lifecycle/settings", {
-      [row.state]: { remind: value(remindKey, row.remind), raise: value(raiseKey, row.raise) },
+      [row.state]:
+        remind === null ? { raise: raise() } : { remind: value(remindKey, remind), raise: raise() },
     });
   const box = (key: string, current: number): Child =>
     h("input", {
@@ -295,14 +298,23 @@ function settingRow(
     h(
       "span",
       { class: "grow" },
-      `${row.label}（${row.unit}；預設 ${row.default_remind}／${row.default_raise}）`,
+      `${row.label}（${row.unit}；預設 ${row.default_remind ?? "不適用"}／${row.default_raise}）`,
     ),
     "提醒",
-    box(remindKey, row.remind),
+    remind === null ? h("span", { class: "note" }, "不適用") : box(remindKey, remind),
     "交給你",
     box(raiseKey, row.raise),
     h("button", { onclick: save }, "存"),
   );
+}
+
+/** Says which rows have no reminder, and why: N3, since your press already handed the card over. */
+function noReminder(view: View): string {
+  const rows = view.lifecycle.settings.filter((row) => row.remind === null);
+  const names = rows.map((row) => `「${row.label}」`).join("、");
+  return rows.length === 0
+    ? ""
+    : `${names}沒有提醒（不適用）：你按了請 ${agentName()} 處理，就是交給它了，只有多久之後回到你面前。`;
 }
 
 /** The captain's deadline settings: when the aggregator is reminded, and when a card comes to you. */
@@ -311,7 +323,7 @@ export function lifecycleSettings(page: Page, actions: Actions, view: View): Chi
     "details",
     { "data-key": "lifecycle-settings" },
     h("summary", {}, "期限設定"),
-    h("p", { class: "note" }, "提醒不能晚於交給你；每一項都要有期限。"),
+    h("p", { class: "note" }, `提醒不能晚於交給你；每一項都要有期限。${noReminder(view)}`),
     view.lifecycle.settings.map((row) => settingRow(page, actions, row)),
   );
 }

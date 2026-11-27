@@ -199,6 +199,9 @@ describe("the rule table", () => {
     }
     expect(isTimed("T1")).toBe(false);
     expect(isTimed("N2")).toBe(false);
+    // N3, the 沒人接 card the captain gave the aggregator, is timed by its own setting too.
+    expect(LIFECYCLE.N3).toEqual({ owner: "aggregator", deadline: "N3" });
+    expect(isTimed("N3")).toBe(false);
   });
 
   it("sends a topic with no work to 沒人處理的議題, D5 to the queue, every other card to 沒人接", () => {
@@ -828,6 +831,34 @@ describe("the deadline settings", () => {
     expect(settings.A3).toEqual(DEFAULT_DEADLINES.A3);
     expect(settings.S6).toEqual(DEFAULT_DEADLINES.S6);
     expect(parseSettings("junk")).toEqual(defaultSettings());
+  });
+
+  it("keeps N3 (after 請 <aggregator> 處理) as a time to the captain only: a reminder does not apply", () => {
+    expect(DEFAULT_DEADLINES.N3).toEqual({ raise: 1440 });
+    expect(parseSettings({ N3: { raise: 120 } }).N3).toEqual({ raise: 120 });
+    for (const raw of [
+      { raise: 0 },
+      { raise: 1.5 },
+      { raise: 130_000 },
+      { remind: 0, raise: 60 },
+      5,
+    ])
+      expect(parseSettings({ N3: raw }).N3, JSON.stringify(raw)).toEqual({ raise: 1440 });
+    expect(parseSettings({ N3: { raise: 129_600 } }).N3).toEqual({ raise: 129_600 });
+    const current = defaultSettings();
+    const changed = changeSettings(current, { N3: { raise: 2880 } });
+    if (!changed.ok || !changed.changed) throw new Error("expected a change");
+    expect(changed.settings.N3).toEqual({ raise: 2880 });
+    expect(changed.records[0].text).toBe(
+      "期限設定（提醒 aggregator／交給你）：請 aggregator 處理之後的「沒人接」卡 1 天 → 2 天",
+    );
+    expect(changeSettings(current, { N3: { raise: 1440 } })).toMatchObject({ changed: false });
+    expect(changeSettings(current, { N3: { remind: 0, raise: 60 } })).toEqual({
+      ok: false,
+      code: "usage",
+      line: "「請 aggregator 處理之後的「沒人接」卡」只有交給你的期限（{raise}，分鐘，1 到 129600），沒有提醒",
+    });
+    expect(changeSettings(current, { N3: { raise: 0 } }).ok).toBe(false);
   });
 
   it("refuses a reminder after the escalation, an unbounded or broken value, or an unknown name", () => {

@@ -8,7 +8,7 @@
 // card past its reminder deadline. Pure: the service commits what these
 // return and hands over the notice.
 import crypto from "node:crypto";
-import { ASK_MINUTES, KEEP_MAX_DAYS, STATE_LABEL, durationWords } from "./lifecycle-settings.js";
+import { KEEP_MAX_DAYS, STATE_LABEL, durationWords } from "./lifecycle-settings.js";
 import type { LifecycleSettings, TimedState } from "./lifecycle-settings.js";
 import type { Stall, StallMember } from "./lifecycle.js";
 import type { Draft, Frozen } from "./records.js";
@@ -116,16 +116,21 @@ function covers(
 }
 
 /**
- * N4 while the captain's 延到 covers every member, N3 while the day the
- * captain gave the aggregator does, N2 otherwise: in front of the captain.
+ * N4 while the captain's 延到 covers every member, N3 while the time the
+ * captain gave the aggregator (`askMinutes`, the N3 setting) does, N2
+ * otherwise: in front of the captain.
  */
-export function stallState(stall: Frozen<Stall>, nowMs: number): "N2" | "N3" | "N4" {
+export function stallState(
+  stall: Frozen<Stall>,
+  nowMs: number,
+  askMinutes: number,
+): "N2" | "N3" | "N4" {
   const { deferred, asked } = stall;
   if (deferred !== undefined && covers(stall, deferred, Date.parse(deferred.until), nowMs))
     return "N4";
   if (
     asked !== undefined &&
-    covers(stall, asked, Date.parse(asked.at) + ASK_MINUTES * 60_000, nowMs)
+    covers(stall, asked, Date.parse(asked.at) + askMinutes * 60_000, nowMs)
   )
     return "N3";
   return "N2";
@@ -140,10 +145,10 @@ export function deferStall(
   stalls: Frozen<Record<string, Stall>>,
   key: string,
   days: unknown,
-  context: { nameOf: NameOf; nowMs: number },
+  context: { nameOf: NameOf; nowMs: number; askMinutes: number },
 ): DeferResult {
   const stall = stalls[key];
-  if (stall === undefined || stallState(stall, context.nowMs) !== "N2")
+  if (stall === undefined || stallState(stall, context.nowMs, context.askMinutes) !== "N2")
     return { ok: false, code: "refused", line: "這張「沒人接」卡現在沒有在等你決定。" };
   if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > KEEP_MAX_DAYS)
     return { ok: false, code: "usage", line: `延幾天要是 1 到 ${KEEP_MAX_DAYS} 的整數。` };
@@ -261,24 +266,33 @@ function askProblem(
   return context.members.length === 0 ? "看板現在列不出這張卡的成員，稍後再按一次。" : null;
 }
 
+/** What 〔請 <aggregator> 處理〕 reads: names, the time, who the aggregator is, the members shown, and N3's setting. */
+export interface AskContext {
+  nameOf: NameOf;
+  nowMs: number;
+  label: string;
+  members: readonly StallMember[];
+  askMinutes: number;
+}
+
 /**
  * The captain's 〔請 <aggregator> 處理〕 on a topic's 沒人接 card in front of
- * them: the card goes to the aggregator for ASK_MINUTES (N3), once per card,
- * with one fixed message naming its members as the page lists them.
+ * them: the card goes to the aggregator for `askMinutes` (the N3 setting),
+ * once per card, with one fixed message naming its members as the page lists them.
  */
 export function askStall(
   stalls: Frozen<Record<string, Stall>>,
   key: string,
-  context: { nameOf: NameOf; nowMs: number; label: string; members: readonly StallMember[] },
+  context: AskContext,
 ): AskResult {
   if (key === NO_TOPIC)
     return refuseAsk("沒有議題的「沒人接」卡沒有這個按鈕：訊息一定在一個議題底下。");
   const stall = stalls[key];
-  if (stall === undefined || stallState(stall, context.nowMs) !== "N2")
+  if (stall === undefined || stallState(stall, context.nowMs, context.askMinutes) !== "N2")
     return refuseAsk("這張「沒人接」卡現在沒有在等你決定。");
   const problem = askProblem(stall, context);
   if (problem !== null) return refuseAsk(problem);
-  const wait = durationWords(ASK_MINUTES);
+  const wait = durationWords(context.askMinutes);
   const listed = context.members
     .map(
       (member) =>

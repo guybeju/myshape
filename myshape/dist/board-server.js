@@ -33,7 +33,7 @@ import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
 import { buildView, evaluateBoard, isFresh, placeTask, turnNoticeText, turnsTaken, } from "./view.js";
 import { scheduleLines } from "./lifecycle.js";
-import { DEFAULT_DEADLINES, STATE_LABEL, TIMED_STATES } from "./lifecycle-settings.js";
+import { ASK_LABEL, DEFAULT_DEADLINES, STATE_LABEL, TIMED_STATES } from "./lifecycle-settings.js";
 import { findLines } from "./lineage.js";
 import { checkName, hashtagView, nameOfKey, topicsWith } from "./hashtags.js";
 import { openKeys, scheduleView } from "./schedule-view.js";
@@ -388,19 +388,33 @@ function boardView(service) {
         ...buildView(viewInput(service)),
     };
 }
-/** The deadline settings as the page's 期限設定 panel shows them, each with its default. */
+/**
+ * The deadline settings as the page's 期限設定 panel shows them, each with its
+ * default; N3's reminder is null: it does not apply.
+ */
 function lifecycleView(service) {
     const { settings } = service.board.lifecycle;
     return {
-        settings: TIMED_STATES.map((state) => ({
-            state,
-            label: STATE_LABEL[state],
-            unit: state === "S6" ? "連續第幾場" : "分鐘",
-            remind: settings[state].remind,
-            raise: settings[state].raise,
-            default_remind: DEFAULT_DEADLINES[state].remind,
-            default_raise: DEFAULT_DEADLINES[state].raise,
-        })),
+        settings: [
+            ...TIMED_STATES.map((state) => ({
+                state,
+                label: STATE_LABEL[state],
+                unit: state === "S6" ? "連續第幾場" : "分鐘",
+                remind: settings[state].remind,
+                raise: settings[state].raise,
+                default_remind: DEFAULT_DEADLINES[state].remind,
+                default_raise: DEFAULT_DEADLINES[state].raise,
+            })),
+            {
+                state: "N3",
+                label: ASK_LABEL,
+                unit: "分鐘",
+                remind: null,
+                raise: settings.N3.raise,
+                default_remind: null,
+                default_raise: DEFAULT_DEADLINES.N3.raise,
+            },
+        ],
     };
 }
 function viewInput(service) {

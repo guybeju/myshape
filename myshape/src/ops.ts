@@ -448,6 +448,7 @@ function deferAnswer(ctx: OpContext, args: Record<string, unknown>): LifecycleRe
   const result = deferStall(ctx.lifecycle.stalls, key, args["days"] ?? KEEP_DEFAULT_DAYS, {
     nameOf,
     nowMs,
+    askMinutes: ctx.lifecycle.settings.N3.raise,
   });
   if (!result.ok) return result;
   const store = withStall(ctx.lifecycle, key, result.stall);
@@ -467,7 +468,13 @@ function askAnswer(ctx: OpContext, key: string): LifecycleResult {
   const nameOf = (id: string): string => topicNameOf(ctx.topics, id);
   const shown = ctx.stalls().find((stall) => stall.key === key);
   const members = shown === undefined ? [] : shown.members;
-  const context = { nameOf, nowMs: Date.parse(ctx.now), label: ctx.label, members };
+  const context = {
+    nameOf,
+    nowMs: Date.parse(ctx.now),
+    label: ctx.label,
+    members,
+    askMinutes: ctx.lifecycle.settings.N3.raise,
+  };
   const asked = askStall(ctx.lifecycle.stalls, key, context);
   if (!asked.ok) return asked;
   const store = withStall(ctx.lifecycle, key, asked.stall);

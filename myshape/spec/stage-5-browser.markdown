@@ -70,7 +70,7 @@
 | `POST /api/schedules/revert` | `{rid}` | 撤回 aggregator 的一筆排程改動 |
 | `POST /api/schedules/seen` | `{}` | 「看過了」：清掉最近改動的清單與「新」，也是 aggregator 建的排程的「啟用」（一次全部） |
 | `POST /api/lifecycle/answer` | `{card: "idle", key: <議題 id>, days?}`、`{card: "stall", key: <議題 id 或 "-">, days?}` 或 `{card: "stall", key: <議題 id>, ask: true}` | 「沒人處理的議題」的先不關（到某天），「沒人接」的延到與〔請 <aggregator> 處理〕（[lifecycle](lifecycle.markdown) 第 3 節） |
-| `POST /api/lifecycle/settings` | 要改的期限，例如 `{A3: {remind: 30, raise: 240}}` | 期限設定；任何一項不合法就都不改 |
+| `POST /api/lifecycle/settings` | 要改的期限，例如 `{A3: {remind: 30, raise: 240}}`；N3 只有 `{N3: {raise: 2880}}` | 期限設定；任何一項不合法就都不改 |
 
 議題操作和 socket 上的同名操作是同一套伺服器函式。`/api/topics/keep` 是頁面才有的（原型的「先不關」），一定帶一個選擇。`lifecycle/answer` 與 `lifecycle/settings` 也是頁面才有的。hashtag 的路由除了 `add`、`remove`，都是頁面才有的操作，socket 收到就拒絕。排程的 `settings`、`lock`、`pause-all`、`revert`、`seen` 是頁面才有的操作，socket 收到就拒絕；aggregator 的「接下」（`schedule-take`）與時鐘（`schedule-tick`）沒有頁面的路由。瀏覽器這條通道沒有 `propose`、`close-propose`、`summary`、`which`、`stop`、`restart`、`reset-token`。
 
@@ -88,7 +88,7 @@
    「hashtag 設定」面板：每一項設定寫出現在的值與預設值（aggregator 可以貼撕、可以開新的、一個議題最多幾個、整個看板最多幾個、aggregator 每小時最多改幾次、預設視圖）；每個 hashtag 一張卡，有幾個議題、誰開的、鎖上或解鎖、顏色，以及「改名…」「併入…」「刪掉…」，這三種走伺服器的兩步確認，第二步寫出會動到幾個議題與它們的名稱；最後是存下來的視圖，每個可以刪掉。
    顏色是 `board.css` 裡固定色票的 class（`tag c1` 到 `tag c8`），不用 `style` 屬性。
    篩選列下面一行排程的：「所有排程暫停中」（打開時）、「<aggregator 的名稱> 最近改了 N 筆排程」（同 hashtag 的那一行：清單、每筆「撤回」、最後「看過了」，沒有就不顯示）、「排程設定」與「全部暫停」或「全部恢復」。「排程設定」面板每一項寫出現在的值與預設值（[contracts](contracts.markdown) 第 3.9 節的十四項），並說明同一筆排程不能同時開著兩場的限制。
-   下面一行「期限設定」（預設收合）：每一種 aggregator 負責的狀態一列，寫出現在的提醒與交給你的期限、單位與預設值，可以改（[lifecycle](lifecycle.markdown) 第 5 節）。
+   下面一行「期限設定」（預設收合）：每一種 aggregator 負責的狀態一列，寫出現在的提醒與交給你的期限、單位與預設值，可以改（[lifecycle](lifecycle.markdown) 第 5 節）；「請 aggregator 處理之後的「沒人接」卡」（N3）那一列只有交給你的期限，提醒寫「不適用」，上面的說明寫出為什麼。
 1. 要你動手：每個開著的要你動手項目，跨議題，卡上標議題（沒有議題的標「未分類」）。狀態看板不認得的寫出原文，只有「不做了」。沒有開著的項目時整段不顯示。
 2. 沒有議題：沒有議題、已經關掉的要你動手項目，摺成「已關 N」，和議題頁「要你動手」底下的一樣（預設收合，每個項目一行，打開是它的每一步）。沒有這種項目時整段不顯示（C61）。
 3. 等你決定：一條佇列（[lifecycle](lifecycle.markdown) 第 4 節），由上而下：live 的待決事項（照[第三段](stage-3-data.markdown)的順序，每張卡標議題名稱與所在的 home），aggregator 的提議關閉（「關閉並封存」「先不關，到 <日期>」附天數「先不關，移到待辦」），看板的「沒人處理的議題」（一句固定的話，「關閉並封存」「先不關，到 <日期>」「移到待辦」），看板的「沒人接」卡（每個逾期的卡一行，寫出原因與從何時起；沒有議題的排隊項目那一行有「歸到…」、agent 那一行有「歸併到…」；卡上有「請 <aggregator> 處理」（議題的卡，一張卡一次）、「延到 <日期>」「移到待辦」；請過一次、期限內沒有變化又回來的卡寫「已退回過一次：<時間> 請 <aggregator> 處理過，期限內沒有變化。」，沒有「請 <aggregator> 處理」）。

@@ -48,7 +48,18 @@ export interface Deadline {
   raise: number;
 }
 
-export type LifecycleSettings = Record<TimedState, Deadline>;
+/**
+ * N3's deadline: how long the aggregator has after the captain's
+ * 〔請 <aggregator> 處理〕 on a 沒人接 card before the card is back in front of
+ * the captain. Only a time to the captain: a reminder does not apply, since
+ * the captain's press is itself the word to the aggregator.
+ */
+export interface AskDeadline {
+  raise: number;
+}
+
+/** Every deadline the captain sets: each timed card state's, and N3's. */
+export type LifecycleSettings = Record<TimedState, Deadline> & { N3: AskDeadline };
 
 const MINUTE = 1;
 const HOUR = 60 * MINUTE;
@@ -83,6 +94,7 @@ export const DEFAULT_DEADLINES: Frozen<LifecycleSettings> = {
   O3: { remind: DAY, raise: 3 * DAY },
   S3: { remind: 3 * DAY, raise: 7 * DAY },
   S6: { remind: 3, raise: 5 },
+  N3: { raise: DAY },
 };
 
 /**
@@ -90,11 +102,6 @@ export const DEFAULT_DEADLINES: Frozen<LifecycleSettings> = {
  * there then, the date no longer explains the wait (Q5, or Q1 with nothing held).
  */
 export const DATE_GRACE_MINUTES = DAY;
-/**
- * How long the aggregator has after the captain's 〔請 <aggregator> 處理〕 on a
- * 沒人接 card (N3) before the card is back in front of the captain, once only.
- */
-export const ASK_MINUTES = DAY;
 /** Decision 3, option A: 先不關 keeps a topic this many days unless the captain picks another. */
 export const KEEP_DEFAULT_DAYS = 14;
 /** Decision 3: the longest 先不關 or 延到 the captain may pick. */
@@ -146,6 +153,16 @@ export const STATE_LABEL: Record<TimedState, string> = {
   S6: "沒有人接的排程",
 };
 
+/** N3's name in 期限設定 and in its records. */
+export const ASK_LABEL = "請 aggregator 處理之後的「沒人接」卡";
+
+/** N3's value: whole minutes, 1 to 90 days, and no reminder, which does not apply to it. */
+function isAskDeadline(raw: unknown): raw is AskDeadline {
+  if (!isRecord(raw) || Object.hasOwn(raw, "remind")) return false;
+  const { raise } = raw;
+  return typeof raise === "number" && Number.isInteger(raise) && raise >= 1 && raise <= MAX_MINUTES;
+}
+
 function isDeadline(raw: unknown, state: TimedState): raw is Deadline {
   if (!isRecord(raw)) return false;
   const { remind, raise } = raw;
@@ -163,6 +180,8 @@ export function parseSettings(raw: unknown): LifecycleSettings {
     const value = given[state];
     settings[state] = isDeadline(value, state) ? { ...value } : { ...DEFAULT_DEADLINES[state] };
   }
+  const ask = given["N3"];
+  settings.N3 = isAskDeadline(ask) ? { raise: ask.raise } : { ...DEFAULT_DEADLINES.N3 };
   return settings;
 }
 
@@ -187,6 +206,22 @@ function isTimedState(name: string): name is TimedState {
   return (TIMED_STATES as readonly string[]).includes(name);
 }
 
+/** Puts one change into `settings`; returns why it is refused, or null. */
+function applyChange(settings: LifecycleSettings, name: string, raw: unknown): string | null {
+  if (name === "N3") {
+    if (!isAskDeadline(raw))
+      return `「${ASK_LABEL}」只有交給你的期限（{raise}，分鐘，1 到 ${MAX_MINUTES}），沒有提醒`;
+    settings.N3 = { raise: raw.raise };
+    return null;
+  }
+  if (!isTimedState(name)) return `不認得的設定：${name}`;
+  const { words } = unitOf(name);
+  if (!isDeadline(raw, name))
+    return `「${STATE_LABEL[name]}」要是 {remind, raise}，兩個都是整數${words}，提醒不能晚於交給你，交給你至少要 1`;
+  settings[name] = { remind: raw.remind, raise: raw.raise };
+  return null;
+}
+
 /** The settings with `changes` applied, or why one of them is refused. */
 function nextSettings(
   current: Frozen<LifecycleSettings>,
@@ -194,11 +229,8 @@ function nextSettings(
 ): LifecycleSettings | string {
   const settings = parseSettings(current);
   for (const [name, raw] of Object.entries(changes)) {
-    if (!isTimedState(name)) return `不認得的設定：${name}`;
-    const { words } = unitOf(name);
-    if (!isDeadline(raw, name))
-      return `「${STATE_LABEL[name]}」要是 {remind, raise}，兩個都是整數${words}，提醒不能晚於交給你，交給你至少要 1`;
-    settings[name] = { remind: raw.remind, raise: raw.raise };
+    const problem = applyChange(settings, name, raw);
+    if (problem !== null) return problem;
   }
   return settings;
 }
@@ -219,18 +251,20 @@ export function changeSettings(
 ): SettingsResult {
   const settings = nextSettings(current, changes);
   if (typeof settings === "string") return { ok: false, code: "usage", line: settings };
-  const changed = TIMED_STATES.filter(
+  const lines = TIMED_STATES.filter(
     (state) =>
       settings[state].remind !== current[state].remind ||
       settings[state].raise !== current[state].raise,
+  ).map(
+    (state) =>
+      `${STATE_LABEL[state]} ${pairWords(state, current[state])} → ${pairWords(state, settings[state])}`,
   );
-  if (changed.length === 0) return { ok: true, changed: false, line: "ok 期限設定沒有變" };
-  const said = changed
-    .map(
-      (state) =>
-        `${STATE_LABEL[state]} ${pairWords(state, current[state])} → ${pairWords(state, settings[state])}`,
-    )
-    .join("；");
+  if (settings.N3.raise !== current.N3.raise)
+    lines.push(
+      `${ASK_LABEL} ${durationWords(current.N3.raise)} → ${durationWords(settings.N3.raise)}`,
+    );
+  if (lines.length === 0) return { ok: true, changed: false, line: "ok 期限設定沒有變" };
+  const said = lines.join("；");
   return {
     ok: true,
     changed: true,

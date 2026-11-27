@@ -14,6 +14,8 @@ const NOW = Date.parse("2026-11-27T00:00:00Z");
 const DAY = 86_400_000;
 const at = (ms: number): string => new Date(NOW + ms).toISOString();
 const names = (key: string): string => ({ hi: "High" })[key] ?? key;
+/** The N3 setting's default: the aggregator has a day after 請 <aggregator> 處理. */
+const ASK = 1440;
 
 describe("the 沒人接 card", () => {
   it("is raised once for a topic whose cards passed their deadline, and once for work with no topic", () => {
@@ -67,10 +69,10 @@ describe("the 沒人接 card", () => {
 
   it("is put off (N4) only while the captain's 延到 runs and covers every member", () => {
     const deferred = { until: at(DAY), members: ["a"] };
-    expect(stallState({ since: at(0), members: ["a"] }, NOW)).toBe("N2");
-    expect(stallState({ since: at(0), members: ["a"], deferred }, NOW)).toBe("N4");
-    expect(stallState({ since: at(0), members: ["a", "new"], deferred }, NOW)).toBe("N2");
-    expect(stallState({ since: at(0), members: ["a"], deferred }, NOW + DAY)).toBe("N2");
+    expect(stallState({ since: at(0), members: ["a"] }, NOW, ASK)).toBe("N2");
+    expect(stallState({ since: at(0), members: ["a"], deferred }, NOW, ASK)).toBe("N4");
+    expect(stallState({ since: at(0), members: ["a", "new"], deferred }, NOW, ASK)).toBe("N2");
+    expect(stallState({ since: at(0), members: ["a"], deferred }, NOW + DAY, ASK)).toBe("N2");
     // A deferral that ran out is dropped at the next look; one still running is kept.
     const previous = { hi: { since: at(0), members: ["a"], deferred } };
     expect(
@@ -84,7 +86,7 @@ describe("the 沒人接 card", () => {
 
   it("takes 延到 for 1 to 90 days, only while it is in front of the captain", () => {
     const stalls = { hi: { since: at(-DAY), members: ["a", "b"] } };
-    const context = { nameOf: names, nowMs: NOW };
+    const context = { nameOf: names, nowMs: NOW, askMinutes: ASK };
     const result = deferStall(stalls, "hi", 7, context);
     expect(result).toMatchObject({
       ok: true,
@@ -140,19 +142,21 @@ describe("請 <aggregator> 處理 on a 沒人接 card", () => {
     },
   ];
   const stalls = { hi: { since: at(-DAY), members: ["queued\tmain\ta", "todo\tvpn"] } };
-  const context = { nameOf: names, nowMs: NOW, label: "plain", members };
+  const context = { nameOf: names, nowMs: NOW, label: "plain", members, askMinutes: ASK };
 
   it("gives the card to the aggregator (N3) for a day, for the members listed then, and back once", () => {
-    expect(stallState({ since: at(-DAY), members: ["a"], asked }, NOW)).toBe("N3");
-    expect(stallState({ since: at(-DAY), members: ["a"], asked }, NOW + DAY - 1)).toBe("N3");
-    expect(stallState({ since: at(-DAY), members: ["a"], asked }, NOW + DAY)).toBe("N2");
-    expect(stallState({ since: at(-DAY), members: ["a", "new"], asked }, NOW)).toBe("N2");
+    expect(stallState({ since: at(-DAY), members: ["a"], asked }, NOW, ASK)).toBe("N3");
+    expect(stallState({ since: at(-DAY), members: ["a"], asked }, NOW + DAY - 1, ASK)).toBe("N3");
+    expect(stallState({ since: at(-DAY), members: ["a"], asked }, NOW + DAY, ASK)).toBe("N2");
+    expect(stallState({ since: at(-DAY), members: ["a", "new"], asked }, NOW, ASK)).toBe("N2");
+    // The captain's N3 setting decides how long the aggregator has.
+    expect(stallState({ since: at(-DAY), members: ["a"], asked }, NOW + 3_600_000, 60)).toBe("N2");
     const previous = { hi: { since: at(-DAY), members: ["a"], asked } };
     expect(stallStep(previous, new Map([["hi", ["a", "b"]]]), names, NOW + 2 * DAY)).toEqual({
       stalls: { hi: { since: at(-DAY), members: ["a", "b"], asked } },
       records: [],
     });
-    const put = deferStall(previous, "hi", 3, { nameOf: names, nowMs: NOW + DAY });
+    const put = deferStall(previous, "hi", 3, { nameOf: names, nowMs: NOW + DAY, askMinutes: ASK });
     expect(put).toMatchObject({ ok: true, stall: { asked } });
   });
 
@@ -184,6 +188,10 @@ describe("請 <aggregator> 處理 on a 沒人接 card", () => {
     const again = askStall(stalls, "hi", { ...context, nowMs: NOW + 5 });
     if (!again.ok) throw new Error("expected an ask");
     expect(again.message.id).toBe(result.message.id);
+    const short = askStall(stalls, "hi", { ...context, askMinutes: 120 });
+    if (!short.ok) throw new Error("expected an ask");
+    expect(short.message.text).toContain("。2 小時內這些卡沒有離開逾期的狀態");
+    expect(short.records[0].text).toContain("，2 小時內沒有變化就回到你面前");
   });
 
   it("is refused on the card with no topic, a second time, and on a card not in front of the captain", () => {

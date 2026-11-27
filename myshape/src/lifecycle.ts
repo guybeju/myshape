@@ -32,11 +32,11 @@ export type Owner = "captain" | "aggregator" | "board" | "time" | "none";
 /**
  * One state's rule: its owner and, for a state the aggregator owns, the
  * setting that times it ("members" for a 沒人接 card, timed by its members;
- * "ask" for one the captain asked the aggregator to handle, ASK_MINUTES).
+ * "N3" for one the captain asked the aggregator to handle, timed by N3's setting).
  */
 export interface Rule {
   owner: Owner;
-  deadline: TimedState | "members" | "ask" | null;
+  deadline: TimedState | "members" | "N3" | null;
 }
 
 const captain: Rule = { owner: "captain", deadline: null };
@@ -108,7 +108,7 @@ export const LIFECYCLE = {
   // 沒人接 cards (stored)
   N1: { owner: "aggregator", deadline: "members" },
   N2: captain,
-  N3: { owner: "aggregator", deadline: "ask" },
+  N3: { owner: "aggregator", deadline: "N3" },
   N4: time,
 } as const satisfies Record<string, Rule>;
 
@@ -873,7 +873,7 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
     stalls: Object.entries(step.stalls).map(([key, stall]) => ({
       key,
       topic: key === NO_TOPIC ? null : key,
-      state: stallState(stall, nowMs),
+      state: stallState(stall, nowMs, store.settings.N3.raise),
       since: stall.since,
       deferred_until: stall.deferred === undefined ? null : stall.deferred.until,
       asked_at: stall.asked === undefined ? null : stall.asked.at,
