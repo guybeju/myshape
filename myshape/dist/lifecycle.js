@@ -6,7 +6,7 @@
 import { DATE_GRACE_MINUTES, TIMED_STATES, defaultSettings, durationWords, } from "./lifecycle-settings.js";
 import { MAIN_HOME } from "./journal.js";
 import { isNew } from "./schedules.js";
-import { NO_TOPIC, idleStep, nudgeOf, stallKeyOf, stallState, stallStep } from "./stalls.js";
+import { NO_TOPIC, cardName, idleStep, nudgeOf, stallKeyOf, stallState, stallStep, } from "./stalls.js";
 const captain = { owner: "captain", deadline: null };
 const board = { owner: "board", deadline: null };
 const time = { owner: "time", deadline: null };
@@ -563,7 +563,7 @@ function nudgeLines(cards, clocks) {
         return {
             key,
             topic: first.topic,
-            label: first.label,
+            label: cardName({ kind: first.kind, id: idOfKey(first), label: first.label }),
             reasons: list.map((found) => ({
                 state: found.state,
                 since: clocks[found.key].since,

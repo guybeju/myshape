@@ -121,6 +121,18 @@ export function deferStall(stalls, key, days, context) {
         ],
     };
 }
+/**
+ * How the board's sentences to the aggregator name a card: by ids only, never
+ * a title: `<home>/<task>` for a read card, `要你動手 <id>` and `排程 <id>` for
+ * the cards the board stores.
+ */
+export function cardName(card) {
+    if (card.kind === "todo")
+        return `要你動手 ${card.id}`;
+    if (card.kind === "schedule")
+        return `排程 ${card.id}`;
+    return card.label;
+}
 /** When a late state goes to the user, as the reminder says it. */
 function raiseWords(state, settings) {
     const { raise } = settings[state];
@@ -183,7 +195,7 @@ export function askStall(stalls, key, context) {
         return refuseAsk(problem);
     const wait = durationWords(ASK_MINUTES);
     const listed = context.members
-        .map((member) => `${member.label}（${member.states.map((state) => STATE_LABEL[state]).join("；")}）`)
+        .map((member) => `${cardName(member)}（${member.states.map((state) => STATE_LABEL[state]).join("；")}）`)
         .join("；");
     const name = context.nameOf(key);
     const digest = crypto.createHash("sha256").update(`${key}\n${stall.since}`).digest("hex");

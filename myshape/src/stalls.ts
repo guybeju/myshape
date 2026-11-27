@@ -169,7 +169,18 @@ export function deferStall(
   };
 }
 
-/** One card a reminder names: its key, where it is, how it is named, and each late state since when. */
+/**
+ * How the board's sentences to the aggregator name a card: by ids only, never
+ * a title: `<home>/<task>` for a read card, `要你動手 <id>` and `排程 <id>` for
+ * the cards the board stores.
+ */
+export function cardName(card: { kind: string; id: string; label: string }): string {
+  if (card.kind === "todo") return `要你動手 ${card.id}`;
+  if (card.kind === "schedule") return `排程 ${card.id}`;
+  return card.label;
+}
+
+/** One card a reminder names: its key, where it is, its name (cardName), and each late state since when. */
 export interface NudgeLine {
   key: string;
   topic: string | null;
@@ -271,7 +282,7 @@ export function askStall(
   const listed = context.members
     .map(
       (member) =>
-        `${member.label}（${member.states.map((state) => STATE_LABEL[state]).join("；")}）`,
+        `${cardName(member)}（${member.states.map((state) => STATE_LABEL[state]).join("；")}）`,
     )
     .join("；");
   const name = context.nameOf(key);

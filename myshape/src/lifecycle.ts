@@ -14,7 +14,15 @@ import type { Draft, Frozen } from "./records.js";
 import { MAIN_HOME } from "./journal.js";
 import { isNew } from "./schedules.js";
 import type { ScheduleStore } from "./schedules.js";
-import { NO_TOPIC, idleStep, nudgeOf, stallKeyOf, stallState, stallStep } from "./stalls.js";
+import {
+  NO_TOPIC,
+  cardName,
+  idleStep,
+  nudgeOf,
+  stallKeyOf,
+  stallState,
+  stallStep,
+} from "./stalls.js";
 import type { Nudge, NudgeLine } from "./stalls.js";
 import type { AgentView, BoardView, HoldView, QueuedView, TodoView, TopicView } from "./view.js";
 
@@ -902,7 +910,7 @@ function nudgeLines(cards: readonly Card[], clocks: Frozen<Record<string, Clock>
     return {
       key,
       topic: first.topic,
-      label: first.label,
+      label: cardName({ kind: first.kind, id: idOfKey(first), label: first.label }),
       reasons: list.map((found) => ({
         state: found.state as TimedState,
         since: (clocks[found.key] as Clock).since,

@@ -746,7 +746,7 @@ describe("reminders", () => {
       },
     });
     expect(schedule.evaluation.nudge?.text).toContain(
-      "議題「High」（id hi）的 Sync（沒有人接的排程，連續第 5 場沒有人接就交給使用者）",
+      "議題「High」（id hi）的 排程 sync（沒有人接的排程，連續第 5 場沒有人接就交給使用者）",
     );
   });
 });
