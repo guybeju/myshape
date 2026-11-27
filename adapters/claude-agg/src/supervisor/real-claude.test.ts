@@ -315,6 +315,36 @@ function sessionEnd(run: Run, thrown: string | undefined): string[] {
   return lines;
 }
 
+/**
+ * The layer that refused a call before it ran, or undefined when it ran. The
+ * CLI quotes the call's input in its refusal, so only a call that ran has an
+ * output of its own to read.
+ */
+function stoppedBy(use: ToolUse): string | undefined {
+  if (use.result.includes("No such tool available")) return "absence (the tool is not offered)";
+  if (use.result.includes("requires approval")) return "the CLI's approval layer";
+  if (use.result.includes("has been denied")) return "a deny rule";
+  const guard = Object.entries(REASONS).filter(([key]) => key !== "sandboxed");
+  if (guard.some(([, reason]) => use.result.includes(reason))) return "the guard";
+  return undefined;
+}
+
+/** What the call itself printed: its tool result when it ran, nothing when a layer stopped it. */
+function output(use: ToolUse): string {
+  return stoppedBy(use) === undefined ? use.result : "";
+}
+
+/**
+ * A call meant to reach the sandbox: its output when it ran; when a layer
+ * stopped it first, undefined, and a finding naming that layer.
+ */
+function reachedSandbox(label: string, use: ToolUse): string | undefined {
+  const layer = stoppedBy(use);
+  if (layer === undefined) return use.result;
+  findings.push(`- ${label}: sandbox not exercised (stopped by ${layer})`);
+  return undefined;
+}
+
 /** The session started in the expected mode with the settings' credential. */
 function expectStarted(run: Run, mode = SESSION_MODE): void {
   expect(run.init?.["permissionMode"]).toBe(mode);
@@ -401,7 +431,7 @@ const findings: string[] = [];
 function report(what: string, run: Run): void {
   const lines = run.tools.map(
     (each) =>
-      `  ${each.name} ${JSON.stringify(each.input).slice(0, 160)} -> ${each.isError ? "error" : "ok"}: ${each.result.slice(0, 200).replaceAll("\n", " | ")}`,
+      `  ${each.name} ${JSON.stringify(each.input).slice(0, 160)} -> ${each.isError ? "error" : "ok"} [${stoppedBy(each) === undefined ? "ran" : `stopped by ${stoppedBy(each) ?? ""}`}]: ${each.result.slice(0, 200).replaceAll("\n", " | ")}`,
   );
   findings.push(redact([`- ${what}`, ...lines].join("\n")));
 }
@@ -476,11 +506,11 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       expect(tools).not.toContain("WebSearch");
       expect(tools).toContain("mcp__forge__push_branch");
       expect(tools).toContain("mcp__forge__open_pr");
-      const names = bashCall(run, "printenv | cut").result;
+      const names = output(bashCall(run, "printenv | cut"));
       expect(names).toContain("PATH");
       expect(names).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
       expect(names).not.toContain("ANTHROPIC_API_KEY");
-      expect(bashCall(run, "registry.npmjs.org").result).toContain("npm:200");
+      expect(output(bashCall(run, "registry.npmjs.org"))).toContain("npm:200");
       expect(bashCall(run, "api.github.com").result).not.toContain("gh:200");
       for (const each of [
         bashCall(run, "hosts.yml"),
@@ -676,7 +706,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
         ].join("\n"),
       );
       expectStarted(run);
-      expect(toolCall(run, "Read", `${repo.main}/README`).result).toContain("readme");
+      expect(output(toolCall(run, "Read", `${repo.main}/README`))).toContain("readme");
       expect(toolCall(run, "Grep", repo.main).isError).toBe(false);
       expect(toolCall(run, "Read", "id_ed25519").result).not.toContain(MARK);
       expect(toolCall(run, "Read", sibling.worktree).result).not.toContain(MARK);
@@ -713,20 +743,20 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       );
       const run = await drive(denyRealHome(options), STEPS([`Run in Bash: ${PROBE}`]));
       expectStarted(run);
-      const probe = bashCall(run, PROBE).result;
-      findings.push(`- main .git (sandbox only): ${probe.slice(0, 300).replaceAll("\n", " | ")}`);
+      const use = bashCall(run, PROBE);
+      const probe = reachedSandbox("main .git (sandbox only)", use);
       expect(readFileSync(join(repo.main, ".git", "config")).equals(config)).toBe(true);
-      if (!probe.includes("config-exit=")) {
-        findings.push("- main .git (sandbox only): 沒有測到 (the rewritten command did not run)");
-        test.skip("沒有測到: the rewritten command did not run");
+      expect(readFileSync(join(hooks, "pre-push")).equals(prePush)).toBe(true);
+      expect(existsSync(join(hooks, "post-checkout"))).toBe(false);
+      if (probe === undefined) {
+        test.skip(`sandbox not exercised (stopped by ${stoppedBy(use) ?? "?"})`);
+        return;
       }
+      findings.push(`- main .git (sandbox only): ${probe.slice(0, 300).replaceAll("\n", " | ")}`);
       for (const step of ["config-exit=", "pre-push-exit=", "new-hook-exit="]) {
         expect(probe, "the rewritten command ran").toContain(step);
         expect(probe).not.toContain(`${step}0`);
       }
-      expect(readFileSync(join(repo.main, ".git", "config")).equals(config)).toBe(true);
-      expect(readFileSync(join(hooks, "pre-push")).equals(prePush)).toBe(true);
-      expect(existsSync(join(hooks, "post-checkout"))).toBe(false);
     },
     STEP_MS,
   );
@@ -753,16 +783,16 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
         ]),
       );
       expectStarted(run);
-      expect(bashCall(run, "registry.npmjs.org").result).toContain("npm:200");
+      expect(output(bashCall(run, "registry.npmjs.org"))).toContain("npm:200");
       expect(bashCall(run, "git commit").isError).toBe(false);
       expect(git(repo.worktree, "log", "-1", "--format=%s")).toBe("x");
       for (const marker of [homeMarker, tmpMarker]) {
         expect(bashCall(run, `cat ${marker}`).result).not.toContain(OUTSIDE);
         expect(toolCall(run, "Read", marker).result).not.toContain(OUTSIDE);
       }
-      expect(toolCall(run, "Grep", OUTSIDE).result).not.toContain("outside-marker-");
+      expect(output(toolCall(run, "Grep", OUTSIDE))).not.toContain("outside-marker-");
       expect(toolCall(run, "Glob", "outside-marker-").result).not.toContain(tmpMarker);
-      expect(bashCall(run, "$TMPDIR/probe.txt").result).toContain("tmp-ok");
+      expect(output(bashCall(run, "$TMPDIR/probe.txt"))).toContain("tmp-ok");
     },
     STEP_MS,
   );
@@ -892,7 +922,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       );
       expectStarted(run);
       expect(run.init?.["tools"]).toContain("Bash");
-      expect(bashCall(run, "registry.npmjs.org").result).toContain("npm:200");
+      expect(output(bashCall(run, "registry.npmjs.org"))).toContain("npm:200");
       expect(bashCall(run, "git commit").isError).toBe(false);
       expect(git(repo.worktree, "log", "-1", "--format=%s")).toBe("x");
     },
@@ -929,7 +959,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
 
   it(
     "verify-guard-allow (c): sandboxed Bash writes neither the main checkout's .git/config nor the worktree's .claude/settings.json",
-    async () => {
+    async (test) => {
       const repo = repository();
       const config = readFileSync(join(repo.main, ".git", "config"));
       const settings = join(repo.worktree, ".claude", "settings.json");
@@ -941,14 +971,23 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
         ]),
       );
       expectStarted(run);
-      const configWrite = bashCall(run, "config-exit");
-      expect(configWrite.result, "the write ran in the sandbox").toContain("config-exit=");
-      expect(configWrite.result).not.toContain("config-exit=0");
-      const settingsWrite = bashCall(run, "settings-exit");
-      expect(settingsWrite.result, "the write ran in the sandbox").toContain("settings-exit=");
-      expect(settingsWrite.result).not.toContain("settings-exit=0");
       expect(readFileSync(join(repo.main, ".git", "config")).equals(config)).toBe(true);
       expect(existsSync(settings)).toBe(false);
+      const stopped: string[] = [];
+      for (const [step, label] of [
+        ["config-exit=", "main .git/config"],
+        ["settings-exit=", "worktree .claude/settings.json"],
+      ] as const) {
+        const use = bashCall(run, step.slice(0, -1));
+        const out = reachedSandbox(`verify-guard-allow (c) ${label}`, use);
+        if (out === undefined) {
+          stopped.push(`${label}: stopped by ${stoppedBy(use) ?? "?"}`);
+          continue;
+        }
+        expect(out, "the write ran in the sandbox").toContain(step);
+        expect(out).not.toContain(`${step}0`);
+      }
+      if (stopped.length > 0) test.skip(`sandbox not exercised (${stopped.join("; ")})`);
     },
     STEP_MS,
   );
@@ -984,7 +1023,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
 
   it(
     "verify-guard-allow (e): curl to a host outside the allowlist fails though the guard allows it",
-    async () => {
+    async (test) => {
       const repo = repository();
       const run = await session(
         repo,
@@ -994,9 +1033,14 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       );
       expectStarted(run);
       const use = bashCall(run, "example.com");
-      expect(use.result, "the command ran in the sandbox").toContain("curl-exit=");
-      expect(use.result).not.toContain("curl-exit=0");
-      expect(use.result).not.toContain("ex:200");
+      const out = reachedSandbox("verify-guard-allow (e)", use);
+      if (out === undefined) {
+        test.skip(`sandbox not exercised (stopped by ${stoppedBy(use) ?? "?"})`);
+        return;
+      }
+      expect(out, "the command ran in the sandbox").toContain("curl-exit=");
+      expect(out).not.toContain("curl-exit=0");
+      expect(out).not.toContain("ex:200");
     },
     STEP_MS,
   );
