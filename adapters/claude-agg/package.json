@@ -6,11 +6,19 @@
     "node": ">=22"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "supervisor": "tsc -p tsconfig.build.json && node bin/claude-agg-supervisor.mjs",
     "typecheck": "tsc -p . --noEmit",
     "lint": "oxlint src bin",
     "format": "oxfmt src bin",
     "format:check": "oxfmt --check src bin",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.332",
+    "@anthropic-ai/sdk": "1.14.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
@@ -20,6 +28,10 @@
     "vitest": "5.1.0"
   },
   "imports": {
-    "#agg/*": "./src/*"
+    "#agg/*": "./src/*",
+    "#agg-built/*": {
+      "types": "./src/*",
+      "default": "./dist/*"
+    }
   }
 }

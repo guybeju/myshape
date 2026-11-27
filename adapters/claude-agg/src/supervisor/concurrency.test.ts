@@ -114,7 +114,7 @@ describe("the semaphore", () => {
     const world = new World({ normal: ["a", "b", "c"] });
     const gates = [new Gate(), new Gate(), new Gate()];
     for (const gate of gates) {
-      world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan([]))], gate });
+      world.query.planner.push({ messages: [init("p", "default"), result(plan([]))], gate });
     }
     const supervisor = await world.start();
     supervisor.tick();
@@ -296,7 +296,7 @@ describe("a queued task whose repo left the settings", () => {
     world.seedQueued([{ id: "a-1", topic: "a" }]);
     const queued = world.queued().map((entry) => ({ ...entry, repo: "gone" }));
     writeFileSync(join(world.agg, "queued.json"), JSON.stringify({ v: 1, queued }));
-    world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan([]))] });
+    world.query.planner.push({ messages: [init("p", "default"), result(plan([]))] });
     const supervisor = await world.start();
     supervisor.tick();
     await supervisor.idle();

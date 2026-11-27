@@ -40,7 +40,7 @@ function running(world: World): string[] {
 function planOne(world: World, title = "整理紀錄"): void {
   world.query.planner.push({
     messages: [
-      init("p", "dontAsk"),
+      init("p", "default"),
       result(plan([{ title, repo: "app", kind: "scout", prompt: "照目標做" }])),
     ],
   });
@@ -150,7 +150,7 @@ describe("an occurrence at its time", () => {
   it("is closed done when its planner finds nothing to do", async () => {
     const world = scheduled();
     world.nowMs = Date.parse(AT);
-    world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan([]))] });
+    world.query.planner.push({ messages: [init("p", "default"), result(plan([]))] });
     const supervisor = await world.start();
     await pass(supervisor);
     await supervisor.idle();
@@ -273,7 +273,9 @@ describe("a restart", () => {
     world.commands.closeStatus = 0;
     supervisor = await world.start();
     await pass(supervisor);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     expect(world.schedulesDoc().occurrences[KEY]).toBeUndefined();
     expect(takes(world)).toHaveLength(1);
     supervisor.close();
@@ -305,7 +307,9 @@ describe("a missed occurrence", () => {
     const again = await world.start();
     world.notice("schedule.missed", MISSED, "weekly", { rt: "soft-rt" });
     await pass(again);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     expect(world.logs).toContain(SCHEDULE_LOG.madeUp(MISSED));
     again.close();
   });
@@ -439,7 +443,7 @@ describe("when something goes wrong", () => {
       { id: "a-1", topic: "a" },
       { id: "b-1", topic: "b" },
     ]);
-    world.query.planner.push({ messages: [init("p", "dontAsk"), result({ wrong: true })] });
+    world.query.planner.push({ messages: [init("p", "default"), result({ wrong: true })] });
     const gates = [new Gate(), new Gate()];
     for (const gate of gates)
       world.query.worker.push({ messages: [init("w"), result(workerOutput("report"))], gate });
@@ -448,7 +452,9 @@ describe("when something goes wrong", () => {
     await pass(supervisor);
     expect(running(world)).toEqual(["a-1", "b-1"]);
     expect(world.commands.scheduleCalls().map((args) => args[1])).toEqual(["take"]);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     for (const gate of gates) gate.open();
     await supervisor.idle();
     supervisor.close();
@@ -471,7 +477,9 @@ describe("when something goes wrong", () => {
     await pass(second);
     expect(world.tasks()[WORK]?.state).toBe("paused");
     expect(world.commands.scheduleCalls().map((args) => args[1])).toEqual(["take"]);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     second.close();
   });
 

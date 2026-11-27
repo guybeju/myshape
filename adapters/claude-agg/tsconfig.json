@@ -13,6 +13,7 @@
     "noPropertyAccessFromIndexSignature": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
+    "skipLibCheck": true,
     "newLine": "lf",
     "types": [
       "node"

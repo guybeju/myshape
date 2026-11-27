@@ -24,7 +24,7 @@ import {
   type Settings,
 } from "./settings.js";
 import { StateStore } from "./state-store.js";
-import { redactor } from "./token.js";
+import { redactor } from "./credential.js";
 
 const dir = mkdtempSync(join(tmpdir(), "claude-agg-settings-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -36,12 +36,15 @@ const SETTINGS: Settings = {
   port: 47_829,
   repos: { app: { path: "/repos/app", base: "origin/main", defaultBranch: "main" } },
   model: undefined,
+  credentialFile: "/secrets/claude-agg/credential",
+  readPaths: ["/opt/toolchain"],
 };
 const same = (path: string): string => path;
+const USER_HOME = "/home/u";
 
 describe("checkSettings", () => {
   it("takes good settings", () => {
-    expect(checkSettings(SETTINGS, same)).toEqual(SETTINGS);
+    expect(checkSettings(SETTINGS, same, USER_HOME)).toEqual(SETTINGS);
   });
 
   it.each([
@@ -61,12 +64,52 @@ describe("checkSettings", () => {
     ],
     [{ repos: { app: { path: "/r", base: " ", defaultBranch: "main" } } }, "must be set"],
   ])("refuses %j", (change, message) => {
-    expect(() => checkSettings({ ...SETTINGS, ...change } as Settings, same)).toThrow(message);
+    expect(() => checkSettings({ ...SETTINGS, ...change } as Settings, same, USER_HOME)).toThrow(
+      message,
+    );
+  });
+
+  it.each([
+    ["the home directory", "/home/u", "is the home directory or holds it"],
+    ["the home directory with a trailing slash", "/home/u/", "is the home directory or holds it"],
+    ["a directory above it", "/home", "is the home directory or holds it"],
+    ["the root", "/", "is the home directory or holds it"],
+    ["a directory holding the credential file", "/secrets", "holds /secrets/claude-agg/credential"],
+    [
+      "the credential file itself",
+      "/secrets/claude-agg/credential",
+      "holds /secrets/claude-agg/credential",
+    ],
+    ["a directory holding the board home", "/srv", "holds /srv/home"],
+    ["the gh login", "/home/u/.config/gh", "holds /home/u/.config/gh"],
+    ["a directory holding the gh login", "/home/u/.config", "holds /home/u/.config/gh"],
+    ["~/.ssh", "/home/u/.ssh", "holds /home/u/.ssh"],
+    [
+      "a directory holding Claude's credentials",
+      "/home/u/.claude",
+      "holds /home/u/.claude/.credentials.json",
+    ],
+  ])("refuses a readPaths entry that is %s", (_what, entry, message) => {
+    expect(() => checkSettings({ ...SETTINGS, readPaths: [entry] }, same, USER_HOME)).toThrow(
+      message,
+    );
+  });
+
+  it("takes readPaths entries beside the secrets, and inside the home directory", () => {
+    const readPaths = ["/home/u/.local/bin", "/home/u/.gitconfig", "/opt/toolchain", "/home/u2"];
+    expect(checkSettings({ ...SETTINGS, readPaths }, same, USER_HOME).readPaths).toEqual(readPaths);
+  });
+
+  it("refuses a readPaths entry whose links lead to the home directory", () => {
+    const realPath = (path: string): string => (path === "/opt/link" ? "/home/u" : path);
+    expect(() =>
+      checkSettings({ ...SETTINGS, readPaths: ["/opt/link"] }, realPath, USER_HOME),
+    ).toThrow("is the home directory or holds it");
   });
 
   it("compares paths with their links resolved", () => {
     const realPath = (path: string): string => (path === "/work" ? "/srv/home/work" : path);
-    expect(() => checkSettings(SETTINGS, realPath)).toThrow(SettingsError);
+    expect(() => checkSettings(SETTINGS, realPath, USER_HOME)).toThrow(SettingsError);
   });
 });
 

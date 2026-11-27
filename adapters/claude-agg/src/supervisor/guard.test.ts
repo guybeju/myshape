@@ -4,10 +4,13 @@ import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import { denyReason, preToolUseInput } from "./harness.test-helper.js";
+
 import {
   existingRealPath,
   guardToolUse,
   preToolUseHook,
+  sandboxApprovable,
   REASONS,
   type GuardContext,
 } from "./guard.js";
@@ -20,6 +23,7 @@ const CTX: GuardContext = {
   defaultBranch: "main",
   realPath: (path) => path,
   userHome: "/srv",
+  approvesSandboxedBash: true,
 };
 
 function bash(command: string, ctx = CTX) {
@@ -202,17 +206,9 @@ describe("what it cannot read", () => {
 
 describe("the hook", () => {
   const hook = preToolUseHook(CTX);
-  const signal = new AbortController().signal;
-
   it("answers deny with the reason", async () => {
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "gh pr merge 1" },
-      cwd: CWD,
-      session_id: "s",
-    };
-    expect(await hook(input, "u1", { signal })).toEqual({
+    const input = preToolUseInput("Bash", { command: "gh pr merge 1" }, CWD);
+    expect(await hook(input, "u1")).toEqual({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
@@ -221,31 +217,155 @@ describe("the hook", () => {
     });
   });
 
-  it("gives no decision for an allowed call, so the permission mode decides", async () => {
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "npm test" },
-      cwd: CWD,
-      session_id: "s",
-    };
-    expect(await hook(input, "u1", { signal })).toEqual({});
+  it("approves a worker's sandbox-approvable Bash call, which runs in the sandbox", async () => {
+    const input = preToolUseInput("Bash", { command: "npm test 2>&1 | tail -5" }, CWD);
+    expect(await hook(input, "u1")).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: REASONS.sandboxed,
+      },
+    });
+  });
+
+  it("gives no decision for a shape the sandbox auto-allow never covers", async () => {
+    const input = preToolUseInput("Bash", { command: "env | sort" }, CWD);
+    expect(await hook(input, "u1")).toEqual({});
+  });
+
+  it("gives no decision for Bash where it approves nothing (the planner), nor for other tools", async () => {
+    const planner = preToolUseHook({ ...CTX, approvesSandboxedBash: false });
+    expect(await planner(preToolUseInput("Bash", { command: "npm test" }, CWD), "u1")).toEqual({});
+    expect(await hook(preToolUseInput("Read", { file_path: `${CWD}/a` }, CWD), "u1")).toEqual({});
+  });
+
+  it.each([true, "true"])("denies dangerouslyDisableSandbox %j, approving or not", async (flag) => {
+    for (const ctx of [CTX, { ...CTX, approvesSandboxedBash: false }]) {
+      const input = preToolUseInput(
+        "Bash",
+        { command: "ls", dangerouslyDisableSandbox: flag },
+        CWD,
+      );
+      expect(denyReason(await preToolUseHook(ctx)(input, "u1"))).toBe(REASONS.unsandboxed);
+    }
   });
 
   it("refuses a call whose cwd it cannot read", async () => {
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "ls" },
-      cwd: "relative",
-    };
-    expect((await hook(input, "u1", { signal })).hookSpecificOutput?.permissionDecisionReason).toBe(
-      REASONS.unreadable,
-    );
+    const input = preToolUseInput("Bash", { command: "ls" }, "relative");
+    expect(denyReason(await hook(input, "u1"))).toBe(REASONS.unreadable);
   });
 
   it("ignores other events", async () => {
-    expect(await hook({ hook_event_name: "PostToolUse" }, undefined, { signal })).toEqual({});
+    const input = {
+      ...preToolUseInput("Bash", { command: "gh pr merge 1" }, CWD),
+      hook_event_name: "PostToolUse" as const,
+      tool_response: "",
+    };
+    expect(await hook(input, undefined)).toEqual({});
+  });
+});
+
+describe("a git subcommand written with $", () => {
+  it.each([
+    "git $'push' origin main",
+    "git ${x:-push} origin main",
+    "git -C . $'push' origin main",
+  ])("is taken as a push: %s", (command) => {
+    expect(bash(command)).toEqual(denied(REASONS.pushDefault));
+  });
+
+  it("is refused outright where nothing may be pushed", () => {
+    expect(bash("git $'push' origin agg/t-1", { ...CTX, defaultBranch: null })).toEqual(
+      denied(REASONS.noPush),
+    );
+  });
+});
+
+describe("sandboxApprovable", () => {
+  it.each([
+    "npm test",
+    "pnpm install --frozen-lockfile && pnpm test",
+    "printenv | cut -d= -f1 | sort",
+    "git add -A && git commit -qm 'fix the parser'",
+    "curl -sS -o /dev/null -w '%{http_code}' https://registry.npmjs.org/",
+    "npm test 2>&1 | tee test.log",
+    "cargo build >out.log 2>&1",
+    "rm -rf node_modules dist/old",
+    'echo "$HOME" > note.txt',
+    "/usr/bin/git status",
+    "if test -f package.json; then npm test; fi",
+    "{ npm test; npm run lint; }",
+    "! git diff --quiet",
+    "while read line; do echo x; done < list.txt",
+    "make test",
+    "make -j4 all",
+  ])("approves %s", (command) => {
+    expect(sandboxApprovable(command)).toBe(true);
+  });
+
+  it.each([
+    ["env first", "env | cut -d= -f1"],
+    ["env after a pipe", "ls | env"],
+    ["time", "time npm test"],
+    ["nohup", "nohup npm start"],
+    ["timeout", "timeout 10 npm test"],
+    ["nice", "nice -n 5 make"],
+    ["stdbuf", "stdbuf -oL npm test"],
+    ["command", "command -v git"],
+    ["builtin", "builtin cd .."],
+    ["noglob", "noglob ls *"],
+    ["eval", 'eval "ls"'],
+    ["awk", "awk '{print $1}' file"],
+    ["gawk by path", "/usr/bin/gawk 1 file"],
+    ["a leading assignment", "FOO=bar npm test"],
+    ["an assignment after &&", "cd app && CI=1 npm test"],
+    ["a here-document", "git commit -F - <<EOF\nmsg\nEOF"],
+    ["a here-string", "cat <<< hi"],
+    ["${!…}", "echo ${!PATH}"],
+    ["${ |…}", "echo ${ |x}"],
+    ["/proc/…/environ", "cat /proc/1/environ"],
+    ["/dev/tcp", "echo x > /dev/tcp/1.2.3.4/80"],
+    ["command substitution", 'git commit -m "$(cat msg)"'],
+    ["backticks", "echo `id`"],
+    ["a background &", "npm start & sleep 1"],
+    ["a trailing &", "npm start &"],
+    ["rm of /", "rm -rf /"],
+    ["rm of ~", "rm -rf ~"],
+    ["rm of ..", "rm -rf ../x"],
+    ["rm of .", "rm -rf ."],
+    ["rm of *", "rm -rf *"],
+    ["rm with a variable", "rm -rf $DIR"],
+    ["rm with no operand", "rm -rf"],
+    ["rmdir of an absolute path", "rmdir /tmp/x"],
+    ["env inside if/then", "if true; then env curl x; fi"],
+    ["eval after else", "if false; then ls; else eval ls; fi"],
+    ["env after elif", "if false; then ls; elif true; then env x; fi"],
+    ["env in a { } group", "{ env curl x; }"],
+    ["env after !", "! env curl x"],
+    ["eval in while/do", "while true; do eval ls; done"],
+    ["eval in until/do", "until false; do eval ls; done"],
+    ["an assignment after then", "if true; then CI=1 npm test; fi"],
+    ["nested wrappers", "if true; then { ! while true; do env x; done; }; fi"],
+    ["a wrapper after a pipe", "ls | { env x; }"],
+    ["a case statement", "case x in x) ls;; esac"],
+    ["a for loop", "for f in a b; do ls $f; done"],
+    ["a select loop", "select x in a; do ls; done"],
+    ["a function keyword", "function f { ls; }"],
+    ["coproc", "coproc ls"],
+    ["[[ test", "[[ -f x ]] && ls"],
+    ["[[ after if", "if [[ -f x ]]; then ls; fi"],
+    ["make with an assignment", "make CC=clang"],
+    ["make with an assignment after a target", "make all CFLAGS=-O2"],
+    ["make by path with an assignment", "/usr/bin/make CC=clang"],
+    ["an ANSI-C quoted first word", "$'env' curl x"],
+    ["a defaulted variable as first word", "${x:-env} curl x"],
+    ["a variable as first word", "$CMD x"],
+    ["a variable inside the first word", "/usr/bin/$TOOL x"],
+    ["a variable first word after then", "if true; then $'eval' ls; fi"],
+    ["a variable first word after a pipe", "ls | $'env' x"],
+    ["git with a quoted subcommand", "git $'push' origin main"],
+  ])("does not approve %s", (_what, command) => {
+    expect(sandboxApprovable(command)).toBe(false);
   });
 });
 

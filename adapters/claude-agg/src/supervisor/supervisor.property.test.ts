@@ -91,7 +91,7 @@ function check(run: Run, context: string): void {
     expect(queued.has(id), `${context}: ${id}`).toBe(false);
   const fresh = new Map<string, number>();
   for (const call of world.query.calls) {
-    if (call.options.cwd === world.root || call.options.resume !== undefined) continue;
+    if (call.options.cwd === world.plannerDir || call.options.resume !== undefined) continue;
     fresh.set(call.options.cwd, (fresh.get(call.options.cwd) ?? 0) + 1);
   }
   for (const [cwd, count] of fresh) expect(count, `${context}: ${cwd} started fresh twice`).toBe(1);
@@ -140,7 +140,7 @@ describe("the supervisor over random runs", () => {
       );
       for (let i = 0; i < 120; i += 1) {
         world.query.worker.push({ messages: outcome(random()), gate: new Gate() });
-        world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan([]))] });
+        world.query.planner.push({ messages: [init("p", "default"), result(plan([]))] });
       }
       const run: Run = { world, supervisor: await world.start(), abandoned: new Set() };
       run.supervisor.tick();

@@ -96,16 +96,20 @@ describe("Git", () => {
     );
     const git = new Git(run, ENV);
     expect(await git.addWorktree("/r", "/w/t-1", "agg/t-1", "origin/main")).toBeUndefined();
-    expect(await git.unpushedCommits("/w/t-1")).toBe(3);
+    expect(await git.unpushedCommits("/r", "agg/t-1")).toBe(3);
     expect(await git.removeWorktree("/r", "/w/t-1")).toBeUndefined();
     expect(await git.worktrees("/r")).toEqual(["/r", "/w/t-1"]);
     expect(calls.map((call) => call.args)).toEqual([
       ["-C", "/r", "worktree", "add", "/w/t-1", "-b", "agg/t-1", "origin/main"],
-      ["-C", "/w/t-1", "rev-list", "--count", "HEAD", "--not", "--remotes"],
+      ["-C", "/r", "rev-list", "--count", "refs/heads/agg/t-1", "--not", "--remotes"],
       ["-C", "/r", "worktree", "remove", "/w/t-1"],
       ["-C", "/r", "worktree", "list", "--porcelain"],
     ]);
-    expect(calls[0]?.env).toEqual({ ...ENV, GIT_TERMINAL_PROMPT: "0" });
+    expect(calls[0]?.env).toEqual({
+      ...ENV,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_NO_REPLACE_OBJECTS: "1",
+    });
   });
 
   it("reports failures as one line or undefined", async () => {
@@ -113,7 +117,7 @@ describe("Git", () => {
     const { run } = scripted(fail, fail, fail, fail);
     const git = new Git(run, ENV);
     expect(await git.addWorktree("/r", "/w", "b", "o")).toBe("fatal: two");
-    expect(await git.unpushedCommits("/w")).toBeUndefined();
+    expect(await git.unpushedCommits("/r", "b")).toBeUndefined();
     expect(await git.removeWorktree("/r", "/w")).toBe("fatal: two");
     expect(await git.worktrees("/r")).toBeUndefined();
   });

@@ -218,14 +218,18 @@ function failure(what: string, result: CommandResult): string {
   return `myshape.sh ${what} exited ${String(result.status)}${line === "" ? "" : `: ${line}`}`;
 }
 
-/** Git, always with `-C <absolute path>`, never relying on the working directory. */
+/**
+ * Git, always with `-C <absolute path>`, never relying on the working
+ * directory, never prompting, and never following a replace ref: a worker can
+ * write refs/replace/ in a main checkout's shared .git.
+ */
 export class Git {
   private readonly run: RunCommand;
   private readonly env: Record<string, string>;
 
   constructor(run: RunCommand, env: PlainEnv) {
     this.run = run;
-    this.env = { ...env, GIT_TERMINAL_PROMPT: "0" };
+    this.env = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" };
   }
 
   async git(dir: string, ...args: string[]): Promise<CommandResult> {
@@ -244,9 +248,14 @@ export class Git {
     return result.status === 0 ? undefined : oneLine(result);
   }
 
-  /** How many commits HEAD of the worktree has that no remote-tracking branch has, or undefined. */
-  async unpushedCommits(worktree: string): Promise<number | undefined> {
-    const result = await this.git(worktree, "rev-list", "--count", "HEAD", "--not", "--remotes");
+  /**
+   * How many commits `branch` has that no remote-tracking branch has, or
+   * undefined; run in the main checkout `repo` by the branch's name, never
+   * inside the worktree, whose .git file the worker can rewrite.
+   */
+  async unpushedCommits(repo: string, branch: string): Promise<number | undefined> {
+    const ref = `refs/heads/${branch}`;
+    const result = await this.git(repo, "rev-list", "--count", ref, "--not", "--remotes");
     const count = Number(result.stdout.trim());
     return result.status === 0 && Number.isInteger(count) ? count : undefined;
   }

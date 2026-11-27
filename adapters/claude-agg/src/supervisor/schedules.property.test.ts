@@ -129,7 +129,7 @@ async function step(run: Run): Promise<void> {
  * worker's from its task's tag file, the planner's from its prompt's topic frame.
  */
 function topicOfSession(world: World, call: Call): string {
-  if (call.options.cwd === world.root)
+  if (call.options.cwd === world.plannerDir)
     return /"id": "([^"]+)"/.exec(call.prompts[0] ?? "")?.[1] ?? "";
   const task = call.options.cwd.split("/").at(-1) ?? "";
   const tag = join(world.agg, "tags", task);
@@ -177,7 +177,7 @@ describe("the supervisor with schedules over random runs", () => {
         });
         const tasks =
           random() < 0.8 ? [{ title: "做", repo: "app", kind: "scout", prompt: "p" }] : [];
-        world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan(tasks))] });
+        world.query.planner.push({ messages: [init("p", "default"), result(plan(tasks))] });
       }
       const run: Run = {
         world,

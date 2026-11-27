@@ -14,9 +14,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import type { HookJSONOutput, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
 import type { CommandRequest, CommandResult, PlainEnv, RunCommand } from "./commands.js";
 import { removeHomes, writeHome } from "./fixtures.test-helper.js";
 import type { QueryFn, QueryOptions, UserMessage } from "./sdk.js";
+import { PLANNER_DIR } from "./supervisor.js";
 
 export const CANARY = "sk-ant-oat01-CANARY-not-a-real-token";
 
@@ -29,7 +34,12 @@ export const ENV: PlainEnv = {
 
 // --- messages ------------------------------------------------------------------
 
-export function init(session: string, mode = "auto", apiKeySource = "none", model = "test-model") {
+export function init(
+  session: string,
+  mode = "default",
+  apiKeySource = "none",
+  model = "test-model",
+) {
   return {
     type: "system",
     subtype: "init",
@@ -99,6 +109,38 @@ export function plan(tasks: { title: string; repo: string; kind: string; prompt:
   return { tasks, question: null, nothing: tasks.length === 0 };
 }
 
+// --- hooks ---------------------------------------------------------------------
+
+/** The input the SDK gives a PreToolUse hook for this tool call. */
+export function preToolUseInput(tool: string, input: unknown, cwd: string): PreToolUseHookInput {
+  return {
+    hook_event_name: "PreToolUse",
+    session_id: "s",
+    transcript_path: "/nowhere/transcript.jsonl",
+    cwd,
+    tool_name: tool,
+    tool_input: input,
+    tool_use_id: "toolu_test",
+  };
+}
+
+/** The reason a hook's output denies the call with, or undefined when it does not. */
+export function denyReason(output: HookJSONOutput | undefined): string | undefined {
+  if (output === undefined || !("hookSpecificOutput" in output)) return undefined;
+  const decision = output.hookSpecificOutput;
+  if (decision?.hookEventName !== "PreToolUse" || decision.permissionDecision !== "deny") {
+    return undefined;
+  }
+  return decision.permissionDecisionReason;
+}
+
+/** The text of a user message the supervisor sent: always a string. */
+export function promptText(message: UserMessage): string {
+  const { content } = message.message;
+  if (typeof content !== "string") throw new Error("the supervisor sends text prompts only");
+  return content;
+}
+
 // --- query ---------------------------------------------------------------------
 
 /** A gate a script waits on, opened by the test. */
@@ -118,6 +160,8 @@ export interface Call {
   script: Script | undefined;
   /** Every message the session produced: its transcript. */
   transcript: object[];
+  /** The in-process MCP tools the session called, with each answer (undefined: no such server). */
+  mcp: (McpCall & { answer: unknown })[];
   /** The tool calls the session tried, and whether its rules or hook let them run. */
   tools: {
     tool: string;
@@ -136,8 +180,15 @@ export interface ToolAttempt {
   input: Record<string, unknown>;
 }
 
-/** A step of a script: a message the session yields, or a tool call it tries. */
-export type Step = object | { attempt: ToolAttempt };
+/** A call of one of the session's in-process MCP tools, made over MCP as Claude Code makes it. */
+export interface McpCall {
+  server: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** A step of a script: a message the session yields, a tool call it tries, or an MCP tool call. */
+export type Step = object | { attempt: ToolAttempt } | { mcp: McpCall };
 
 /** What one session does: its first message (the start), then the rest once its gate opens. */
 export interface Script {
@@ -163,9 +214,9 @@ export class ScriptedQuery {
   constructor(private readonly root: string) {}
 
   readonly query: QueryFn = ({ prompt, options }) => {
-    const queue = options.cwd === this.root ? this.planner : this.worker;
+    const queue = options.cwd === join(this.root, PLANNER_DIR) ? this.planner : this.worker;
     const script = queue.shift();
-    const call: Call = { options, prompts: [], script, transcript: [], tools: [] };
+    const call: Call = { options, prompts: [], script, transcript: [], tools: [], mcp: [] };
     this.calls.push(call);
     options.abortController.signal.addEventListener("abort", () => (this.aborted += 1));
     return run(script, prompt, call, this.active);
@@ -193,15 +244,9 @@ async function tryTool(attempt: ToolAttempt, call: Call): Promise<object[]> {
   let hook: string | undefined;
   for (const matcher of call.options.hooks.PreToolUse) {
     for (const each of matcher.hooks) {
-      const input = {
-        hook_event_name: "PreToolUse",
-        tool_name: attempt.tool,
-        tool_input: attempt.input,
-        cwd: call.options.cwd,
-      };
+      const input = preToolUseInput(attempt.tool, attempt.input, call.options.cwd);
       const out = await each(input, id, { signal: new AbortController().signal });
-      const decision = out.hookSpecificOutput;
-      if (decision?.permissionDecision === "deny") hook ??= decision.permissionDecisionReason;
+      hook ??= denyReason(out);
     }
   }
   const ran = rule === undefined && hook === undefined;
@@ -217,7 +262,17 @@ async function tryTool(attempt: ToolAttempt, call: Call): Promise<object[]> {
 
 /** Takes every user message from the stream as the SDK does, recording each. */
 async function readPrompts(prompt: AsyncIterable<UserMessage>, call: Call): Promise<void> {
-  for await (const message of prompt) call.prompts.push(message.message.content);
+  for await (const message of prompt) call.prompts.push(promptText(message));
+}
+
+/** Waits for `gate`; an abort ends the session the way the SDK's query ends: it throws. */
+async function untilAborted(gate: Promise<void> | undefined, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new Error("aborted");
+  if (gate === undefined) return;
+  const aborted = new Promise<never>((_, reject) => {
+    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  await Promise.race([gate, aborted]);
 }
 
 async function* run(
@@ -230,12 +285,12 @@ async function* run(
   try {
     const reader = prompt[Symbol.asyncIterator]();
     const first = await reader.next();
-    if (!first.done) call.prompts.push(first.value.message.content);
+    if (!first.done) call.prompts.push(promptText(first.value));
     void readPrompts({ [Symbol.asyncIterator]: () => reader }, call);
     if (script === undefined) throw new Error("no script left for this session");
     const [start, ...rest] = script.messages;
     for (const step of start === undefined ? [] : [start]) yield* emit(step, call);
-    await script.gate?.opened;
+    await untilAborted(script.gate?.opened, call.options.abortController.signal);
     for (const step of rest) yield* emit(step, call);
     if (script.error !== undefined) throw script.error;
   } finally {
@@ -243,9 +298,30 @@ async function* run(
   }
 }
 
+/** Calls an in-process MCP tool of the session through an MCP client, and records the answer. */
+async function callMcp(mcp: McpCall, call: Call): Promise<object[]> {
+  const server = call.options.mcpServers?.[mcp.server];
+  if (server === undefined || !("instance" in server)) {
+    call.mcp.push({ ...mcp, answer: undefined });
+    return [];
+  }
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.instance.connect(serverSide);
+  const client = new Client({ name: "scripted-session", version: "1" });
+  await client.connect(clientSide);
+  try {
+    const answer = await client.callTool({ name: mcp.tool, arguments: mcp.args });
+    call.mcp.push({ ...mcp, answer });
+  } finally {
+    await client.close();
+  }
+  return [];
+}
+
 async function* emit(step: Step, call: Call) {
-  const messages =
-    "attempt" in step ? await tryTool((step as { attempt: ToolAttempt }).attempt, call) : [step];
+  let messages: object[] = [step];
+  if ("attempt" in step) messages = await tryTool((step as { attempt: ToolAttempt }).attempt, call);
+  if ("mcp" in step) messages = await callMcp((step as { mcp: McpCall }).mcp, call);
   for (const message of messages) {
     call.transcript.push(message);
     yield message;
@@ -386,13 +462,13 @@ export class FakeCommands {
       listed.delete(rest[2] ?? "");
       return done(0);
     }
+    if (sub === "init --bare --quiet") return done(0);
     if (sub === "worktree list --porcelain") {
       const lines = [dir, ...listed].map((path) => `worktree ${path}\n`);
       return done(0, lines.join("\n"));
     }
-    if (sub === "rev-list --count HEAD --not --remotes") {
-      return done(0, `${this.unpushed.get(dir) ?? 0}\n`);
-    }
+    const unpushed = /^rev-list --count refs\/heads\/(\S+) --not --remotes$/.exec(sub);
+    if (unpushed !== null) return done(0, `${this.unpushed.get(unpushed[1] ?? "") ?? 0}\n`);
     return done(2, "", `unplayed git ${sub}`);
   }
 

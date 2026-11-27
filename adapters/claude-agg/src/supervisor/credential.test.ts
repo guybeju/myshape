@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { CANARY } from "./harness.test-helper.js";
-import { readTokenFile, redactor, TokenFileError } from "./token.js";
+import { type AuthMode, CredentialFileError, readCredentialFile, redactor } from "./credential.js";
 
 const dir = mkdtempSync(join(tmpdir(), "claude-agg-token-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -20,20 +20,39 @@ function tokenFile(text: string, mode = 0o600): string {
   return path;
 }
 
-function problem(path: string, owner = uid): string {
+function problem(path: string, owner = uid, mode: AuthMode = "subscription-token"): string {
   try {
-    readTokenFile(path, owner);
+    readCredentialFile(path, owner, mode);
   } catch (error) {
-    expect(error).toBeInstanceOf(TokenFileError);
+    expect(error).toBeInstanceOf(CredentialFileError);
     return (error as Error).message;
   }
   throw new Error("no error");
 }
 
-describe("readTokenFile", () => {
-  it("reads the one line", () => {
-    expect(readTokenFile(tokenFile(`CLAUDE_CODE_OAUTH_TOKEN=${CANARY}\n`), uid)).toBe(CANARY);
-    expect(readTokenFile(tokenFile(`CLAUDE_CODE_OAUTH_TOKEN=${CANARY}`, 0o400), uid)).toBe(CANARY);
+describe("readCredentialFile", () => {
+  it("reads the subscription token's one line", () => {
+    const sub = "subscription-token";
+    expect(readCredentialFile(tokenFile(`CLAUDE_CODE_OAUTH_TOKEN=${CANARY}\n`), uid, sub)).toEqual({
+      mode: sub,
+      secret: CANARY,
+    });
+    const readOnly = tokenFile(`CLAUDE_CODE_OAUTH_TOKEN=${CANARY}`, 0o400);
+    expect(readCredentialFile(readOnly, uid, sub).secret).toBe(CANARY);
+  });
+
+  it("reads an API key's one line", () => {
+    const file = tokenFile(`ANTHROPIC_API_KEY=${CANARY}\n`);
+    expect(readCredentialFile(file, uid, "api-key")).toEqual({ mode: "api-key", secret: CANARY });
+  });
+
+  it("refuses the other mode's line", () => {
+    const key = tokenFile(`ANTHROPIC_API_KEY=${CANARY}\n`);
+    expect(problem(key)).toContain("must hold exactly one line CLAUDE_CODE_OAUTH_TOKEN=<value>");
+    const token = tokenFile(`CLAUDE_CODE_OAUTH_TOKEN=${CANARY}\n`);
+    expect(problem(token, uid, "api-key")).toContain(
+      "must hold exactly one line ANTHROPIC_API_KEY=<value>",
+    );
   });
 
   it.each([0o640, 0o604, 0o660])("refuses mode %o and says how to fix it", (mode) => {
@@ -65,7 +84,7 @@ describe("readTokenFile", () => {
     "CLAUDE_CODE_OAUTH_TOKEN=\n",
   ])("refuses content %j without repeating it", (text) => {
     const message = problem(tokenFile(text));
-    expect(message).toContain("must hold exactly one line CLAUDE_CODE_OAUTH_TOKEN=<token>");
+    expect(message).toContain("must hold exactly one line CLAUDE_CODE_OAUTH_TOKEN=<value>");
     expect(message).not.toContain(CANARY);
   });
 });

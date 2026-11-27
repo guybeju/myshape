@@ -80,6 +80,8 @@ export interface SessionReport {
 export interface Expectation {
   /** The permission mode the session must start in. */
   mode: InitMessage["permissionMode"];
+  /** The `apiKeySource` its start message must name: the settings' credential. */
+  apiKeySource: string;
   /** Called once with the start message, after it passed the checks. */
   onStart: (init: InitMessage) => void;
 }
@@ -106,12 +108,13 @@ function parseInit(message: Json): InitMessage | undefined {
 }
 
 /** Why a start message is refused, or undefined when it may go on. */
-export function refuseStart(init: InitMessage, mode: InitMessage["permissionMode"]) {
-  if (init.permissionMode !== mode) {
-    return `session 開始時的權限模式是 ${init.permissionMode}，不是 ${mode}，已停下。`;
+export function refuseStart(init: InitMessage, expect: Omit<Expectation, "onStart">) {
+  if (init.permissionMode !== expect.mode) {
+    return `session 開始時的權限模式是 ${init.permissionMode}，不是 ${expect.mode}，已停下。`;
   }
-  if (init.apiKeySource !== "none") {
-    return `session 的認證來源是 ${init.apiKeySource || "（沒寫）"}，不是訂閱 token，已停下。`;
+  if (init.apiKeySource !== expect.apiKeySource) {
+    const source = init.apiKeySource || "（沒寫）";
+    return `session 的認證來源是 ${source}，不是設定的 ${expect.apiKeySource}，已停下。`;
   }
   return undefined;
 }
@@ -199,7 +202,7 @@ class Follower {
     this.started = true;
     this.report.sessionId = init.session_id;
     this.report.model = init.model;
-    const reason = refuseStart(init, this.expect.mode);
+    const reason = refuseStart(init, this.expect);
     if (reason !== undefined) return this.finish({ kind: "refused", reason });
     this.expect.onStart(init);
     return false;

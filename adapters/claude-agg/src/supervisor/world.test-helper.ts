@@ -21,7 +21,7 @@ import {
 } from "./harness.test-helper.js";
 import type { Settings } from "./settings.js";
 import type { PlannedTask } from "./state-store.js";
-import { Supervisor, type Deps } from "./supervisor.js";
+import { PLANNER_DIR, Supervisor, type Deps } from "./supervisor.js";
 
 export const BOARD_COMMAND = "/opt/board/bin/myshape.sh";
 export const REPO = "/repos/app";
@@ -49,6 +49,8 @@ export class World {
   readonly logs: string[] = [];
   nowMs = START_MS;
   model: string | undefined = undefined;
+  /** The listed repository's main checkout. */
+  repoPath = REPO;
   alive = new Set<number>();
   pid = 4242;
 
@@ -60,14 +62,21 @@ export class World {
     this.query = new ScriptedQuery(root);
   }
 
+  /** The planner's own working directory. */
+  get plannerDir(): string {
+    return join(this.root, PLANNER_DIR);
+  }
+
   settings(): Settings {
     return {
       home: this.home,
       worktreeRoot: this.root,
       boardCommand: BOARD_COMMAND,
       port: 47_829,
-      repos: { app: { path: REPO, base: "origin/main", defaultBranch: "main" } },
+      repos: { app: { path: this.repoPath, base: "origin/main", defaultBranch: "main" } },
       model: this.model,
+      credentialFile: `${this.root}-credential`,
+      readPaths: [],
     };
   }
 
@@ -75,13 +84,14 @@ export class World {
     return {
       query: this.query.query,
       run: this.commands.run,
-      token: CANARY,
+      credential: { mode: "subscription-token", secret: CANARY },
       env: ENV,
       nowMs: () => this.nowMs,
       log: (line) => this.logs.push(line),
       realPath: existingRealPath,
       pid: this.pid,
       isAlive: (pid) => this.alive.has(pid),
+      tmpRoot: this.root,
     };
   }
 

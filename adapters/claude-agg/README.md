@@ -7,11 +7,13 @@ the board's page. It is built against the board's contract only
 sections 4 and 7). It imports nothing from `myshape/` or `adapters/firstmate/`,
 and the board imports nothing from it.
 
-So far it holds the program the board runs, `bin/agg-board.mjs`, the formats
-of the agent's state files, and the supervisor in `src/supervisor/` (below).
-The supervisor takes the Agent SDK's `query()` as an injected function; the
-package is not a dependency yet and there is no entry point that runs the
-supervisor, so nothing here calls a model. The tests pass a scripted double.
+It holds the program the board runs, `bin/agg-board.mjs`, the formats of the
+agent's state files, the supervisor in `src/supervisor/` (below), built on the
+Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, pinned in `package.json`),
+and its entry point `bin/claude-agg-supervisor.mjs`, which whoever runs it
+starts by hand in a terminal ([Running the supervisor](#running-the-supervisor)).
+The tests pass a scripted double for the SDK's `query()`, so no test calls a
+model unless the real-binary checks are switched on.
 
 ## The supervisor: `src/supervisor/`
 
@@ -20,8 +22,9 @@ It reads a board home's `data/topics.json`, `data/topics-archive.json`,
 order new work is handed out in (`dispatch-order.ts`), and then:
 
 - **plans** each dispatchable topic that has no task with one read-only
-  planner session (`Read`, `Grep`, `Glob`, `dontAsk`), keeping only tasks for
-  the repositories its settings list;
+  planner session (`Read`, `Grep`, `Glob`, no prompts) in an empty directory of
+  its own, allowed to read only the listed repositories' main checkouts,
+  keeping only tasks for those repositories;
 - **dispatches** at most 2 sessions in all and 1 per topic (`scheduler.ts`);
   the rest wait in `queued.json` with the reason as `hold`. Nothing new starts
   for a topic in 待辦 or archived, and a running worker is never stopped;
@@ -30,11 +33,58 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   agg/<task-id> <base>` in the repository's main checkout, with the worktree
   root outside the board home;
 - **runs** one worker session per task with the options of
-  `session-options.ts` (auto mode with no prompts, the deny rules and the
-  PreToolUse guard of `guard.ts`, the target repository's project settings
-  from its main checkout, no MCP but what it passes, 200 turns, a structured
-  output), and stops a session whose start message is not `auto` or names an
-  API key;
+  `session-options.ts`: the `default` permission mode with no prompts (with
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set, which it always is, Claude Code
+  starts every session in `default` whatever is asked), so only what is
+  listed runs: file edits and writes inside the worktree, the two forge
+  tools, and Bash commands the supervisor's own PreToolUse guard approves.
+  Claude Code's sandbox auto-allow is off while the scrub is set, so the guard
+  answers `allow` for a Bash call that passes all its checks, does not ask to
+  leave the sandbox (`dangerouslyDisableSandbox` is denied), and is not a
+  shape that auto-allow never covers (a leading `VAR=`, a here-document,
+  command substitution, a background `&`, a first word `env`, `time`,
+  `nohup`, `timeout`, `nice`, `stdbuf`, `command`, `builtin`, `noglob`,
+  `eval` or the awk family, `rm` of anything but plain relative paths). There
+  is no Bash allow rule. Everything else is denied, as are edits of the
+  worktree's `.git`. A worker does not start when the main checkout's
+  `.claude/settings.json` or `.claude/settings.local.json` sets anything
+  under `sandbox`. Also the deny rules and the PreToolUse guard of
+  `guard.ts`, the target repository's project settings from its main
+  checkout, no MCP but its own, 200 turns, a structured output. It stops a
+  session whose start message is not `default` or names another credential
+  source than the settings select;
+- **sandboxes** each worker: its Bash commands run in the SDK's sandbox
+  (bubblewrap and socat on Linux; on macOS the system's own sandbox), which
+  must start or the session does not (`failIfUnavailable`), with no
+  unsandboxed retry. They reach only the npm, PyPI and crates registries
+  (`github.com` and `api.github.com` are denied). They read nothing in the
+  home directory, the other users' and mounted directories (`/home`,
+  `/Users`, `/root`, `/Volumes`, `/mnt`, `/media`) or the shared temporary
+  and log directories (`/tmp`, `/var/tmp`, `/dev/shm`, `/run/user`,
+  `/var/log`; on macOS also `/private/tmp`, `/private/var/folders`,
+  `/private/var/log`), except the worktree, the main checkout's `.git`, the
+  settings' `readPaths` and the session's own temporary directory. The gh
+  login, `~/.ssh`, Claude's own credentials, the credential file and the
+  board home are denied by name too. They write only the worktree, the main
+  checkout's shared `.git` (not its `hooks/` or `config`: the sandbox allows
+  that for a linked worktree) and the session's own temporary directory,
+  which the supervisor makes for each session alone (`/tmp/cagg-…`, its
+  `TMPDIR` and `CLAUDE_CODE_TMPDIR`) and removes when the session ends. Its
+  file tools cannot write outside the worktree
+  (`blockWritesOutsideWorkingDirectories`), have no read allow rule, so a
+  read outside the worktree waits for an approval nobody gives, and are
+  denied the credential paths by name. It has no `WebFetch` or `WebSearch`,
+  and `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` takes the credential out of every
+  command, hook and MCP server it starts;
+- **pushes and opens PRs for the worker**: a ship worker has no forge
+  credential and gets two tools, `push_branch` and `open_pr`, that the
+  supervisor runs with its own login (`forge.ts`); there is no tool that
+  merges. `push_branch` takes the default branch's tip from `git ls-remote`,
+  fetches the worker's branch by name into a bare repository only the
+  supervisor writes (`<worktree root>/.claude-agg-push/<repo>.git`), refuses
+  unless the branch shares history with that tip and changes nothing under
+  `.github/`, and pushes exactly the compared commit to `agg/<task>`. A refusal
+  is the task's summary. A scout worker gets neither tool;
 - **writes** the ledger (`task.dispatched`, `task.status`, `task.pr_ready`,
   `task.merged`, `task.cleaned_up`) and summaries through the board's
   `bin/myshape.sh summary`; workers never write the board;
@@ -112,9 +162,12 @@ agent creates no topic, and creates, edits, pauses, resumes, skips or deletes
 no schedule: its only schedule commands are `take` and `close … done`.
 
 The model is the user's setting, passed to every session unchanged; with no
-setting, sessions get no model option. The subscription token is read from a
-file only its owner can read (`token.ts`), goes only into the sessions'
-environment, and is taken out of every text the supervisor writes.
+setting, sessions get no model option.
+
+This adapter uses an API key; the author uses a subscription token for own
+use. The credential is read from a file only its owner can read
+(`credential.ts`), goes only into the sessions' environment, as exactly one
+name, and is taken out of every text the supervisor writes.
 
 ## What the board runs: `bin/agg-board.mjs`
 
@@ -207,6 +260,96 @@ Neither vendor list (`myshape/vendor-files`,
 Firstmate fork that vendors this repository does not receive it. CI checks that
 too.
 
+## Running the supervisor
+
+It runs on Linux or macOS. On Linux the workers' sandbox needs bubblewrap and
+socat installed (`sudo apt-get install bubblewrap socat` on Debian and
+Ubuntu); without them no worker session starts.
+
+1. Wire the program to a board home of its own (above).
+2. Make an API key for the adapter and put it in a file only you can read,
+   holding the one line `ANTHROPIC_API_KEY=<key>`:
+
+   ```sh
+   mkdir -m 700 -p ~/.config/claude-agg
+   install -m 600 /dev/null ~/.config/claude-agg/key
+   ```
+
+   then write the line into it with an editor.
+3. Write the settings file, mode 0600 (the supervisor refuses one that is a
+   link or that anyone else can read or write):
+
+   ```json
+   {
+     "v": 1,
+     "home": "/home/<user>/agg-home",
+     "worktreeRoot": "/home/<user>/claude-agg-work",
+     "boardCommand": "<checkout>/bin/myshape.sh",
+     "repos": {
+       "app": {"path": "/home/<user>/src/app", "base": "origin/main", "defaultBranch": "main"}
+     },
+     "auth": "api-key",
+     "credentialFile": "/home/<user>/.config/claude-agg/key",
+     "readPaths": ["/home/<user>/.gitconfig"]
+   }
+   ```
+
+   - `repos` are the only repositories workers work in (see the rule below).
+     A worktree is added from `path` (the main checkout) at `base`; no worker
+     may push `defaultBranch`.
+   - `worktreeRoot` must exist and lie outside the board home.
+   - `model` is optional: the model every session uses, passed as written.
+     With none, sessions use the SDK's own default.
+   - `readPaths` (optional) are absolute paths a worker's commands may read
+     besides its worktree, such as a toolchain installed under the home
+     directory or the git configuration that names its author. The
+     supervisor refuses an entry that is your home directory or one above it,
+     or that holds the credential file, the board home, `~/.config/gh`,
+     `~/.ssh` or `~/.claude/.credentials.json`. Before you list
+     `~/.gitconfig`, check that it holds no credential: no `[credential]`
+     helper line, and no `url.*.insteadOf` with a token in it.
+   - `credentialFile` is the absolute path of the credential file: a regular
+     file (not a symbolic link), owned by you, mode 0600 or stricter, holding
+     exactly one line `ANTHROPIC_API_KEY=<key>`, with nothing else in the file
+     (a final newline is fine; no spaces around `=`, no quotes, no `export`).
+     Anything else and the supervisor does not start, saying which line it
+     wanted.
+   - `auth` is `api-key`. The other mode the settings take,
+     `subscription-token`, is the author's own use and is not described here.
+4. Start it, from the repository root:
+
+   ```sh
+   pnpm --dir adapters/claude-agg install --frozen-lockfile
+   pnpm --dir adapters/claude-agg run supervisor <path to the settings file>
+   ```
+
+   The `supervisor` script builds `src/` into `dist/` and runs
+   `bin/claude-agg-supervisor.mjs`, which starts the board service if it is
+   not running, takes the lock `<worktree root>/.claude-agg-supervisor.lock`
+   (a second supervisor on the same root does not start), and runs a pass
+   whenever the board's files or the agent's inbox change and at least once a
+   minute. It logs to the terminal.
+5. Stop it with Ctrl-C, or `kill <pid>` with the pid it printed (also in the
+   lock file). It starts nothing more, aborts the sessions that run, gives
+   the lock back and exits 0. A task whose worker was cut off is `paused` at
+   the next start, its worktree and session kept. A second Ctrl-C while it
+   stops ends it at once.
+
+There is no service unit: it runs while its terminal does.
+
+**Which repositories may be listed.** A worker session runs the hooks and
+permission rules committed in its repository's main checkout
+(`.claude/settings.json`, outside the sandbox, with your access), and GitHub
+runs that repository's workflows on every branch the supervisor pushes for a
+worker, on code the worker wrote. So list a repository only if:
+
+- it is yours;
+- you have read its main checkout's `.claude/`;
+- every workflow that a push or a pull request triggers in it is read-only
+  (its token's permissions are read) and uses no secrets;
+- its main checkout's `.git/config` holds no credential (no token in a remote
+  URL, no `http.extraheader`): a worker's commands can read that `.git`.
+
 ## Running the checks
 
 Node 22 or later and pnpm (CI uses the version locked in
@@ -231,6 +374,11 @@ run only when `CI` is set (GitHub's runner sets it) and are skipped otherwise.
 The schedule test in `worker-loop.integration.test.ts` waits for the board's
 real clock (about three minutes): the captain's schedule is made through the
 page's API, a few minutes ahead.
+
+`src/supervisor/real-claude.test.ts` runs the bundled `claude` binary itself
+(the sandbox starting, what a worker can and cannot reach, resume not loading
+a worktree's `.claude/`), so it runs only when `AGG_REAL_CLAUDE=1` is set and
+skips otherwise; see that file for what it needs.
 
 The `Claude aggregator` job in `.github/workflows/tests.yml` runs the same
 checks, plus the guards on the top-level `bin/`, the vendor lists and imports.

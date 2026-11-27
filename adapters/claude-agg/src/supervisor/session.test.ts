@@ -5,6 +5,7 @@ import {
   errorResult,
   init,
   maxTurns,
+  promptText,
   rejected,
   result,
   workerOutput,
@@ -17,12 +18,17 @@ async function* messages(list: object[], error?: Error): QueryRun {
   if (error !== undefined) throw error;
 }
 
-async function follow(list: object[], mode: InitMessage["permissionMode"] = "auto", error?: Error) {
+async function follow(
+  list: object[],
+  mode: InitMessage["permissionMode"] = "default",
+  error?: Error,
+) {
   const abort = new AbortController();
   const starts: InitMessage[] = [];
   const prompt = new PromptStream("go");
   const report = await followSession(messages(list, error), prompt, abort, {
     mode,
+    apiKeySource: "none",
     onStart: (start) => starts.push(start),
   });
   return { report, aborted: abort.signal.aborted, starts };
@@ -47,28 +53,28 @@ describe("followSession", () => {
   });
 
   it("refuses and aborts a session in another mode, before onStart", async () => {
-    const { report, starts, aborted } = await follow([init("s1", "default"), result({})]);
+    const { report, starts, aborted } = await follow([init("s1", "auto"), result({})]);
     expect(report.end).toEqual({
       kind: "refused",
-      reason: "session 開始時的權限模式是 default，不是 auto，已停下。",
+      reason: "session 開始時的權限模式是 auto，不是 default，已停下。",
     });
     expect(starts).toEqual([]);
     expect(aborted).toBe(true);
   });
 
   it("refuses an API key as the credential", async () => {
-    const { report } = await follow([init("s1", "auto", "apiKeyHelper")]);
+    const { report } = await follow([init("s1", "default", "apiKeyHelper")]);
     expect(report.end).toEqual({
       kind: "refused",
-      reason: "session 的認證來源是 apiKeyHelper，不是訂閱 token，已停下。",
+      reason: "session 的認證來源是 apiKeyHelper，不是設定的 none，已停下。",
     });
   });
 
-  it("checks the planner's mode as dontAsk", async () => {
-    expect((await follow([init("p", "dontAsk"), result({})], "dontAsk")).report.end.kind).toBe(
-      "output",
-    );
-    expect((await follow([init("p", "auto")], "dontAsk")).report.end.kind).toBe("refused");
+  it("refuses every mode but default, the one the scrub leaves", async () => {
+    expect((await follow([init("p", "default"), result({})])).report.end.kind).toBe("output");
+    for (const mode of ["auto", "dontAsk", "acceptEdits", "bypassPermissions", "plan"]) {
+      expect((await follow([init("p", mode)])).report.end.kind, mode).toBe("refused");
+    }
   });
 
   it("ends on maxTurns", async () => {
@@ -87,7 +93,7 @@ describe("followSession", () => {
   });
 
   it("turns a session that breaks off or never starts into an error", async () => {
-    expect((await follow([init("s1")], "auto", new Error("exit 1"))).report.end).toEqual({
+    expect((await follow([init("s1")], "default", new Error("exit 1"))).report.end).toEqual({
       kind: "error",
       message: "exit 1",
     });
@@ -161,8 +167,32 @@ describe("a session that hands back no output in the schema", () => {
 });
 
 describe("refuseStart", () => {
-  it("lets auto with no API key go on", () => {
-    expect(refuseStart(init("s") as InitMessage, "auto")).toBeUndefined();
+  const subscription = { mode: "default", apiKeySource: "none" } as const;
+  const apiKey = { mode: "default", apiKeySource: "ANTHROPIC_API_KEY" } as const;
+
+  it("lets the subscription token's start (no API key) go on", () => {
+    expect(refuseStart(init("s") as InitMessage, subscription)).toBeUndefined();
+  });
+
+  it("lets an API key's start go on when the settings select the API key", () => {
+    const start = init("s", "default", "ANTHROPIC_API_KEY") as InitMessage;
+    expect(refuseStart(start, apiKey)).toBeUndefined();
+  });
+
+  it("refuses each mode's start under the other mode", () => {
+    expect(refuseStart(init("s") as InitMessage, apiKey)).toBe(
+      "session 的認證來源是 none，不是設定的 ANTHROPIC_API_KEY，已停下。",
+    );
+    const start = init("s", "default", "ANTHROPIC_API_KEY") as InitMessage;
+    expect(refuseStart(start, subscription)).toBe(
+      "session 的認證來源是 ANTHROPIC_API_KEY，不是設定的 none，已停下。",
+    );
+  });
+
+  it("refuses the wrong permission mode first", () => {
+    expect(refuseStart(init("s", "auto") as InitMessage, subscription)).toBe(
+      "session 開始時的權限模式是 auto，不是 default，已停下。",
+    );
   });
 });
 
@@ -171,7 +201,7 @@ describe("PromptStream", () => {
     const stream = new PromptStream("hello");
     const seen: string[] = [];
     const reading = (async () => {
-      for await (const message of stream) seen.push(message.message.content);
+      for await (const message of stream) seen.push(promptText(message));
     })();
     await new Promise((resolve) => setImmediate(resolve));
     stream.close();
