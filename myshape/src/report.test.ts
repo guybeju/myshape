@@ -58,8 +58,8 @@ const FULL = {
       opened_at: 100,
       closed_at: "soon",
     },
-    { id: "no digest", occurrence: 1 },
-    { id: "no occurrence", digest: "d" },
+    { id: "no-digest", occurrence: 1 },
+    { id: "no-occurrence", digest: "d" },
   ],
   closed_cursor: { status: "delta", to_offset: 7, to_prefix_sha256: "s2", more: true },
 };
@@ -260,6 +260,7 @@ describe("parseReport", () => {
     for (const cursor of [
       { status: "later", to_offset: 0, to_prefix_sha256: "-" },
       { status: "start" },
+      { status: "start", to_offset: "0", to_prefix_sha256: "-" },
       3,
     ])
       expect(ok({ ...FULL, closed_cursor: cursor }).closed_cursor).toBeNull();
@@ -387,5 +388,29 @@ describe("parseReport", () => {
     ]) {
       expect(parseReport(JSON.stringify({ ...FULL, ledger }))).toEqual({ kind: "invalid" });
     }
+  });
+});
+
+describe("parseReport task ids", () => {
+  const LONGEST = `a${"b".repeat(127)}`;
+  const BAD = ["", `${LONGEST}c`, "-lead", "has space", "a/b", "é", "__proto__"];
+  const ids = (entries: { id: string }[]) => entries.map((entry) => entry.id);
+
+  it("drops every entry whose id breaks the board's task id rule and keeps the longest valid one", () => {
+    const entry = (id: string) => ({ id, digest: "d", occurrence: 1 });
+    const all = [LONGEST, ...BAD].map(entry);
+    const report = ok({
+      ...FULL,
+      tasks: all,
+      queued: all,
+      holds: all,
+      status_decisions: all,
+      closed_holds: all,
+    });
+    expect(ids(report.tasks)).toEqual([LONGEST]);
+    expect(ids(report.queued)).toEqual([LONGEST]);
+    expect(ids(report.holds)).toEqual([LONGEST]);
+    expect(ids(report.status_decisions)).toEqual([LONGEST]);
+    expect(ids(report.closed_holds)).toEqual([LONGEST]);
   });
 });

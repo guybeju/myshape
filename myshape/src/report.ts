@@ -1,6 +1,7 @@
 // The JSON report the aggregator's feed prints for one home (contracts
 // section 4), parsed and checked once where it enters the service.
 import { isRecord, stringField, stringRecord, textField } from "./files.js";
+import { isValidItemId } from "./todos.js";
 
 export const REPORT_SCHEMA = 1;
 
@@ -195,8 +196,17 @@ function bucketOf(value: unknown): HoldBucket {
   return HOLD_BUCKETS.find((name) => name === value) ?? "unknown";
 }
 
-function parseHold(raw: Record<string, unknown>): ReportHold | null {
+/**
+ * The record's `id` when it is a task id the board can use (the id grammar,
+ * at most 128 characters); null for any other value, so that entry is dropped.
+ */
+function taskIdOf(raw: Record<string, unknown>): string | null {
   const id = stringField(raw, "id");
+  return id !== null && isValidItemId(id) ? id : null;
+}
+
+function parseHold(raw: Record<string, unknown>): ReportHold | null {
+  const id = taskIdOf(raw);
   if (id === null) return null;
   const word = raw["hold_bucket"];
   const bucket = bucketOf(word);
@@ -221,7 +231,7 @@ function epochOrNull(value: unknown): number | null {
 }
 
 function parseClosedHold(raw: Record<string, unknown>): ClosedHold | null {
-  const id = stringField(raw, "id");
+  const id = taskIdOf(raw);
   const digest = stringField(raw, "digest");
   const occurrence = raw["occurrence"];
   if (id === null || digest === null || typeof occurrence !== "number") return null;
@@ -267,9 +277,9 @@ function parseLedger(raw: unknown): ReportLedger | null {
   };
 }
 
-/** Builds an entry from a record that must carry a string `id`. */
+/** Builds an entry from a record that must carry a valid task `id`. */
 function withId<T>(raw: Record<string, unknown>, build: (id: string) => T): T | null {
-  const id = stringField(raw, "id");
+  const id = taskIdOf(raw);
   return id === null ? null : build(id);
 }
 
