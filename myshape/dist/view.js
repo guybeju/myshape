@@ -619,8 +619,10 @@ export function turnsTaken(waiting, holds) {
 }
 /** The notice that a decision's turn came: one fixed sentence, with how many still wait. */
 export function turnNoticeText(view, hold, stillWaiting) {
-    const name = hold.topic === null ? undefined : view.topics[hold.topic]?.name;
-    const where = name === undefined ? "沒有議題" : `議題「${name}」，id ${hold.topic}`;
+    // A hold's topic comes from the placer, which only names topics the view lists.
+    const where = hold.topic === null
+        ? "沒有議題"
+        : `議題「${view.topics[hold.topic].name}」，id ${hold.topic}`;
     const rest = stillWaiting > 0 ? `；還有 ${stillWaiting} 個決定排隊` : "";
     return `看板上輪到 ${hold.home}/${hold.task} 的決定了（${where}）${rest}`;
 }
