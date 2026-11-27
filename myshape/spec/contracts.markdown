@@ -340,7 +340,10 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
                      "source": "<經哪裡，直接記下的話是空字串>", "digest": "…", "occurrence": 1,
                      "opened_at": 1795400000, "closed_at": 1795400600 } ],
   "closed_cursor": { "status": "start|delta|continuity-broken|absent", "to_offset": 0,
-                     "to_prefix_sha256": "-", "more": false }
+                     "to_prefix_sha256": "-", "more": false },
+  "metrics": { "v": 1, "stale_after_s": 600, "groups": [ { "id": "…", "label": "…", "state": "ok", "note": "" } ],
+               "items": [ { "id": "…", "group": "…", "label": "…", "value": 37, "unit": "%",
+                            "resets_at": "<ISO 時間>", "measured_at": "<ISO 時間>", "severity": "normal" } ] }
 }
 ```
 
@@ -370,6 +373,21 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 看板讀到 `schema` 不是 1 的回報，把那個 home 標成版本不相容、不用它的資料。
 
 first mate 這一側怎麼產生這份回報（`fm-topic-board-read.sh` 讀 backlog、snapshot 與 secondmate 登記檔，再加上 `aggregator`、`ledger_hint` 與遠端 home 的讀取間隔），在 [adapter](../../fm-board/spec/adapter.markdown) 第 3 節。
+
+### 4.1 狀態數字（`metrics`）
+
+每個 home 的回報可以帶一個選用的 `metrics` 區塊：aggregator 自己選的一串數字，看板在首頁的「用量」面板照樣顯示，從不因為它們做任何事（設計與理由在 [status-metrics](status-metrics.markdown)）。`schema` 還是 1；沒有這個欄位（或是 `null`）就是沒有數字。
+
+- 區塊要是物件，`v` 是 1；不是物件或 `v` 不是 1 時整個區塊不用，頁面寫一行原因，回報的其他部分照常使用。
+- `stale_after_s`（選用）：一筆量了多久之後算過時，秒。不是數字就是看板的預設 900；超出 10 到 86400 就用最接近的邊界。
+- `groups`（選用，最多 16 個）：`id`（必要）、`label`（必要）、`state`（選用，`ok`、`stale`、`unavailable`，預設 `ok`）、`note`（選用，一行說明，預設空字串）。
+- `items`（選用，最多 64 筆）：`id`（必要）、`label`（必要）、`value`（必要，有限的數字）、`unit`（選用，預設空字串；`%` 表示百分比）、`group`（選用，要是 `groups` 裡的一個 `id`）、`resets_at`、`measured_at`（選用，量的時間）、`severity`（選用，`normal`、`warn`、`critical`，預設 `normal`）、`stale_after_s`（選用，這一筆自己的期限，範圍同上）。
+- 字串：`id` 是 `[A-Za-z0-9_][A-Za-z0-9._:-]*`、最長 128 字元；`label` 是 1 到 80 個碼位的一行字，`note` 最多 200、`unit` 最多 16，不能有控制字元或改變文字方向的字元，頭尾的空白去掉。時間是 ISO 8601、帶 `Z` 或時差，例如 `2026-11-27T15:46:51.000Z`。
+- 數值：`unit` 是 `%` 時是 0 到 100，其他的絕對值最多 10<sup>12</sup>。
+- 一筆或一組只要有一個欄位不合格就整筆不用；超過上限的、`id` 重複的（留第一個）、指到不存在的組的，也不用。不用的筆數與第一筆的原因寫在面板上，其他的照常顯示。不認得的欄位略過。
+- 看板照自己的時鐘判斷每一筆是不是現在的數字：所屬的組不是 `ok`、沒有 `measured_at`、`measured_at` 比看板的時鐘晚超過 60 秒、`resets_at` 已經到了，或量了超過期限，都標成過時，並寫出原因。`resets_at` 已經到了的寫「重置時間已過」，不倒數到負的。
+- 頁面照回報的順序列：每個有區塊的 home（主 home 在前），每個組照 `groups` 的順序、組裡照 `items` 的順序，沒有組的在最後。`severity` 只改那一行的樣式；看板從不因為一個數字派工、hold、改順序、改議題的顏色、放卡到使用者面前或送任何通知，檢視與生命週期的判斷也不讀它們。
+- 看板不存這些數字：它們只跟著每個 home 最近一次的回報。
 
 ## 5. 燈號
 
@@ -606,6 +624,8 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 生命週期的期限 | 使用者的設定，預設與範圍在 [lifecycle](lifecycle.markdown) 第 5 節（`myshape/src/lifecycle-settings.ts`）；每次讀好一個 home 之後與每 30 秒的時鐘判斷一次 |
 | `service.log` 輪替 | 啟動時超過 1 MiB 就改名成 `service.log.1`，只留一份 |
 | 一次讀取的輸出 | 最多 4 MiB |
+| 狀態數字（第 4.1 節） | 每個 home 最多 16 個組、64 筆；`stale_after_s` 預設 900 秒，範圍 10 到 86400 秒；量的時間最多可以比看板的時鐘晚 60 秒 |
+| 首頁有狀態數字時重畫 | 每 30 秒，讓「多久以前」與倒數跟著走 |
 
 ## 11. 看板依賴的框架介面
 

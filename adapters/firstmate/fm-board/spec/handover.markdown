@@ -25,6 +25,7 @@ shellcheck -x bin/fm-board.sh bin/fm-board-lib.sh bin/fm-board-io-lib.sh bin/fm-
 ```
 
 - 這一側的測試 source 上游的 `tests/lib.sh`，再 source `fm-board/test/helpers.sh`：它先載入看板的測試套件 `myshape/test/kit/helpers.sh`，再加上建 first mate 的 home 與替身的那幾個（`tb_write_registry`、`tb_seed_unstarted`、`tb_make_fake_root`）。`dispatch-plan/test` 只用測試套件。
+- `bin/fm-board.sh feed main` 會跑 quota-axi 讀這台機器的 Claude 用量，所以 `helpers.sh` 把替身 `fm-board/test/quota-axi/quota-axi` 放在 `PATH` 最前面，這一側沒有測試讀到真的用量；替身怎麼回答寫在它的檔頭，各情況的輸出在它旁邊的目錄裡，quota-axi 改版時照那裡寫的指令重錄。
 - `stage-1-read.sh` 測彙整腳本 `bin/fm-topic-board-read.sh`，`stage-2-startup.sh` 測 session start 的檢查 `bin/fm-topic-session-start.sh`，跑的是真的框架指令。
 - 彙整腳本讀之前的能力檢查（[adapter](adapter.markdown) 第 3.1 節）讀它旁邊的 `bin/fm-fleet-snapshot.sh` 的文字。測試換掉 snapshot 的替身要留著 `fm_backlog_archived_done_ids` 這個字（`tb_seed_unstarted` 的替身有），不然讀取會是 exit 4，不是替身要測的結果；`stage-1-read.sh` 與 `stage-1-feed.sh` 各有一個沒有這個字的替身，測 exit 4 與那一行。
 - 第三到五段（`stage-3-data.sh`、`stage-4-writes.sh`、`stage-5-http.sh`、`stage-5-page.sh`）跑接上真的 `bin/fm-board.sh` 的看板與框架的替身；看板只接替身 aggregator 的版本是看板自己的第七段。`stage-2-topics-tag.sh` 跑看板改過的議題（合併過的 id、開服務時確認的提議）接上 `fm-board.sh tag`。

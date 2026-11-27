@@ -101,6 +101,13 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
   `decisions_at_once` 是 1：看板一次只顯示一個要使用者回答的決定，其他的排隊，輪到時才顯示（contracts C10）。只有 captain hold（`holds[]`）是決定；等別人的 hold（`parked`、`external` 等）不是，不進 `holds[]`，不算在這個數字裡。
 - `ledger_enabled` 是 `false` 的 home 加 `ledger_hint`，一行「home <id> 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 <指令>」；指令是 `bin/fm-board.sh setup`（主 home）、`bin/fm-board.sh --in-home <id> setup`（同機）或 `bin/fm-on.sh <id> fm-board.sh setup`（遠端）。
 - `secondmates[]` 裡遠端的 secondmate 加 `read_every_s: 60`、`read_timeout_s: 400`，所以遠端的 home 讀得和以前一樣慢；`remote` 與 `home` 兩個欄位照舊留著，給還在直接讀彙整腳本的舊版看板。
+- 主 home 的回報加 `metrics`（[contracts](../../myshape/spec/contracts.markdown) 第 4.1 節）：這台機器的 Claude 用量，彙整腳本成功之後才讀，`bin/fm-board-io-lib.sh` 的 `fmb_usage_metrics`。
+  quota-axi 是唯一的來源，跑一次 `quota-axi --provider claude --json --no-credential-refresh --max-age 300`，stdin 是 `/dev/null`，最多 10 秒（`fm_run_timed`）；從不加 `--allow-keychain-prompt`、`--allow-claude-inference` 或 `--full`，這一側也不讀任何憑證或 token。
+  quota-axi 回報的每個 Claude lane 一組：`id` 是 `claude:<accountKey>`，名稱是「Claude」（`default`）或「Claude · <accountKey>」，只有新鮮的讀數是 `ok`，quota-axi 說 `stale` 的是 `stale`，其他是 `unavailable`，說明是「quota-axi：<status>（<error>）」。
+  `ok` 的組裡每個有 `percentRemaining` 的時段一筆：`id` 是 `<組的 id>.<時段 id>`，名稱是「5 小時」「7 天」或 quota-axi 的名稱，值是用了的百分比（100 減 `percentRemaining`，到小數一位），`resets_at` 是它的 `resetsAt`，`measured_at` 是 lane 的 `state.refreshedAt`（沒有時是報告的 `generatedAt`），用了 80% 起是 `warn`、95% 起是 `critical`；`stale_after_s` 是 600。
+  quota-axi 的其他輸出（例如 `remedyCommand`，裡面有路徑）不交出去。
+  沒有 quota-axi、10 秒內沒回答、exit 不是 0 或 1（1 是每個 provider 都讀不到，報告照印）、輸出讀不懂時，`metrics` 只有一個 `unavailable` 的組 `claude`，說明寫原因；回報的其他部分照樣交出，exit code 不變。
+  secondmate 的 home 不帶，也不跑 quota-axi：同機的和主 home 是同一組帳號，遠端的這一版不推。看板只給程式五個環境變數，所以 `QUOTA_AXI_CLAUDE_PROFILES` 到不了 quota-axi，看板上只有這台機器預設的那一個 Claude 帳號（[狀態數字](../../myshape/spec/status-metrics.markdown)「已知的限制」）。
 
 彙整腳本 `fm-topic-board-read.sh` 的輸出（contracts 第 4 節的形狀）：
 
@@ -117,7 +124,7 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 - `secondmates[]` 只在主 home 的輸出裡有，資料取自上游的 `fm-secondmate-registry-lib.sh` 逐行解析 `data/secondmates.md`。
 - 腳本自己設 `FM_CREW_STATE_NO_FORGE=1`。
 
-測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4、`test_a_missing_capability_is_exit_4` 的三種 home 缺封存 blocker 修正、`test_closed_decisions` 的游標與封存）；彙整腳本的能力檢查不執行 snapshot、不寫 home：`stage-1-read.sh` 的 `test_a_snapshot_without_the_archive_fix_is_exit_4`。
+測試：`fm-board/test/stage-1-feed.sh`（每個欄位、和 `myshape/test/contract/report-main.json` 一樣的欄位結構、三種 home、exit 4、`test_a_missing_capability_is_exit_4` 的三種 home 缺封存 blocker 修正、`test_closed_decisions` 的游標與封存，`test_the_main_report_carries_this_machines_claude_usage` 等四個測 `metrics`）；彙整腳本的能力檢查不執行 snapshot、不寫 home：`stage-1-read.sh` 的 `test_a_snapshot_without_the_archive_fix_is_exit_4`。
 
 ### 3.2 `deliver`
 
@@ -227,7 +234,8 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 | `config/fleet-ledger` 存在與否 | `fm-topic-board-read.sh` | 檔案存在就是這個 home 的帳本開著（由 first mate 這一側的 `fm-board.sh setup` 建立） | `stage-3-data.sh` 的 `test_home_status` |
 | `bin/fm-primary-scope-lib.sh` 的 `fm_root_is_secondmate_home <home>` | `fm-topic-board-read.sh`、`fm-topic-session-start.sh` | 回傳值分辨 secondmate home（標記檔 `.fm-secondmate-home`） | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home`；`stage-2-startup.sh` 的 `test_secondmate_home_gets_nothing` |
 | `bin/fm-secondmate-registry-lib.sh` 的 `secondmate_registry_parse_line`（設 `SECONDMATE_REGISTRY_ID`、`_HOME`、`_REMOTE`）與 `secondmate_registry_field <登記檔> <id> remote\|home` | `fm-topic-board-read.sh`，經 `fm-board-lib.sh` | `data/secondmates.md` 每個 `- ` 開頭的行解析出 id、home、是不是遠端 | 真的：`stage-1-read.sh` 的 `test_secondmates_and_in_home` |
-| `bin/fm-timeout-lib.sh` 的 `fm_run_timed <秒> <指令…>` 與 `fm_timed_out <exit code>` | `fm-topic-session-start.sh` | 指令超過秒數就被停下，回 `fm_timed_out` 認得的 exit code；其他時候回指令自己的 exit code | 真的：`stage-2-startup.sh` 全部（沒有逾時的情況） |
+| `bin/fm-timeout-lib.sh` 的 `fm_run_timed <秒> <指令…>` 與 `fm_timed_out <exit code>` | `fm-topic-session-start.sh`、`fm-board.sh feed main`（quota-axi） | 指令超過秒數就被停下，回 `fm_timed_out` 認得的 exit code；其他時候回指令自己的 exit code | 真的：`stage-2-startup.sh` 全部（沒有逾時的情況）；`stage-1-feed.sh` 的 `test_usage_that_cannot_be_read_shows_as_such`（替身 quota-axi 逾時） |
+| `quota-axi --provider claude --json --no-credential-refresh --max-age 300`（不是框架的指令，是上游工具清單裡的工具；沒有也照常回報） | `fm-board.sh feed main` | exit 0 或 1 時 stdout 是一個 JSON 物件：`generatedAt`，`providers[]` 的 `provider`、`accountKey` 或 `accountKeys[0]`、`state.status`、`state.stale`、`state.refreshedAt`、`state.error`，`windows[]` 的 `id`、`label`、`percentRemaining`、`resetsAt`（0.1.69 的 `--json`，schema 5 與 6）；其他 exit 是失敗 | 替身：`fm-board/test/quota-axi/quota-axi`，答的是 0.1.69 照 snapshot 檔印出的輸出（`stage-1-feed.sh`、`stage-5-page.mjs`）。quota-axi 改了 `--json` 的形狀，測試不會失敗 |
 | `data/backlog.md` 的項目行格式 | 經 snapshot 間接讀；看板自己不解析 | 測試的 backlog 是照這個格式手寫的；hold 的原因用 `fm-hold-v1:<base64>` 編碼時由 snapshot 解回原文 | `stage-4-writes.sh` 的 `test_hands_on_items`（編碼過的原因）；`stage-5-page.sh` |
 
 snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從看板上消失或顯示成未知，不會報錯；`fm-topic-board-read.sh` 讀它們）：
