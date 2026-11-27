@@ -535,6 +535,8 @@ test_plain_work() {
   assert_equals "h-dated:false h-live:true h-none:true h-text:true" \
     "$(jq -r '[.holds[] | select(.home == "main") | "\(.task):\(.live)"] | sort | join(" ")' <<< "$state")" \
     "the bucketless hold must be live and the dated one deferred"
+  assert_equals false "$(jq -r '[.holds[].waits_turn] | any' <<< "$state")" \
+    "an aggregator that sets no decisions_at_once has every live decision shown, none waiting its turn (C10)"
   assert_equals "A,B" "$(jq -r '.holds[] | select(.task == "h-live") | .options | join(",")' <<< "$state")" "options only where the line is"
   assert_equals "" "$(jq -r '.holds[] | select(.task == "h-text") | .options | join(",")' <<< "$state")" "no options without the line"
   assert_equals "j9|solo|null" "$(jq -r '.queued[] | select(.task == "j9") | "\(.task)|\(.topic)|\(.waiting)"' <<< "$state")" "the queued item must be under its hinted topic"

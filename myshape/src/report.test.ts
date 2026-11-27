@@ -231,8 +231,24 @@ describe("parseReport", () => {
       aggregator: { name: "plain", label: "Plain", update_hint: 5 },
     });
     expect(report.ledger_hint).toBe("turn the ledger on");
-    expect(report.aggregator).toEqual({ name: "plain", label: "Plain", update_hint: null });
+    expect(report.aggregator).toEqual({
+      name: "plain",
+      label: "Plain",
+      update_hint: null,
+      decisions_at_once: null,
+    });
     expect(ok({ ...FULL, aggregator: "plain" }).aggregator).toBeNull();
+  });
+
+  it("caps the decisions shown only at a positive whole number, else not at all", () => {
+    const cap = (value: unknown) =>
+      ok({ ...FULL, aggregator: { name: "plain", decisions_at_once: value } }).aggregator
+        ?.decisions_at_once;
+    expect(cap(1)).toBe(1);
+    expect(cap(3)).toBe(3);
+    for (const value of [0, -1, 1.5, "1", null, true, Number.MAX_SAFE_INTEGER + 1])
+      expect(cap(value)).toBeNull();
+    expect(ok({ ...FULL, aggregator: { name: "plain" } }).aggregator?.decisions_at_once).toBeNull();
   });
 
   it("fills defaults for everything optional", () => {

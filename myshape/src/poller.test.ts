@@ -267,7 +267,7 @@ describe("reading the main home", () => {
 
   it("hands over the root report's aggregator block, and no other home's", async () => {
     const s = setup();
-    const aggregator = { name: "plain", label: "plain", update_hint: null };
+    const aggregator = { name: "plain", label: "plain", update_hint: null, decisions_at_once: 1 };
     s.answers.set("main", () => report({ secondmates: SECONDMATES, aggregator }));
     s.answers.set("sm1", () => report({ aggregator: { name: "x", label: "x" } }));
     await s.poller.refreshAll();

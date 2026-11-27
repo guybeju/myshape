@@ -138,6 +138,8 @@ async function connected(page) {
             queued !== undefined && queued.querySelector("select, button, input") === null].join(",");
   })()`);
   if (unsorted !== "true,true,true") throw new Error(`未分類 must offer filing, answers, and nothing for a queued item: ${unsorted}`);
+  // plain sets no decisions_at_once (contracts C10), so both live decisions show and none waits its turn.
+  if (await page.evaluate(has("個決定排隊"))) throw new Error("with no cap no decision may wait its turn");
 
   // AT10.2: the topic page has the timeline with the summary's PR link, the
   // worker question with no answer box, and the queued list with its waiting text.

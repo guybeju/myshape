@@ -115,6 +115,11 @@ export interface Aggregator {
   label: string | null;
   /** One line the version banners add after the board's own words. */
   update_hint: string | null;
+  /**
+   * How many live decisions the board shows at a time; the rest wait their
+   * turn, folded. Null means no cap, every live decision shown.
+   */
+  decisions_at_once: number | null;
 }
 
 export interface Bounds {
@@ -300,12 +305,19 @@ function parseFeedHome(raw: Record<string, unknown>): FeedHome | null {
   };
 }
 
-function parseAggregator(raw: unknown): Aggregator | null {
+/** A cap is a positive whole number; anything else is no cap, so no decision is ever hidden by mistake. */
+function capOf(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : null;
+}
+
+/** The aggregator block of a root report, or of the board's own copy of the last one. */
+export function parseAggregator(raw: unknown): Aggregator | null {
   if (!isRecord(raw)) return null;
   return {
     name: stringField(raw, "name"),
     label: stringField(raw, "label"),
     update_hint: stringField(raw, "update_hint"),
+    decisions_at_once: capOf(raw["decisions_at_once"]),
   };
 }
 

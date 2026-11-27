@@ -326,7 +326,8 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
   "ledger": { "status": "delta|continuity-broken|absent",
               "to_offset": 0, "to_prefix_sha256": "-", "more": false, "lines": ["<一行事件>"] },
   "ledger_hint": "<選用：帳本沒開時要顯示的一行>",
-  "aggregator": { "name": "…", "label": "<頁面怎麼稱呼它>", "update_hint": "<選用：版本橫幅後面的一句>" },
+  "aggregator": { "name": "…", "label": "<頁面怎麼稱呼它>", "update_hint": "<選用：版本橫幅後面的一句>",
+                  "decisions_at_once": 1 },
   "secondmates": [ { "id": "…", "read_every_s": 60, "read_timeout_s": 400 } ],
   "closed_holds": [ { "id": "…", "title": "…", "origin": "…", "mode": "answered", "answer": "…", "label": "…",
                      "source": "<經哪裡，直接記下的話是空字串>", "digest": "…", "occurrence": 1,
@@ -348,7 +349,8 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 - **C7** `topics{}` 是 task 到它的議題標記，每行 `<議題 id> <ISO 時間>`，最後一行有效（第 3.2 節）；還沒有標記的排隊項目用 `queued[].topic_hint` 放到議題底下。
 - **C8** 根 home 是 `main`；其他的 home 只從根 home 回報的 `secondmates[]` 來，用 `feed <id> <offset> <sha>` 讀。`summary`、`which` 的 `--home` 一定要是其中之一。
 - **C9** 其他 home 的 `code_commit` 和根 home 不同時，看板顯示「版本和主 home 不同」，它的資料照用。
-- **C10** 根 home 回報裡的 `aggregator{name, label, update_hint}` 與每個 home 的 `ledger_hint` 都可以省略。沒有 `label` 時頁面稱它「aggregator」；`ledger_enabled` 是 `false` 而且有 `ledger_hint` 時，頁面把那一行當成橫幅，沒有就不顯示。
+- **C10** 根 home 回報裡的 `aggregator{name, label, update_hint, decisions_at_once}` 與每個 home 的 `ledger_hint` 都可以省略。沒有 `label` 時頁面稱它「aggregator」；`ledger_enabled` 是 `false` 而且有 `ledger_hint` 時，頁面把那一行當成橫幅，沒有就不顯示。
+  `decisions_at_once` 是頁面一次顯示幾個 live 的待決事項，要是正整數；省略或不是正整數就是不設上限，每一個 live 的都顯示（設這個欄位之前的樣子）。設了時，跨所有 home 照[第三段](stage-3-data.markdown)的順序，前面這麼多個照常顯示、可以作答，其他 live 的是「決定排隊」：頁面只寫有幾個，不顯示問題、沒有作答鈕，輪到時才顯示；暫緩的（`aged`、`dated`、`blocked`）不算在內。輪到一個排隊中的待決事項時，看板送一則 `decision.front` 通知（第 7.1 節）。哪些事算待決事項、上限設多少，由 aggregator 決定。
 - **C11** exit 0 印一份回報；exit 4 是這個 home 無法回報，stderr 一行當它的橫幅；其他 exit 保留上一份回報直到過期。
 - **C12** `holds[].hold_set` 是 hold 開始的時間，看板用它當 `hold.opened` 的時間（第 3.3 節）；沒有或只有日期時看板用讀到的時間。
 - **C13** `closed_holds[]` 是這個 home 已關的待決事項：backlog 裡還在的每一筆，加上上一次給的游標之後才搬進封存的。每一筆用 (`id`, `digest`) 認；`mode`、`answer`、`label`、`source` 是怎麼關的，`occurrence` 是那個 task 的第幾次 hold，`opened_at`、`closed_at` 是 epoch 秒，不知道時是 `null`。
@@ -506,9 +508,10 @@ deliver 的程式能執行之後，`waiting` 的寫入照稽核紀錄的順序�
 
 - `answer` 的 `mode` 照 hold 記下的處理方式（第 8 節），不是使用者選的；`question_sha256` 是問題全文的 SHA-256。
 - `tag` 的 `last_tag_line` 是看板送出時看到的那個 task 最後一行議題標記，沒有就是空字串。重試之前看板先重讀那個 home：標記已經是這個議題就算送達，已經被別人改成別的就算別處已處理。
-- `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）、`todo.closed`（一個要你動手的項目離開看板）、`schedule.upcoming`（一場快到了）、`schedule.due`（一場的時間到了）、`schedule.missed`（看板沒在跑時一場整個過去了）、`schedule.closed`（使用者在頁面上結束或跳過一場已經送過通知的時段）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
+- `notice` 的 `event`：`topic.dispatchable`（議題離開「待辦」或重開，之後 30 秒沒再動）、`topic.merged`、`topic.archived`、`topic.kept`（先不關）、`topic.confirmed`（舊版留下的提議在啟動時確認）、`todo.claimed`（使用者按了做完了）、`todo.closed`（一個要你動手的項目離開看板）、`schedule.upcoming`（一場快到了）、`schedule.due`（一場的時間到了）、`schedule.missed`（看板沒在跑時一場整個過去了）、`schedule.closed`（使用者在頁面上結束或跳過一場已經送過通知的時段）、`decision.front`（看板看到在排隊的一個待決事項輪到了，C10）。`text` 寫的是發生了什麼，例如「議題「帳務」重開，排在「高」最後，現在可派」，不寫要跑什麼。
 - 排程的通知：`text` 是固定的句子，填議題現在的名稱與 id、當地時間、這一場的鍵與 rt 的固定詞，不放排程的標題，例如「排程「週會」11-30（一）10:00 開始，還有 15 分鐘（議題 weekly-sync，這一場 weekly-sync:20261130T0200Z）（hard-rt）」、「排程「週會」11-30（一）10:00 時間到了（議題 …，這一場 …）（晚了 7 分鐘）（hard-rt）」、「排程「看信」11-27（五）06:00 錯過了：看板當時沒在跑，這一場沒有通知（議題 …，這一場 …）（soft-rt）」、「排程「週會」11-30（一）10:00 那一場，使用者在看板上結束了，不用準備了（議題 …，這一場 …）」。rt 是 `none` 時不加詞。另帶 `topic {id, name}` 與 `occurrence`：`key`、`at`（UTC）、`local`（例如 `2026-11-30T10:00+08:00`）、`phase`（`pre`、`start`、`missed`、`closed`）、`rt`，時鐘送的另有 `expires_at`，`pre` 與 `start` 另有 `late_min`。first mate 那一側只把 `text` 轉成筆記。
 - 時鐘送的三種用固定的 `id` `w-s-<排程 id>-<T 的 UTC>-<pre|start|missed>`，同一個 id 不會交兩次。過期就不交出：`schedule.upcoming` 到 T、`schedule.due` 到那一場的 `closes_by`、`schedule.missed` 到同一個排程下一場的「快到了」（提前分鐘數是 0 時到下一場的 T）；每一次嘗試之前、從等待放行之前、重啟後接續之前與重送之前都檢查，過期的記成 `expired`。
+- 輪到一個待決事項的通知：`text` 是固定的句子，填 home/task、議題現在的名稱與 id（沒有議題寫「沒有議題」）與還有幾個在排隊，不放待決事項的標題與問題，例如「看板上輪到 sm1/call-sm 的決定了（議題「帳務重構」，id billing）；還有 2 個決定排隊」，沒有在排隊的就不加分號之後那一段；有議題時另帶 `topic {id, name}`。只有看板這個程序看過它在排隊、現在輪到它時才送，所以待決事項一開就在前面的不送，沒設上限時也不送；看板重啟之前看過的不記得。`id` 是固定的 `w-d-<home、task 與問題全文的 SHA-256 前 16 位>`，同一個待決事項只交一次，重啟之後也一樣。
 - 要你動手的通知帶 `item`：項目的 `id`、`title`，與放上看板時給的 `ref`（沒給是空字串）。`todo.closed` 另帶 `by`（`captain` 是使用者在頁面上按的，`aggregator` 是 aggregator 自己的 `todo done` 或 `todo obsolete`）與 `words`（`做完了`、`不做了`、`撤下`）。
 - 看板在有動作紀錄之前寫下的寫入（稽核紀錄裡帶 `plan` 而不是 `action` 的那些）不再讀：讀稽核紀錄時略過，不接著送，頁面上也不列，所以不會顯示成沒送完。
 

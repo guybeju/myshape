@@ -97,7 +97,8 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 
 讀到的回報原樣交給看板，另外加上：
 
-- 主 home 的回報加 `aggregator`：`{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。"}`。
+- 主 home 的回報加 `aggregator`：`{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。","decisions_at_once":1}`。
+  `decisions_at_once` 是 1：看板一次只顯示一個要使用者回答的決定，其他的排隊，輪到時才顯示（contracts C10）。只有 captain hold（`holds[]`）是決定；等別人的 hold（`parked`、`external` 等）不是，不進 `holds[]`，不算在這個數字裡。
 - `ledger_enabled` 是 `false` 的 home 加 `ledger_hint`，一行「home <id> 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 <指令>」；指令是 `bin/fm-board.sh setup`（主 home）、`bin/fm-board.sh --in-home <id> setup`（同機）或 `bin/fm-on.sh <id> fm-board.sh setup`（遠端）。
 - `secondmates[]` 裡遠端的 secondmate 加 `read_every_s: 60`、`read_timeout_s: 400`，所以遠端的 home 讀得和以前一樣慢；`remote` 與 `home` 兩個欄位照舊留著，給還在直接讀彙整腳本的舊版看板。
 
@@ -125,6 +126,7 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 | --- | --- | --- | --- |
 | `message` | — | `fm-inbox.sh note --request-id tb-<id> -`，stdin「［議題：<名稱>（<id>）］」換行後接文字 | exit 0 已送達；3 重試（存了但沒叫醒 first mate，同一個 id 重放會補叫醒）；其他失敗 |
 | `notice` | — | 同上，stdin 是 `text` | 同上 |
+| `notice`，`event` 是 `decision.front` | — | 照 `notice`：一則筆記，stdin 是 `text`（「看板上輪到 <home>/<task> 的決定了（…）」），request id 是 `tb-w-d-<16 位十六進位>` | 照 `notice` |
 | `notice`，`event` 是 `todo.closed` | — | 使用者按的照 `notice`；aggregator 自己關的什麼都不跑；不看 `item.ref` | 使用者按的照 `notice`；aggregator 自己關的已送達；`item.id` 格式不對是失敗 |
 | `direct` | `main` | `fm-send.sh <task> <文字>` | 0 已送達；輸出有 `is not resolvable` 是失敗「這個 worker 已經結束或找不到，訊息沒有送出。」；其他失敗 |
 | `direct` | secondmate | `fm-send.sh <id> --fire-and-forget <id 的 SHA-256 前 16 位> 轉給 <task>：<文字>` | 0 已送達；3 而且是遠端的是重試；其他失敗 |
@@ -137,9 +139,10 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 - `home` 不是 `main` 也不是登記的 secondmate、紀錄不是合法的 JSON、`kind` 不認得、欄位不完整：結果都是失敗。
 - 給 worker 的文字以 `/`、`$`、`!` 或 `-` 開頭也是失敗；看板本來就擋，這裡再擋一次，因為 `fm-send.sh` 不收 `--` 終止符。
 
+`decision.front` 是看板在排隊的決定輪到時送的（contracts 第 7.1 節）；這一側不另外處理，和其他通知一樣是一則筆記。
 這些通知的內容和改版前一樣（contracts 第 7 節改版前是看板自己跑這些指令）；差別只有「議題變成可派」的通知改成說發生了什麼（「議題「X」離開「待辦」，排在「一般」第 3，現在可派」，規則第 5 行「看板通知議題可派時也重新評估」照樣適用），不再寫「請跑 order 重新評估」，和每一個頁面上的決定各送一則。
 
-測試：`fm-board/test/stage-2-deliver.sh`（每一種紀錄對三種 home 跑的指令、參數、stdin 與 `FM_HOME`，每一種結果，通知的內容逐位元組；裝了 `tasks-axi` 時用真的 `fm-captain-hold.sh` 作答一次）；第三到五段的看板測試經 `tb_make_fake_root` 跑真的 `fm-board.sh`。
+測試：`fm-board/test/stage-2-deliver.sh`（每一種紀錄對三種 home 跑的指令、參數、stdin 與 `FM_HOME`，每一種結果，通知的內容逐位元組，`decision.front` 的也是；裝了 `tasks-axi` 時用真的 `fm-captain-hold.sh` 作答一次）；第三到五段的看板測試經 `tb_make_fake_root` 跑真的 `fm-board.sh`。
 
 ### 3.3 看板存項目之前的要你動手
 

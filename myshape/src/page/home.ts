@@ -9,6 +9,7 @@ import {
   closedFold,
   closedTodoEntries,
   holdCard,
+  inFront,
   liveTodos,
   todoCard,
   needsCaptain,
@@ -17,6 +18,7 @@ import {
   summaryRow,
   topicLink,
   topicName,
+  turnFold,
   untaggedQueued,
 } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
@@ -57,7 +59,9 @@ function topicCard(view: View, actions: Actions, id: string, shown: Shown): Chil
   const topic = view.topics[id];
   if (topic === undefined) return null;
   const agents = view.agents.filter((agent) => agent.topic === id);
-  const deciding = view.holds.filter((hold) => hold.topic === id && hold.live).length;
+  const own = view.holds.filter((hold) => hold.topic === id);
+  const deciding = own.filter(inFront).length;
+  const turns = own.filter((hold) => hold.waits_turn).length;
   const doing = liveTodos(view, id).filter(needsCaptain).length;
   const waiting = view.queued.filter((item) => item.topic === id).length;
   const unsent = view.writes.filter(
@@ -75,6 +79,7 @@ function topicCard(view: View, actions: Actions, id: string, shown: Shown): Chil
       waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null,
       doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null,
       deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null,
+      turns > 0 ? h("span", { class: "pill" }, `決定排隊 ${turns}`) : null,
       topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"),
       unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null,
     ),
@@ -349,8 +354,9 @@ export function home(page: Page, view: View, actions: Actions): Child {
       "等你決定",
       closeProposals(view, actions, shown),
       mine(view.holds)
-        .filter((hold) => hold.live)
+        .filter(inFront)
         .map((hold) => holdCard(page, view, actions, hold, true)),
+      turnFold(mine(view.holds)),
     ),
     section(
       "最近的結果",

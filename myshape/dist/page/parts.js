@@ -89,6 +89,20 @@ function answerConfirm(page, actions, key, hold) {
 function holdMeta(view, actions, hold, showTopic) {
     return h("div", { class: "meta" }, showTopic ? topicLink(view, hold.topic, actions) : null, h("span", { class: "pill" }, hold.home), h("span", { class: "note" }, hold.task), hold.live ? null : h("span", { class: "pill warn" }, `暫緩：${hold.deferred_reason ?? ""}`), hold.stale ? h("span", { class: "pill warn" }, "可能已過時") : null);
 }
+/** True for a live decision shown now, with its answer buttons; not one waiting its turn. */
+export function inFront(hold) {
+    return hold.live && !hold.waits_turn;
+}
+/**
+ * The line that stands for the decisions waiting their turn: only how many,
+ * no question and no buttons, so only the ones in front can be answered.
+ */
+export function turnFold(holds) {
+    const waiting = holds.filter((hold) => hold.waits_turn).length;
+    if (waiting === 0)
+        return null;
+    return h("p", { class: "note turns" }, `還有 ${waiting} 個決定排隊，輪到時才顯示`);
+}
 /** One backlog item that no worker has been dispatched for. */
 export function queuedRow(item) {
     return h("div", { class: "meta" }, h("b", {}, item.task), h("span", {}, item.title), h("span", { class: "pill" }, item.home), h("span", { class: "note" }, item.waiting === null ? "可以派" : item.waiting));

@@ -553,6 +553,21 @@ test_unknown_notice_event_is_a_note() {
   pass "a notice with an event this side does not know is its text as a note, under tb-<id>"
 }
 
+# The board's notice that a decision's turn came (contracts 7.1, decision.front)
+# is an ordinary note: exactly its text, under tb-<its fixed id>.
+test_decision_front_notice_is_a_note() {
+  local text='看板上輪到 sm1/call-sm 的決定了（議題「帳務重構」，id billing）；還有 2 個決定排隊'
+  fresh
+  assert_equals "$DELIVERED" \
+    "$(deliver "$(jq -c --arg text "$text" '.id = "w-d-0123456789abcdef" | .event = "decision.front" | .text = $text' \
+      "$CONTRACT/action-notice.json")")" \
+    "a decision's turn must be delivered"
+  assert_equals "$(line fm-inbox.sh 'note|--request-id|tb-w-d-0123456789abcdef|-|' "$MAIN" "$text")" \
+    "$(cat "$TB_LOG")" "a decision's turn must run only fm-inbox.sh note, with request id tb-<id>"
+  raw_is fm-inbox.sh "$text" "a decision's turn must reach the note byte for byte"
+  pass "the notice that a decision's turn came is its exact text as a note, under tb-<id>"
+}
+
 # notes_for <home> <request id>: the notes the real inbox holds under that request id, waiting or handled.
 notes_for() {
   grep -rlxF --include='*.note' "request_id=$2" "$1/state/inbox" 2>/dev/null || true
@@ -603,4 +618,5 @@ fm_test_run test_message_and_notice_become_notes test_note_outcomes test_direct_
   test_direct_outcomes test_answer_runs_the_hold_tool_then_a_note test_answer_outcomes \
   test_tag_runs_fm_board_tag test_tag_outcomes test_remote_tag_sends_the_copy_first test_malformed_records_fail \
   test_answer_with_the_real_hold_tool test_closed_item_is_only_a_note \
-  test_unknown_notice_event_is_a_note test_schedule_notice_with_the_real_inbox
+  test_unknown_notice_event_is_a_note test_decision_front_notice_is_a_note \
+  test_schedule_notice_with_the_real_inbox

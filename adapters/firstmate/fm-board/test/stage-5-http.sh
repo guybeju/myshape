@@ -537,6 +537,29 @@ test_decisions_open_and_close_once() {
   pass "a decision answered on the page, one through its intake by hand and one in chat each leave one opening and one closing"
 }
 
+# The adapter shows one decision at a time: a second call, under Login (after
+# Billing in 一般), waits its turn in the state the page gets, and its queued
+# item says so; with it gone again nothing waits.
+test_a_second_decision_waits_its_turn() {
+  cp "$MAIN/data/backlog.md" "$TMP_ROOT/backlog.before"
+  awk '{ print } /^## Queued$/ { print "- [ ] call-2 - Another call (repo: sample) (kind: captain) (hold: 再一個？ 選項：好 | 不要) (hold-kind: captain)"; print "  Captain hold set: 2026-07-24T00:00:00Z" }' \
+    "$TMP_ROOT/backlog.before" > "$MAIN/data/backlog.md"
+  mkdir -p "$MAIN/data/call-2"
+  printf 'login 2026-07-01T00:00:00Z\n' > "$MAIN/data/call-2/topic"
+  api refresh '{}' >/dev/null
+  assert_equals "call-1:false call-2:true" \
+    "$(state '[.holds[] | select(.task | startswith("call-")) | "\(.task):\(.waits_turn)"] | join(" ")')" \
+    "the second live decision must wait its turn behind the first"
+  assert_equals "決定排隊" "$(state '.queued[] | select(.task == "call-2") | .waiting')" \
+    "a queued item whose decision waits its turn must say so"
+  cp "$TMP_ROOT/backlog.before" "$MAIN/data/backlog.md"
+  api refresh '{}' >/dev/null
+  assert_equals "call-1:false" \
+    "$(state '[.holds[] | select(.task | startswith("call-")) | "\(.task):\(.waits_turn)"] | join(" ")')" \
+    "with the second call gone the first is in front again"
+  pass "a second decision waits its turn in the page's state, and its queued item says so"
+}
+
 test_reset_token() {
   t reset-token >/dev/null
   assert_equals 401 "$(status -H "$AUTH" "$BASE/api/state")" "the old token must stop working after a reset"
@@ -546,5 +569,6 @@ test_reset_token() {
 
 fm_test_run test_request_checks test_response_headers_and_exposure test_topic_routes test_merge_takes_two_steps \
   test_answer_takes_two_steps test_messages_and_writes test_quiet_polling_is_not_a_change \
-  test_every_change_leaves_a_record test_decisions_open_and_close_once test_reset_token
+  test_every_change_leaves_a_record test_decisions_open_and_close_once test_a_second_decision_waits_its_turn \
+  test_reset_token
 t stop >/dev/null

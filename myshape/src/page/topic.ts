@@ -8,12 +8,14 @@ import {
   closedTodoEntries,
   draftInput,
   holdCard,
+  inFront,
   light,
   liveTodos,
   todoCard,
   queuedRow,
   questionRow,
   summaryRow,
+  turnFold,
   updateRow,
   when,
   writeRows,
@@ -194,7 +196,8 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
             h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"),
           ),
         ),
-    holds.filter((hold) => hold.live).map((hold) => holdCard(page, view, actions, hold, false)),
+    holds.filter(inFront).map((hold) => holdCard(page, view, actions, hold, false)),
+    turnFold(holds),
     deferred.length === 0
       ? null
       : h(

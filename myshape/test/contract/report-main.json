@@ -157,6 +157,7 @@
   "aggregator": {
     "name": "firstmate",
     "label": "first mate",
-    "update_hint": "請在主 home 跑 /updatefirstmate。"
+    "update_hint": "請在主 home 跑 /updatefirstmate。",
+    "decisions_at_once": 1
   }
 }
