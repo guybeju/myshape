@@ -279,6 +279,12 @@ Ubuntu); without them no worker session starts.
    - `readPaths` (optional) are absolute paths a worker's commands may read
      besides its worktree, such as a toolchain installed under the home
      directory or the git configuration that names its author.
+   - `credentialFile` is the absolute path of the credential file: a regular
+     file (not a symbolic link), owned by you, mode 0600 or stricter, holding
+     exactly one line `ANTHROPIC_API_KEY=<key>`, with nothing else in the file
+     (a final newline is fine; no spaces around `=`, no quotes, no `export`).
+     Anything else and the supervisor does not start, saying which line it
+     wanted.
    - `auth` is `api-key`. The other mode the settings take,
      `subscription-token`, is the author's own use and is not described here.
 4. Start it, from the repository root:
