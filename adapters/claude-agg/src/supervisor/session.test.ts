@@ -5,6 +5,7 @@ import {
   errorResult,
   init,
   maxTurns,
+  promptText,
   rejected,
   result,
   workerOutput,
@@ -171,7 +172,7 @@ describe("PromptStream", () => {
     const stream = new PromptStream("hello");
     const seen: string[] = [];
     const reading = (async () => {
-      for await (const message of stream) seen.push(message.message.content);
+      for await (const message of stream) seen.push(promptText(message));
     })();
     await new Promise((resolve) => setImmediate(resolve));
     stream.close();

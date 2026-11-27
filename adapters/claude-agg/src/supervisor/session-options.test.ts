@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { preToolUseHook, REASONS } from "./guard.js";
-import { CANARY, ENV } from "./harness.test-helper.js";
+import { CANARY, denyReason, ENV, preToolUseInput } from "./harness.test-helper.js";
 import {
   denyRules,
   PLANNER_OUTPUT_SCHEMA,
@@ -83,14 +83,13 @@ describe("workerOptions", () => {
 
   it("runs the guard as its PreToolUse hook", async () => {
     const [hook] = workerOptions(SESSION, CTX).hooks.PreToolUse[0]?.hooks ?? [];
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Read",
-      tool_input: { file_path: "/srv/home/state/myshape/token" },
-      cwd: "/work/t-1",
-    };
+    const input = preToolUseInput(
+      "Read",
+      { file_path: "/srv/home/state/myshape/token" },
+      "/work/t-1",
+    );
     const out = await hook?.(input, "u", { signal: abort.signal });
-    expect(out?.hookSpecificOutput?.permissionDecisionReason).toBe(REASONS.home);
+    expect(denyReason(out)).toBe(REASONS.home);
     expect(typeof preToolUseHook).toBe("function");
   });
 
@@ -114,14 +113,9 @@ describe("workerOptions", () => {
       "Agent",
     ]);
     const [hook] = options.hooks.PreToolUse[0]?.hooks ?? [];
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "git push origin agg/t-1" },
-      cwd: "/work/t-1",
-    };
+    const input = preToolUseInput("Bash", { command: "git push origin agg/t-1" }, "/work/t-1");
     const out = await hook?.(input, "u", { signal: abort.signal });
-    expect(out?.hookSpecificOutput?.permissionDecisionReason).toBe(REASONS.noPush);
+    expect(denyReason(out)).toBe(REASONS.noPush);
     expect(workerOptions(SESSION, CTX).disallowedTools).not.toContain("Agent");
   });
 

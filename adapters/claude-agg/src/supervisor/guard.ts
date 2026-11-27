@@ -15,7 +15,9 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PreToolUseHook, PreToolUseOutput } from "./sdk.js";
+import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
+
+import type { PreToolUseOutput } from "./sdk.js";
 
 export interface GuardContext {
   /** The board home, as an absolute path with symbolic links resolved. */
@@ -262,7 +264,9 @@ export function guardToolUse(
  * anything else returns no decision, so the session's permission mode and
  * rules still decide.
  */
-export function preToolUseHook(ctx: GuardContext): PreToolUseHook {
+export function preToolUseHook(
+  ctx: GuardContext,
+): (input: HookInput, toolUseId: string | undefined) => Promise<PreToolUseOutput> {
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const { tool_name: tool, tool_input: toolInput, cwd } = input;
@@ -271,13 +275,12 @@ export function preToolUseHook(ctx: GuardContext): PreToolUseHook {
         ? guardToolUse(tool, toolInput, cwd, ctx)
         : deny(REASONS.unreadable);
     if (decision.allow) return {};
-    const output: PreToolUseOutput = {
+    return {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
         permissionDecisionReason: decision.reason,
       },
     };
-    return output;
   };
 }

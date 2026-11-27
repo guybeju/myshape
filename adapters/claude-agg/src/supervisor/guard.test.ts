@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import { denyReason, preToolUseInput } from "./harness.test-helper.js";
+
 import {
   existingRealPath,
   guardToolUse,
@@ -202,17 +204,9 @@ describe("what it cannot read", () => {
 
 describe("the hook", () => {
   const hook = preToolUseHook(CTX);
-  const signal = new AbortController().signal;
-
   it("answers deny with the reason", async () => {
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "gh pr merge 1" },
-      cwd: CWD,
-      session_id: "s",
-    };
-    expect(await hook(input, "u1", { signal })).toEqual({
+    const input = preToolUseInput("Bash", { command: "gh pr merge 1" }, CWD);
+    expect(await hook(input, "u1")).toEqual({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
@@ -222,30 +216,22 @@ describe("the hook", () => {
   });
 
   it("gives no decision for an allowed call, so the permission mode decides", async () => {
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "npm test" },
-      cwd: CWD,
-      session_id: "s",
-    };
-    expect(await hook(input, "u1", { signal })).toEqual({});
+    const input = preToolUseInput("Bash", { command: "npm test" }, CWD);
+    expect(await hook(input, "u1")).toEqual({});
   });
 
   it("refuses a call whose cwd it cannot read", async () => {
-    const input = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "ls" },
-      cwd: "relative",
-    };
-    expect((await hook(input, "u1", { signal })).hookSpecificOutput?.permissionDecisionReason).toBe(
-      REASONS.unreadable,
-    );
+    const input = preToolUseInput("Bash", { command: "ls" }, "relative");
+    expect(denyReason(await hook(input, "u1"))).toBe(REASONS.unreadable);
   });
 
   it("ignores other events", async () => {
-    expect(await hook({ hook_event_name: "PostToolUse" }, undefined, { signal })).toEqual({});
+    const input = {
+      ...preToolUseInput("Bash", { command: "gh pr merge 1" }, CWD),
+      hook_event_name: "PostToolUse" as const,
+      tool_response: "",
+    };
+    expect(await hook(input, undefined)).toEqual({});
   });
 });
 

@@ -14,6 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import type { HookJSONOutput, PreToolUseHookInput } from "@anthropic-ai/claude-agent-sdk";
+
 import type { CommandRequest, CommandResult, PlainEnv, RunCommand } from "./commands.js";
 import { removeHomes, writeHome } from "./fixtures.test-helper.js";
 import type { QueryFn, QueryOptions, UserMessage } from "./sdk.js";
@@ -97,6 +99,38 @@ export function workerOutput(outcome: string, extra: Record<string, unknown> = {
 
 export function plan(tasks: { title: string; repo: string; kind: string; prompt: string }[]) {
   return { tasks, question: null, nothing: tasks.length === 0 };
+}
+
+// --- hooks ---------------------------------------------------------------------
+
+/** The input the SDK gives a PreToolUse hook for this tool call. */
+export function preToolUseInput(tool: string, input: unknown, cwd: string): PreToolUseHookInput {
+  return {
+    hook_event_name: "PreToolUse",
+    session_id: "s",
+    transcript_path: "/nowhere/transcript.jsonl",
+    cwd,
+    tool_name: tool,
+    tool_input: input,
+    tool_use_id: "toolu_test",
+  };
+}
+
+/** The reason a hook's output denies the call with, or undefined when it does not. */
+export function denyReason(output: HookJSONOutput | undefined): string | undefined {
+  if (output === undefined || !("hookSpecificOutput" in output)) return undefined;
+  const decision = output.hookSpecificOutput;
+  if (decision?.hookEventName !== "PreToolUse" || decision.permissionDecision !== "deny") {
+    return undefined;
+  }
+  return decision.permissionDecisionReason;
+}
+
+/** The text of a user message the supervisor sent: always a string. */
+export function promptText(message: UserMessage): string {
+  const { content } = message.message;
+  if (typeof content !== "string") throw new Error("the supervisor sends text prompts only");
+  return content;
 }
 
 // --- query ---------------------------------------------------------------------
@@ -193,15 +227,9 @@ async function tryTool(attempt: ToolAttempt, call: Call): Promise<object[]> {
   let hook: string | undefined;
   for (const matcher of call.options.hooks.PreToolUse) {
     for (const each of matcher.hooks) {
-      const input = {
-        hook_event_name: "PreToolUse",
-        tool_name: attempt.tool,
-        tool_input: attempt.input,
-        cwd: call.options.cwd,
-      };
+      const input = preToolUseInput(attempt.tool, attempt.input, call.options.cwd);
       const out = await each(input, id, { signal: new AbortController().signal });
-      const decision = out.hookSpecificOutput;
-      if (decision?.permissionDecision === "deny") hook ??= decision.permissionDecisionReason;
+      hook ??= denyReason(out);
     }
   }
   const ran = rule === undefined && hook === undefined;
@@ -217,7 +245,7 @@ async function tryTool(attempt: ToolAttempt, call: Call): Promise<object[]> {
 
 /** Takes every user message from the stream as the SDK does, recording each. */
 async function readPrompts(prompt: AsyncIterable<UserMessage>, call: Call): Promise<void> {
-  for await (const message of prompt) call.prompts.push(message.message.content);
+  for await (const message of prompt) call.prompts.push(promptText(message));
 }
 
 async function* run(
@@ -230,7 +258,7 @@ async function* run(
   try {
     const reader = prompt[Symbol.asyncIterator]();
     const first = await reader.next();
-    if (!first.done) call.prompts.push(first.value.message.content);
+    if (!first.done) call.prompts.push(promptText(first.value));
     void readPrompts({ [Symbol.asyncIterator]: () => reader }, call);
     if (script === undefined) throw new Error("no script left for this session");
     const [start, ...rest] = script.messages;
