@@ -196,6 +196,38 @@ describe("push_branch", () => {
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
   });
 
+  it("refuses a branch with no commit beyond the default branch's tip, and pushes nothing", async () => {
+    const setup = setUp();
+    const tools = await forge(setup);
+    expect(await tools.pushBranch()).toEqual({
+      ok: false,
+      text: FORGE_TEXT.refused(FORGE_TEXT.noCommits),
+    });
+    expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
+  });
+
+  it("refuses a branch whose commits are all already on the default branch", async () => {
+    const setup = setUp();
+    const sha = commit(setup.worktree, { "src/a.txt": "work\n" });
+    git(setup.main, "push", "-q", "origin", `${sha}:refs/heads/main`);
+    const tools = await forge(setup);
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.noCommits));
+  });
+
+  it("pushes a branch behind the tip that still has a commit of its own", async () => {
+    const setup = setUp();
+    const sha = commit(setup.worktree, { "src/a.txt": "work\n" });
+    const other = join(sandbox, `other-${n}`);
+    git(setup.main, "worktree", "add", "-q", other, "-b", `other-${n}`, "origin/main");
+    commit(other, { "src/b.txt": "elsewhere\n" });
+    git(other, "push", "-q", "origin", "HEAD:refs/heads/main");
+    const tools = await forge(setup);
+    expect(await tools.pushBranch()).toEqual({
+      ok: true,
+      text: FORGE_TEXT.pushed(sha, setup.target.branch),
+    });
+  });
+
   it("refuses when the default branch's tip cannot be fetched", async () => {
     const setup = setUp();
     commit(setup.worktree, { "src/a.txt": "work\n" });
@@ -214,7 +246,7 @@ describe("push_branch", () => {
     expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.noFetch));
   });
 
-  it.each(["merge-base", "diff"])("refuses when %s itself fails", async (step) => {
+  it.each(["merge-base", "rev-list", "diff"])("refuses when %s itself fails", async (step) => {
     const setup = setUp();
     commit(setup.worktree, { "src/a.txt": "work\n" });
     const tools = await forge(

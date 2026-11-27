@@ -41,6 +41,7 @@ export const FORGE_TEXT = {
   noFetch: "抓不到預設分支的內容",
   noBranch: "讀不到這個 task 的分支",
   noHistory: "分支和預設分支沒有共同的歷史",
+  noCommits: "分支沒有比預設分支多的提交",
   compare: "比對 .github/ 失敗",
   github: "分支改到了 .github/；CI 的改動交給 captain",
   pushFailed: (line: string) => `git push 失敗：${line}`,
@@ -190,12 +191,19 @@ export class Forge {
       : fail(FORGE_TEXT.noBranch);
   }
 
-  /** Whether the two commits share history and hold the same .github/ tree. */
+  /**
+   * Whether the two commits share history, the branch has at least one commit
+   * beyond the tip, and both hold the same .github/ tree.
+   */
   private async sameGithub(tip: string, sha: string): Promise<Step<true>> {
     const { pushRepo } = this.target;
     const base = await this.git.git(pushRepo, "merge-base", tip, sha);
     if (base.status === 1) return fail(FORGE_TEXT.noHistory);
     if (base.status !== 0) return fail(FORGE_TEXT.compare);
+    const ahead = await this.git.git(pushRepo, "rev-list", "--count", `${tip}..${sha}`);
+    const count = Number(ahead.stdout.trim());
+    if (ahead.status !== 0 || !Number.isInteger(count)) return fail(FORGE_TEXT.compare);
+    if (count === 0) return fail(FORGE_TEXT.noCommits);
     const diff = await this.git.git(pushRepo, "diff", "--quiet", tip, sha, "--", ".github/");
     if (diff.status === 1) return fail(FORGE_TEXT.github);
     return diff.status === 0 ? { ok: true, value: true } : fail(FORGE_TEXT.compare);
