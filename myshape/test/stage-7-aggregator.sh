@@ -480,7 +480,7 @@ test_fm_summaries() {
   assert_contains "$(f find t1)" "建置" "find t1 must list its topic"
   printf '寫錯了\n' | f retract t1 ready - >/dev/null || fail "retract failed"
   printf 'fail no\n' > "$AGG_FM/control/main"
-  assert_equals "議題不明（t9）：" "$(printf '沒有標記。\n' | f summary t9 ready -)" "with the feed failing, an untagged task's topic is unknown"
+  assert_equals "議題待查（t9）：" "$(printf '沒有標記。\n' | f summary t9 ready -)" "with the feed failing, an untagged task's topic is unknown"
   rm "$AGG_FM/control/main"
   pass "summary, which, find and retract work through the feed, with --home and the fallback (AT2.14)"
 }

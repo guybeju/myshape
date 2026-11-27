@@ -131,7 +131,7 @@ describe("the lookup deadline", () => {
     const s = setup();
     s.answers.set("main", () => ({ ...ok(reportOf({ t1: LOGIN })), delayMs: 1500 }));
     const started = Date.now();
-    expect(await reminderPrefix(host(s), "main", "t1", Date.now() + 200)).toBe("議題不明（t1）：");
+    expect(await reminderPrefix(host(s), "main", "t1", Date.now() + 200)).toBe("議題待查（t1）：");
     expect(Date.now() - started).toBeLessThan(1000);
     await s.poller.readNow("main");
     expect(await reminderPrefix(host(s), "main", "t1", Date.now() + 200)).toBe("Login：");
@@ -148,14 +148,14 @@ describe("the lookup deadline", () => {
     const deadline = started + 600;
     await knowHomes(s.poller, deadline);
     expect(s.poller.knows("sm1")).toBe(true);
-    expect(await reminderPrefix(host(s), "sm1", "t1", deadline)).toBe("議題不明（t1）：");
+    expect(await reminderPrefix(host(s), "sm1", "t1", deadline)).toBe("議題待查（t1）：");
     expect(Date.now() - started).toBeLessThan(900);
   });
 
   it("starts no read once the deadline has passed", async () => {
     const s = setup();
     await knowHomes(s.poller, Date.now() - 1);
-    expect(await reminderPrefix(host(s), "main", "t1", Date.now() - 1)).toBe("議題不明（t1）：");
+    expect(await reminderPrefix(host(s), "main", "t1", Date.now() - 1)).toBe("議題待查（t1）：");
     expect(s.runs).toEqual([]);
   });
 });
@@ -196,16 +196,26 @@ describe("which and summary's prefix", () => {
     expect(s.runs).toEqual(["topics main", "feed main", "feed main"]);
   });
 
-  it("answers from a tag seen earlier when no read succeeds, and 議題不明 without one", async () => {
+  it("answers from a tag seen earlier when no read succeeds, and 議題待查 without one", async () => {
     const s = setup();
     const broken = { code: 1, stdout: "", stderr: "broken" };
     s.answers.set("main", () => broken);
-    expect(await reminderPrefix(host(s), "main", "t1", far())).toBe("議題不明（t1）：");
+    expect(await reminderPrefix(host(s), "main", "t1", far())).toBe("議題待查（t1）：");
     s.answers.set("main", feed({ t1: LOGIN }, broken));
     await s.poller.readNow("main");
     s.answers.set("main", () => broken);
     expect(await reminderPrefix(host(s), "main", "t1", far())).toBe("Login：");
-    expect(await reminderPrefix(host(s), "main", "t2", far())).toBe("議題不明（t2）：");
+    expect(await reminderPrefix(host(s), "main", "t2", far())).toBe("議題待查（t2）：");
+  });
+
+  it("answers 議題待查, not 未分類, for a task an earlier read saw untagged", async () => {
+    const s = setup();
+    const broken = { code: 1, stdout: "", stderr: "broken" };
+    const seen = { tasks: [{ id: "t3", kind: "job", state: "working" }] };
+    s.answers.set("main", feed({}, broken, seen));
+    await s.poller.readNow("main");
+    s.answers.set("main", () => broken);
+    expect(await reminderPrefix(host(s), "main", "t3", far())).toBe("議題待查（t3）：");
   });
 
   it("names a tag of a topic the board does not know as unsorted", async () => {

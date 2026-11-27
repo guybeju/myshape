@@ -76,8 +76,9 @@ export async function knowHomes(poller: Poller, deadline: number): Promise<void>
  * is read afresh, because nothing keeps the board current while no page is
  * open and a tag may have changed since. When no read succeeds by the
  * deadline, a tag seen earlier still answers; without one the line is
- * "議題不明", never "未分類": not knowing is not the same as knowing the task
- * has no topic.
+ * "議題待查", never "未分類": not knowing is not the same as knowing the task
+ * has no topic. The words say the topic is still to be checked, not that a
+ * lookup broke: the board may simply never have seen a tag for the task.
  */
 export async function reminderPrefix(
   host: LookupHost,
@@ -93,7 +94,7 @@ export async function reminderPrefix(
     tags === null
       ? placeTask(topics, host.poller.snapshots(), home, task)
       : placeTagText(topics, Object.hasOwn(tags, task) ? (tags[task] as string) : "");
-  if (tags === null && placement.reason === "no-tag") return `議題不明（${task}）：`;
+  if (tags === null && placement.reason === "no-tag") return `議題待查（${task}）：`;
   if (placement.topic === null) return "未分類：";
   const name =
     topics.doc.topics[placement.topic]?.name ?? topics.archive.topics[placement.topic]?.name;
