@@ -12,6 +12,14 @@ export const VIEW_TEXT_MAX = 80;
 /** The built-in view that shows every topic; no saved view may take its id. */
 export const ALL_VIEW = "all";
 export const COLORS = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
+/**
+ * How the page lists the cards in a queue: in the queue's own order, or by
+ * when each topic was created. Only what is shown; the queue never changes.
+ */
+export const CARD_ORDERS = ["priority", "newest", "oldest"];
+export function isCardOrder(value) {
+    return CARD_ORDERS.some((order) => order === value);
+}
 export const DEFAULT_SETTINGS = {
     aggregator_may_tag: true,
     aggregator_may_create: true,
@@ -123,6 +131,7 @@ function parseView(registry, raw) {
         none: knownNames(registry, raw["none"]),
         text: text ?? "",
         untagged: raw["untagged"] === true,
+        order: isCardOrder(raw["order"]) ? raw["order"] : "priority",
     };
 }
 function inRange(value, [low, high]) {
@@ -510,7 +519,7 @@ function viewOf(store, input) {
     const none = shownNames(store, input.none);
     if (!Array.isArray(none))
         return none.problem;
-    return { name, any, none, text, untagged: input.untagged };
+    return { name, any, none, text, untagged: input.untagged, order: input.order };
 }
 /** The shown spellings of `raw`, each once, or why one of them is not a hashtag the board has. */
 function shownNames(store, raw) {

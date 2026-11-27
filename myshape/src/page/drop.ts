@@ -1,7 +1,8 @@
 // Where a dragged topic lands in its full queue when the sidebar lists only
 // some of the queue's topics. Only what the captain sees is ordered; the
 // topics a filter hides keep their places. Pure, so it is tested on its own.
-// The reasons are in spec/drag-under-filter.markdown.
+// The reasons are in spec/drag-under-filter.markdown, and for cards listed by
+// creation time in spec/card-sort.markdown.
 import type { Queue } from "#board/topics.js";
 
 /** A place in a queue's list as the page shows it: the cards right above and right below. */
@@ -34,8 +35,27 @@ export function dropAnchor(start: Slot, drop: Slot, filtered: boolean): Anchor |
   return drop.below === null ? { last: true } : { before: drop.below };
 }
 
-/** The hint a queue shows while a card is dragged: `shown` cards listed, `unlisted` not. */
-export function dropHint(shown: number, unlisted: number, filtered: boolean): string {
+/**
+ * Where a drop puts a card while the cards are listed by creation time: the
+ * place in the list is not a priority, so a drop in its own queue moves
+ * nothing, and a drop in another queue puts it last there.
+ */
+export function timeDropAnchor(from: Queue, to: Queue): Anchor | null {
+  return from === to ? null : { last: true };
+}
+
+/**
+ * The hint a queue shows while a card is dragged: `shown` cards listed,
+ * `unlisted` not; `byTime` when the cards are listed by creation time.
+ */
+export function dropHint(
+  shown: number,
+  unlisted: number,
+  filtered: boolean,
+  byTime: boolean,
+): string {
+  if (byTime)
+    return `照建立時間排列中：拖到別的佇列會排在那裡的最後${filtered ? "（連沒列出的也算）" : ""}，在原來的佇列裡放下不會改順序`;
   if (!filtered) return "拖到這裡";
   if (shown > 0)
     return `篩選中：只在看得到的 ${shown} 個議題之間排順序，沒列出的 ${unlisted} 個位置不變`;

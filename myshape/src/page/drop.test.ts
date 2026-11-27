@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { generator } from "#board/seeded-random.test-helper.js";
 import * as topics from "#board/topics.js";
 import type { MovePosition, Queue, TopicState } from "#board/topics.js";
-import { dropAnchor, dropHint } from "./drop.js";
+import { dropAnchor, dropHint, timeDropAnchor } from "./drop.js";
 import type { Anchor, Slot } from "./drop.js";
 
 const NOW = "2026-11-27T00:00:00Z";
@@ -102,18 +102,57 @@ describe("where a drop puts the topic under a filter", () => {
   });
 });
 
+describe("where a drop puts the topic while the cards are listed by creation time", () => {
+  const state = board({ high: ["x"], normal: ["a", "b", "c"], later: ["s", "l"] });
+
+  it("moves nothing when the card is dropped in its own queue, wherever in the list", () => {
+    expect(timeDropAnchor("normal", "normal")).toBeNull();
+    expect(dropped(state, "b", "normal", timeDropAnchor("normal", "normal")).normal).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("puts it last in another queue, after every topic there, listed or not", () => {
+    const anchor = timeDropAnchor("normal", "later");
+    expect(anchor).toEqual({ last: true });
+    const queues = dropped(state, "a", "later", anchor);
+    expect(queues.later).toEqual(["s", "l", "a"]);
+    expect(queues.normal).toEqual(["b", "c"]);
+  });
+
+  it("puts it last in an empty queue too", () => {
+    const empty = board({ ...EMPTY, normal: ["a", "b"] });
+    expect(dropped(empty, "b", "high", timeDropAnchor("normal", "high")).high).toEqual(["b"]);
+  });
+});
+
 describe("the drop hint", () => {
+  it("says, while listed by creation time, that only a move to another queue counts", () => {
+    const hint = "照建立時間排列中：拖到別的佇列會排在那裡的最後，在原來的佇列裡放下不會改順序";
+    expect(dropHint(3, 0, false, true)).toBe(hint);
+    expect(dropHint(0, 0, false, true)).toBe(hint);
+    expect(dropHint(1, 2, true, true)).toBe(
+      "照建立時間排列中：拖到別的佇列會排在那裡的最後（連沒列出的也算），在原來的佇列裡放下不會改順序",
+    );
+  });
+
   it("says a filter is on, how many cards it orders among, and how many stay put", () => {
-    expect(dropHint(3, 2, false)).toBe("拖到這裡");
-    expect(dropHint(3, 2, true)).toBe(
+    expect(dropHint(3, 2, false, false)).toBe("拖到這裡");
+    expect(dropHint(3, 2, true, false)).toBe(
       "篩選中：只在看得到的 3 個議題之間排順序，沒列出的 2 個位置不變",
     );
-    expect(dropHint(0, 2, true)).toBe("篩選中：這裡沒有看得到的議題，放下會排在沒列出的 2 個之後");
-    expect(dropHint(1, 0, true)).toBe(
+    expect(dropHint(0, 2, true, false)).toBe(
+      "篩選中：這裡沒有看得到的議題，放下會排在沒列出的 2 個之後",
+    );
+    expect(dropHint(1, 0, true, false)).toBe(
       "篩選中：只在看得到的 1 個議題之間排順序，沒列出的 0 個位置不變",
     );
-    expect(dropHint(0, 1, true)).toBe("篩選中：這裡沒有看得到的議題，放下會排在沒列出的 1 個之後");
-    expect(dropHint(0, 0, true)).toBe("篩選中：放下會排在這個佇列最後");
+    expect(dropHint(0, 1, true, false)).toBe(
+      "篩選中：這裡沒有看得到的議題，放下會排在沒列出的 1 個之後",
+    );
+    expect(dropHint(0, 0, true, false)).toBe("篩選中：放下會排在這個佇列最後");
   });
 });
 
@@ -183,6 +222,27 @@ describe("any drop under any filter", () => {
         replay,
       ).toEqual(expected);
       if (anchor !== null) expect(nextTo(after[to], anchor), replay).toBe(id);
+    }
+  });
+});
+
+describe("any drop while listed by creation time", () => {
+  it("moves only the dragged topic, and only to the end of another queue", () => {
+    const random = generator(20261128);
+    for (let round = 0; round < 500; round += 1) {
+      const { queues } = randomCase(random);
+      const from = pick(
+        random,
+        topics.QUEUES.filter((queue) => queues[queue].length > 0),
+      );
+      const id = pick(random, queues[from]);
+      const to = pick(random, topics.QUEUES);
+      const after = dropped(board(queues), id, to, timeDropAnchor(from, to));
+      const replay = `seed round ${round}: ${JSON.stringify({ queues, id, to })}`;
+      for (const queue of topics.QUEUES)
+        expect(without(after[queue], id), replay).toEqual(without(queues[queue], id));
+      expect(after[to].at(-1), replay).toBe(from === to ? queues[to].at(-1) : id);
+      if (from === to) expect(after[to], replay).toEqual(queues[to]);
     }
   });
 });

@@ -178,6 +178,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 主 home 的 checkout 裡改了 `bin/fm-board.sh` 而沒提交，下一次看板啟動時它就不是「不用確認」的程式；這台 PC 的 checkout 群組能寫，要確認的程式會被拒絕，看板就接不上（寫入等著、不讀 home），直到那個改動提交或還原，再跑一個看板指令。
 - `MYSHAPE_ROOT_OVERRIDE` 指向 `bin/myshape.sh` 自己的位置以外的目錄時，沒有程式不用確認（contracts 第 7 節）；它擋不住把指令本身放在別處啟動的人。
 
+- 側欄的卡片可以照建立時間排列（[卡片排列](card-sort.markdown)），只改顯示；這時拖曳只能換佇列，排在那裡的最後。頁面自己記的排列在瀏覽器的 `localStorage`，換瀏覽器或換埠就回到照優先順序。
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
 - 「要你動手」的項目存在看板上（contracts 第 3.6 節），每一步都在議題的更新留一筆紀錄；按了「做完了」之後使用者不能自己收回；aggregator 不再需要的項目由它直接撤下，原因記在議題的更新裡，只有看板存項目之前搬上來的舊項目要使用者按「好，撤下」。
@@ -196,6 +197,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 沒有議題的「要你動手」項目（看板存項目之前搬上來、原本就沒有議題的）關掉之後列在首頁的「沒有議題」（C61）；`todo.marks_carried` 與較早的看板寫的 `todo.forgotten`、`todo.settled` 也沒有議題，只在檔裡，頁面上沒有地方列它們。
 - `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；移動與改目標記在來歷裡，但只有 `--all` 才印，所以不會把合併、拆分擠掉；來歷不記建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
+- 程式退回視圖沒有 `order` 的舊版時，下一次存 `hashtags.json` 會丟掉每個視圖的排列，回到新版時那些視圖是照優先順序（[卡片排列](card-sort.markdown)）。
 - 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](../../fm-board/spec/rollout.markdown)）；退回看板自己存項目之前的版本時，看板上的項目不會顯示（`data/myshape/todos.json` 留著，回到新版又會出現）。
 - first mate 自己直接做、沒有派 worker 的項目，在關掉之前會被 `order` 列在「可派」。
 - 經 secondmate 轉達的訊息，看板在送到 secondmate 時就記成已送達。secondmate 之後回報轉不出去，頁面不會改，使用者只會從 first mate 在聊天裡的回報知道。

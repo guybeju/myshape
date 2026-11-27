@@ -1,6 +1,7 @@
 import { h } from "./dom.js";
 import { NO_FILTER, cycleHashtag, isActive, owedOutside, viewFilter } from "./filter.js";
 import { draftInput, recentCard, settingsTable, topicName } from "./parts.js";
+import { cardOrder } from "./sort.js";
 import { agentName } from "./state.js";
 const COLORS = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
 function hashtagOf(view, name) {
@@ -49,7 +50,7 @@ function hashtagButtons(page, view, actions) {
         return h("button", { class: "link chip", onclick: () => actions.setFilter(cycleHashtag(filter, entry.name)) }, state === "not" ? "沒有 " : "", chip(view, entry.name, state));
     }));
 }
-function keywordRow(page, actions) {
+function keywordRow(page, view, actions) {
     const filter = page.filter;
     const keyword = (event) => actions.setFilter({ ...filter, text: event.target.value, view: null });
     const save = () => {
@@ -62,6 +63,7 @@ function keywordRow(page, actions) {
             none: filter.none,
             text: filter.text,
             untagged: filter.untagged,
+            order: cardOrder(page, view.hashtags.views),
         });
         actions.draft("view-name", "");
     };
@@ -104,7 +106,7 @@ function panelButtons(page, view, actions) {
 }
 /** The filter bar above the home page. */
 export function filterBar(page, view, actions, shown) {
-    return h("section", { class: "filterbar" }, viewButtons(page, view, actions), hashtagButtons(page, view, actions), keywordRow(page, actions), owedLine(view, actions, shown), panelButtons(page, view, actions), page.tagPanel === "recent"
+    return h("section", { class: "filterbar" }, viewButtons(page, view, actions), hashtagButtons(page, view, actions), keywordRow(page, view, actions), owedLine(view, actions, shown), panelButtons(page, view, actions), page.tagPanel === "recent"
         ? recentCard(view, actions, {
             title: `${agentName()} 最近的 hashtag 改動`,
             changes: view.hashtags.recent,

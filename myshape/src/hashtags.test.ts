@@ -228,6 +228,7 @@ describe("the captain's changes to a whole hashtag", () => {
         none: ["AI_INFRA"],
         text: "",
         untagged: false,
+        order: "priority",
       }),
     );
   }
@@ -308,10 +309,18 @@ describe("saved views", () => {
         none: [],
         text: " gpu ",
         untagged: false,
+        order: "priority",
       }),
     );
     expect(store.views).toEqual({
-      ai: { name: "AI 基礎設施", any: ["AI_INFRA"], none: [], text: "gpu", untagged: false },
+      ai: {
+        name: "AI 基礎設施",
+        any: ["AI_INFRA"],
+        none: [],
+        text: "gpu",
+        untagged: false,
+        order: "priority",
+      },
     });
     const again = saveView(captain(store), {
       name: "AI 基礎設施",
@@ -319,6 +328,7 @@ describe("saved views", () => {
       none: [],
       text: "gpu",
       untagged: false,
+      order: "priority",
     });
     expect(again).toMatchObject({ changed: false });
     const defaulted = after(changeSettings(captain(store), { default_view: "ai" }));
@@ -328,8 +338,44 @@ describe("saved views", () => {
     expect(deleteView(captain(gone), "ai")).toMatchObject({ changed: false });
   });
 
+  it("keep the order the cards are listed in, and save it again when only the order changes", () => {
+    const view = { name: "工作", any: [], none: [], text: "", untagged: false };
+    const store = after(saveView(captain(tagged()), { ...view, order: "newest" }));
+    expect(Object.values(store.views)[0]?.order).toBe("newest");
+    const id = Object.keys(store.views)[0] as string;
+    const oldest = saveView(captain(store), { ...view, id, order: "oldest" });
+    expect(oldest).toMatchObject({ changed: true });
+    expect(after(oldest).views[id]?.order).toBe("oldest");
+    expect(saveView(captain(store), { ...view, id, order: "newest" })).toMatchObject({
+      changed: false,
+    });
+  });
+
+  it("read a view's order from the file, and 照優先順序 when it is missing or unknown", () => {
+    const store = parseHashtags({
+      v: 1,
+      views: {
+        a: { name: "a", order: "newest" },
+        b: { name: "b", order: "oldest" },
+        c: { name: "c" },
+        d: { name: "d", order: "sideways" },
+        e: { name: "e", order: 1 },
+      },
+    });
+    expect(Object.fromEntries(Object.entries(store.views).map(([id, v]) => [id, v.order]))).toEqual(
+      { a: "newest", b: "oldest", c: "priority", d: "priority", e: "priority" },
+    );
+  });
+
   it("refuse an unknown hashtag, a bad id and a name that is not one line", () => {
-    const view = { name: "x", any: ["NOPE"], none: [], text: "", untagged: false };
+    const view = {
+      name: "x",
+      any: ["NOPE"],
+      none: [],
+      text: "",
+      untagged: false,
+      order: "priority" as const,
+    };
     expect(saveView(captain(tagged()), view)).toMatchObject({ ok: false });
     expect(saveView(captain(tagged()), { ...view, any: [], id: "all" })).toMatchObject({
       code: "usage",
@@ -470,7 +516,14 @@ describe("reading hashtags.json", () => {
     });
     expect(store.topics).toEqual({ a: ["AI_INFRA"] });
     expect(store.views).toEqual({
-      w: { name: "工作", any: [], none: ["AI_INFRA"], text: "", untagged: false },
+      w: {
+        name: "工作",
+        any: [],
+        none: ["AI_INFRA"],
+        text: "",
+        untagged: false,
+        order: "priority",
+      },
     });
     expect(store.settings).toMatchObject({
       per_topic_max: 8,
@@ -545,11 +598,21 @@ describe("the edges", () => {
   });
 
   it("a view gets v1 when its name has no slug, and a rewrite records the view it replaced", () => {
-    const view = { name: "工作", any: [], none: [], text: "", untagged: false };
+    const view = {
+      name: "工作",
+      any: [],
+      none: [],
+      text: "",
+      untagged: false,
+      order: "priority" as const,
+    };
     const first = saveView(captain(tagged()), view);
     expect(first).toMatchObject({ line: "ok v1 視圖「工作」已存下", records: [{ before: "" }] });
     const second = saveView(captain(after(first)), { ...view, text: "gpu" });
-    expect(second).toMatchObject({ changed: true, records: [{ before: JSON.stringify(view) }] });
+    expect(second).toMatchObject({
+      changed: true,
+      records: [{ before: JSON.stringify({ ...view, order: "priority" }) }],
+    });
     expect(saveView(captain(), { ...view, id: "all" })).toMatchObject({
       line: "視圖 id 格式不對：all",
     });
@@ -582,7 +645,14 @@ describe("the edges", () => {
 describe("view ids", () => {
   it("count up past the ones taken, and a bad one is a usage refusal", () => {
     const captain = (store: Frozen<HashtagStore>) => ctx(store, { by: "captain" });
-    const view = (name: string) => ({ name, any: [], none: [], text: "", untagged: false });
+    const view = (name: string) => ({
+      name,
+      any: [],
+      none: [],
+      text: "",
+      untagged: false,
+      order: "priority" as const,
+    });
     const one = after(saveView(captain(emptyHashtags()), view("工作")));
     const two = saveView(captain(one), view("家裡"));
     expect(two).toMatchObject({ line: "ok v2 視圖「家裡」已存下" });

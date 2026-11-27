@@ -19,8 +19,21 @@ export function dropAnchor(start, drop, filtered) {
         return { after: drop.above };
     return drop.below === null ? { last: true } : { before: drop.below };
 }
-/** The hint a queue shows while a card is dragged: `shown` cards listed, `unlisted` not. */
-export function dropHint(shown, unlisted, filtered) {
+/**
+ * Where a drop puts a card while the cards are listed by creation time: the
+ * place in the list is not a priority, so a drop in its own queue moves
+ * nothing, and a drop in another queue puts it last there.
+ */
+export function timeDropAnchor(from, to) {
+    return from === to ? null : { last: true };
+}
+/**
+ * The hint a queue shows while a card is dragged: `shown` cards listed,
+ * `unlisted` not; `byTime` when the cards are listed by creation time.
+ */
+export function dropHint(shown, unlisted, filtered, byTime) {
+    if (byTime)
+        return `照建立時間排列中：拖到別的佇列會排在那裡的最後${filtered ? "（連沒列出的也算）" : ""}，在原來的佇列裡放下不會改順序`;
     if (!filtered)
         return "拖到這裡";
     if (shown > 0)

@@ -58,7 +58,7 @@
 | `POST /api/hashtags/settings` | 要改的設定，例如 `{per_topic_max: 6}` | hashtag 設定；任何一項不合法就都不改 |
 | `POST /api/hashtags/revert` | `{rid}` | 撤回 aggregator 的一筆 hashtag 改動 |
 | `POST /api/hashtags/seen` | `{}` | 「看過了」：清掉「新」與最近改動的清單 |
-| `POST /api/views/save`、`/delete` | `{name, any, none, text, untagged, id?}`、`{id}` | 存、刪命名視圖；同名的視圖存的是同一個 |
+| `POST /api/views/save`、`/delete` | `{name, any, none, text, untagged, id?, order?}`、`{id}` | 存、刪命名視圖；同名的視圖存的是同一個。`order` 是這個視圖的卡片排列（`priority`、`newest`、`oldest`，沒帶是 `priority`，[卡片排列](card-sort.markdown)） |
 | `POST /api/schedules/add`、`/edit` | `{topic, daily: true}` 或 `{topic, weekly: "mon,thu"}`，加 `at`（`HH:MM`），可加 `tz`、`lead`、`duration`（分鐘），`add` 另可加 `rt` | 使用者建立、修改排程（[contracts](contracts.markdown) 第 3.9 節）；`add` 只收在「待辦」的議題；沒寫的 `lead`、`duration` 用設定的值 |
 | `POST /api/schedules/pause`、`/resume`、`/skip` | `{topic}` | 暫停、恢復、跳過下一場 |
 | `POST /api/schedules/rt` | `{topic, rt}` | 設 rt：`none`、`soft-rt`、`hard-rt` |
@@ -100,6 +100,7 @@
 7. 未分類區。
 
 **左側欄**「優先順序」：高、一般、待辦三個佇列由上而下，「待辦」標明不自動開工。最下面是「已封存」，預設收合，展開後每個議題有「重開」。
+標題下面是「排列：」三個按鈕「照優先順序」（預設）「新的在上」「舊的在上」，只改三個佇列裡的卡片怎麼列，不改優先順序；記在選了的視圖裡，沒有選視圖時記在頁面自己的 `localStorage`。決定、理由與照建立時間排時拖曳怎麼算見[卡片排列](card-sort.markdown)。
 
 - 有排程開著一場時，「高」上面多一條「現在」：每一場一張卡，順序照看板公開的（`hard-rt`、`soft-rt`、`none`，同一級照時刻），寫議題、當地時間、狀態（快到了、到了、已接下）、rt 與看板建議的用法、aggregator 什麼時候接的與它寫的那一行、最晚什麼時候結束，以及「這一場結束…」（頁面上問一次，再選「標成做完」或「標成跳過」）。超過 `closes_by` 的不顯示，就算檔裡還寫著。hashtag 篩選不藏「現在」。
 - 「待辦」下面是「排程」：有排程的議題，寫下一場的當地時間與規則，標「新」、為什麼不響（暫停中、所有排程暫停中、等你按啟用）、「這一場開著」、「上一場錯過」與 rt。這些議題存在「待辦」，但不列在「待辦」的卡片裡；「現在」與「排程」的卡片都不能拖，要把議題變回一般的，先在議題頁刪掉排程。已封存議題的排程不列。
@@ -111,6 +112,7 @@
 - 拖的當下就更新順序：卡片跟著游標插到新位置，其他卡片即時讓開；放開才送 `/api/topics/move`；按 Esc 回到原位。
 - 用瀏覽器原生的拖放。拖曳中的卡片用虛線框與淡色標示。空的佇列在拖曳中顯示落點提示，拖曳結束就消失（原型的小瑕疵在這裡修掉）。
 - 卡片上沒有移動用的選單，拖曳是頁面上唯一的移法（C55）。
+- 照建立時間排列時（[卡片排列](card-sort.markdown)），卡片不跟著游標換位置，只能拖到別的佇列，排在那裡的最後；在原來的佇列裡放下什麼都不送。
 - 篩選中（hashtag、關鍵字或視圖）只在看得到的卡片之間排：放在一張卡下面就排在完整佇列裡那張卡的正後面，放在最上面就排在第一張看得到的卡前面，被篩掉的議題位置不變；落點提示寫明正在篩選。決定、理由與邊界情形見[篩選中拖曳](drag-under-filter.markdown)。
 - 放開後右下角出一則回饋，6 秒後自動消失，點一下也會關掉：
   - 從待辦拖出：倒數 30 秒，寫明時間到會通知 first mate、拖回去就不通知；倒數結束前不消失。

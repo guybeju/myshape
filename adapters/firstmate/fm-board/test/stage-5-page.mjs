@@ -258,6 +258,24 @@ export default async function run(page) {
     await page.waitFor(`a drag ${what}: ${expected}`, `${queueOrder} === ${JSON.stringify(expected)}`);
   }
 
+  // Listed by creation time (myshape/spec/card-sort.markdown) only the display changes: a drop
+  // in the card's own queue sends nothing, a drop in another queue lands last there. Back under
+  // 照優先順序 the queues show what the board kept; a last drag restores the walk's order.
+  const dropOn = (name, queue, onto, half) => `(() => { const d = ${drag(name, queue, onto, half)}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`;
+  // The one-at-a-time cards keep their own order rules: 等你決定 and 要你動手 read the same.
+  const oneAtATime = `JSON.stringify(["等你決定", "要你動手"].map((title) => [...document.querySelectorAll("section")].find((box) => box.querySelector("h2")?.textContent === title)?.innerText ?? ""))`;
+  const before = await page.evaluate(oneAtATime);
+  await page.click("#sidebar .order button", "新的在上");
+  await page.waitFor("the cards listed by creation time", `document.querySelector('.queue[data-queue="normal"]').dataset.byTime === "true" && document.querySelector('.queue[data-queue="high"] .empty').textContent.startsWith("照建立時間排列中：拖到別的佇列會排在那裡的最後") && ${has("照建立時間排列只改顯示的順序")}`);
+  if ((await page.evaluate(oneAtATime)) !== before) throw new Error("the card order must not touch 等你決定 or 要你動手");
+  await page.evaluate(dropOn("Idea", "normal", "Billing", "upper"));
+  await page.evaluate(dropOn("Login", "normal", "Billing", "upper"));
+  await page.waitFor("the drop into another queue", queueHas("normal", "Login"));
+  await page.click("#sidebar .order button", "照優先順序");
+  await page.waitFor("the priority the two drops left", `${queueOrder} === "Parked|Billing,Idea,Login|"`);
+  await page.evaluate(dropOn("Login", "high", "Parked", "lower"));
+  await page.waitFor("the walk's order back", `${queueOrder} === "Parked,Login|Billing,Idea|"`);
+
   // The topic page: rename, message firstmate, direct message.
   // Work that is queued but not dispatched yet: counted on the card, listed on the topic page.
   await page.waitFor("the queued count on the topic card", `[...document.querySelectorAll(".topic")].some((card) => card.innerText.includes("Billing") && card.innerText.includes("排隊 3"))`);

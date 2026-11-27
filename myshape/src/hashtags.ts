@@ -17,6 +17,16 @@ export const VIEW_TEXT_MAX = 80;
 export const ALL_VIEW = "all";
 export const COLORS = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"] as const;
 export type Color = (typeof COLORS)[number];
+/**
+ * How the page lists the cards in a queue: in the queue's own order, or by
+ * when each topic was created. Only what is shown; the queue never changes.
+ */
+export const CARD_ORDERS = ["priority", "newest", "oldest"] as const;
+export type CardOrder = (typeof CARD_ORDERS)[number];
+
+export function isCardOrder(value: unknown): value is CardOrder {
+  return CARD_ORDERS.some((order) => order === value);
+}
 
 /**
  * One hashtag. The registry is keyed by the spelling first created, which is
@@ -40,6 +50,8 @@ export interface SavedView {
   text: string;
   /** Only topics with no hashtag. */
   untagged: boolean;
+  /** How the page lists the queues' cards while this view is chosen. */
+  order: CardOrder;
 }
 
 export interface HashtagSettings {
@@ -185,6 +197,7 @@ function parseView(registry: Record<string, HashtagEntry>, raw: unknown): SavedV
     none: knownNames(registry, raw["none"]),
     text: text ?? "",
     untagged: raw["untagged"] === true,
+    order: isCardOrder(raw["order"]) ? raw["order"] : "priority",
   };
 }
 
@@ -641,6 +654,7 @@ export interface ViewInput {
   none: readonly string[];
   text: string;
   untagged: boolean;
+  order: CardOrder;
 }
 
 function viewOf(store: Frozen<HashtagStore>, input: ViewInput): SavedView | string {
@@ -652,7 +666,7 @@ function viewOf(store: Frozen<HashtagStore>, input: ViewInput): SavedView | stri
   if (!Array.isArray(any)) return any.problem;
   const none = shownNames(store, input.none);
   if (!Array.isArray(none)) return none.problem;
-  return { name, any, none, text, untagged: input.untagged };
+  return { name, any, none, text, untagged: input.untagged, order: input.order };
 }
 
 /** The shown spellings of `raw`, each once, or why one of them is not a hashtag the board has. */

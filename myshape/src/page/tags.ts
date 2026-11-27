@@ -10,6 +10,7 @@ import type { Child } from "./dom.js";
 import { NO_FILTER, cycleHashtag, isActive, owedOutside, viewFilter } from "./filter.js";
 import type { Filter } from "./filter.js";
 import { draftInput, recentCard, settingsTable, topicName } from "./parts.js";
+import { cardOrder } from "./sort.js";
 import { agentName } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
@@ -105,7 +106,7 @@ function hashtagButtons(page: Page, view: View, actions: Actions): Child {
   );
 }
 
-function keywordRow(page: Page, actions: Actions): Child {
+function keywordRow(page: Page, view: View, actions: Actions): Child {
   const filter = page.filter;
   const keyword = (event: Event): void =>
     actions.setFilter({ ...filter, text: (event.target as HTMLInputElement).value, view: null });
@@ -118,6 +119,7 @@ function keywordRow(page: Page, actions: Actions): Child {
       none: filter.none,
       text: filter.text,
       untagged: filter.untagged,
+      order: cardOrder(page, view.hashtags.views),
     });
     actions.draft("view-name", "");
   };
@@ -194,7 +196,7 @@ export function filterBar(
     { class: "filterbar" },
     viewButtons(page, view, actions),
     hashtagButtons(page, view, actions),
-    keywordRow(page, actions),
+    keywordRow(page, view, actions),
     owedLine(view, actions, shown),
     panelButtons(page, view, actions),
     page.tagPanel === "recent"

@@ -30,7 +30,7 @@ function topics(): TopicState {
   state.doc.topics = {
     hi: topic("High"),
     n1: { ...topic("Normal one"), close_proposal: { at: "x", reason: "all done" } },
-    n2: topic("Normal two"),
+    n2: { ...topic("Normal two"), created_at: "2026-06-02T00:00:00Z" },
     lt: topic("Later"),
   };
   state.doc.queues = { high: ["hi"], normal: ["n1", "n2"], later: ["lt"] };
@@ -1186,7 +1186,9 @@ describe("topics", () => {
       close_at: "x",
       kept_until: null,
       archived_at: null,
+      created_at: "",
     });
+    expect(view.topics["n2"]?.created_at).toBe("2026-06-02T00:00:00Z");
     expect(view.topics["hi"]).toMatchObject({ queue: "high", close_reason: null });
     expect(view.topics["lt"]?.queue).toBe("later");
     expect(view.topics["gone"]).toEqual({
@@ -1198,6 +1200,7 @@ describe("topics", () => {
       close_at: null,
       kept_until: null,
       archived_at: "2026-06-01T00:00:00Z",
+      created_at: "",
     });
   });
 
