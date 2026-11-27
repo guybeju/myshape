@@ -32,6 +32,12 @@ export interface Credential {
   secret: string;
 }
 
+/**
+ * The credentials of whoever runs the supervisor that no session reads, under
+ * their home directory, in the sandbox's path grammar (`~/`).
+ */
+export const CREDENTIAL_PATHS = ["~/.config/gh", "~/.ssh", "~/.claude/.credentials.json"];
+
 export const REDACTED = "[redacted]";
 
 /** Why the credential file cannot be used. The message never holds the file's content. */

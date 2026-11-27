@@ -3,7 +3,9 @@
 // task.
 
 import { closeSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+
+import { CREDENTIAL_PATHS } from "./credential.js";
 
 /** A repository workers may work in. */
 export interface RepoSetting {
@@ -61,15 +63,54 @@ function checkRepo(name: string, repo: RepoSetting, home: string): void {
   }
 }
 
+/** Whether `path` is `dir` or lies under it; both absolute and normalized. */
+function within(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(dir === "/" ? "/" : `${dir}/`);
+}
+
 /**
- * Checks `settings`, with `realPath` resolving symbolic links, and returns them
- * with home and worktree root resolved.
+ * Refuses a `readPaths` entry that would reopen what the sandbox denies: the
+ * user's home directory or one above it, or a directory holding the
+ * credential file, the board home or one of CREDENTIAL_PATHS. Each is
+ * compared as written and with its links resolved.
+ */
+function checkReadPaths(
+  settings: Settings,
+  userHome: string,
+  realPath: (path: string) => string,
+): void {
+  const credentials = CREDENTIAL_PATHS.map((path) => join(userHome, path.slice(2)));
+  const kept = [settings.credentialFile, settings.home, ...credentials].flatMap((path) => [
+    resolve(path),
+    realPath(resolve(path)),
+  ]);
+  const homes = [resolve(userHome), realPath(resolve(userHome))];
+  for (const entry of settings.readPaths) {
+    for (const path of [resolve(entry), realPath(resolve(entry))]) {
+      if (homes.some((home) => within(home, path))) {
+        throw new SettingsError(`readPaths ${entry} is the home directory or holds it`);
+      }
+      const found = kept.find((secret) => within(secret, path));
+      if (found !== undefined) throw new SettingsError(`readPaths ${entry} holds ${found}`);
+    }
+  }
+}
+
+/**
+ * Checks `settings`, with `realPath` resolving symbolic links and `userHome`
+ * the home directory of whoever runs the supervisor, and returns them with
+ * home and worktree root resolved.
  *
  * Raises:
  *   SettingsError: a path that is not absolute, a worktree root inside the
- *     board home or the home inside it, no repository, or a bad port.
+ *     board home or the home inside it, no repository, a bad port, or a
+ *     readPaths entry checkReadPaths refuses.
  */
-export function checkSettings(settings: Settings, realPath: (path: string) => string): Settings {
+export function checkSettings(
+  settings: Settings,
+  realPath: (path: string) => string,
+  userHome: string,
+): Settings {
   for (const [what, path] of [
     ["home", settings.home],
     ["worktreeRoot", settings.worktreeRoot],
@@ -90,6 +131,7 @@ export function checkSettings(settings: Settings, realPath: (path: string) => st
   const names = Object.keys(settings.repos);
   if (names.length === 0) throw new SettingsError("no repository is listed in repos");
   for (const name of names) checkRepo(name, settings.repos[name] as RepoSetting, home);
+  checkReadPaths(settings, userHome, realPath);
   return { ...settings, home, worktreeRoot };
 }
 

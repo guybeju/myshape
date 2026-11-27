@@ -262,7 +262,7 @@ export class Supervisor {
   /** Checks the settings, takes the lock, sets the home up, starts the board, and reconciles. */
   static async start(settings: Settings, deps: Deps): Promise<Supervisor> {
     if (deps.credential.secret === "") throw new Error("claude-agg: no credential; nothing starts");
-    const checked = checkSettings(settings, deps.realPath);
+    const checked = checkSettings(settings, deps.realPath, deps.env.HOME);
     const release = takeLock(checked.worktreeRoot, deps.pid, deps.isAlive);
     const supervisor = new Supervisor(checked, deps, release);
     try {

@@ -123,6 +123,7 @@ describe("one worker end to end", () => {
       tools: ["Read", "Grep", "Glob"],
       allowedTools: [`Read(/${REPO}/**)`],
       settingSources: [],
+      verbatimPrompts: true,
       persistSession: false,
     });
     expect(existsSync(world.plannerDir)).toBe(true);
@@ -137,6 +138,7 @@ describe("one worker end to end", () => {
       maxTurns: 200,
       persistSession: true,
       allowedTools: ["mcp__forge__push_branch", "mcp__forge__open_pr"],
+      verbatimPrompts: true,
     });
     expect(worker?.options.settings).toMatchObject({
       sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },

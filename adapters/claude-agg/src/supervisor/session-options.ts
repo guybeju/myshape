@@ -3,7 +3,10 @@
 // sections 4.2, 4.3 and 5.3, and option A of the credential report): the
 // worker's Bash runs in the SDK's sandbox with no route to GitHub and no read
 // of the captain's credentials, its file tools stay in its worktree, and it
-// reaches the forge only through the supervisor's two tools.
+// reaches the forge only through the supervisor's two tools. Every prompt
+// carries board text (topic names and goals, messages, answers), so every
+// session takes its prompts as written (`verbatimPrompts`): no `@path` file
+// mention in them is expanded and no slash command runs.
 
 import {
   createSdkMcpServer,
@@ -14,7 +17,7 @@ import {
 import { z } from "zod";
 
 import type { PlainEnv } from "./commands.js";
-import { AUTH_VARIABLE, type Credential } from "./credential.js";
+import { AUTH_VARIABLE, CREDENTIAL_PATHS, type Credential } from "./credential.js";
 import type { Forge, ToolAnswer } from "./forge.js";
 import { preToolUseHook, type GuardContext } from "./guard.js";
 import type { QueryOptions } from "./sdk.js";
@@ -164,9 +167,6 @@ export const PACKAGE_REGISTRIES = [
 /** Hosts a worker's commands never reach, whatever else allows them. */
 export const DENIED_DOMAINS = ["github.com", "api.github.com"];
 
-/** The captain's credentials a session never reads, in the sandbox's path grammar. */
-export const CREDENTIAL_PATHS = ["~/.config/gh", "~/.ssh", "~/.claude/.credentials.json"];
-
 /** The forge server's name in `mcpServers`, and the two tool names it gives the worker. */
 export const FORGE_SERVER = "forge";
 export const FORGE_TOOLS = [
@@ -292,6 +292,7 @@ export function workerOptions(session: WorkerSession, ctx: SessionContext): Quer
     strictMcpConfig: true,
     settings: workerSettings(session, ctx),
     sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
+    verbatimPrompts: true,
     env: sessionEnv(ctx.env, ctx.credential),
     maxTurns: WORKER_MAX_TURNS,
     outputFormat: { type: "json_schema", schema: WORKER_OUTPUT_SCHEMA },
@@ -335,6 +336,7 @@ export function plannerOptions(
     hooks: { PreToolUse: [{ hooks: [preToolUseHook(ctx.guard)], onFailure: "block" }] },
     settingSources: [],
     strictMcpConfig: true,
+    verbatimPrompts: true,
     env: sessionEnv(ctx.env, ctx.credential),
     maxTurns: PLANNER_MAX_TURNS,
     outputFormat: { type: "json_schema", schema: PLANNER_OUTPUT_SCHEMA },
