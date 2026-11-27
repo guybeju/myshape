@@ -382,7 +382,7 @@ describe.skipIf(!IN_CI)(
         const query = new ScriptedQuery(scratch.work);
         query.planner.push({
           messages: [
-            init("p", "dontAsk"),
+            init("p", "default"),
             result(plan([{ title: "接上", repo: "app", kind: "ship", prompt: "照目標做" }])),
           ],
         });
@@ -455,7 +455,7 @@ describe.skipIf(!IN_CI)(
         const fake = new FakeCommands("/nowhere/myshape.sh");
         const query = new ScriptedQuery(scratch.work);
         const work = plan([{ title: "問", repo: "app", kind: "scout", prompt: "先問" }]);
-        query.planner.push({ messages: [init("p2", "dontAsk"), result(work)] });
+        query.planner.push({ messages: [init("p2", "default"), result(work)] });
         const command = `${join(scratch.root, "bin", "myshape.sh")} todo done ask-1-vpn`;
         const tryBoard = { attempt: { tool: "Bash", input: { command } } };
         const question = { title: "要留快取嗎", text: "舊的快取要留嗎？", options: ["留", "不留"] };
@@ -581,7 +581,7 @@ describe.skipIf(!IN_CI)(
         const fake = new FakeCommands("/nowhere/myshape.sh");
         const query = new ScriptedQuery(scratch.work);
         const work = plan([{ title: "整理", repo: "app", kind: "scout", prompt: "照目標做" }]);
-        query.planner.push({ messages: [init("p3", "dontAsk"), result(work)] });
+        query.planner.push({ messages: [init("p3", "default"), result(work)] });
         const gate = new Gate();
         query.worker.push({ messages: [init("w3"), result(workerOutput("report"))], gate });
         const supervisor = await startSupervisor(query, fake);

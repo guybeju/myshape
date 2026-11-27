@@ -36,7 +36,7 @@ function buildPlan(title = "建起來") {
 /** A world whose topic `build` gets one task, `build-1`, whose first session runs `worker`. */
 function oneTask(worker: object[], gate?: Gate): World {
   const world = new World({ normal: ["build"] });
-  world.query.planner.push({ messages: [init("p1", "dontAsk"), result(buildPlan(), 0.01)] });
+  world.query.planner.push({ messages: [init("p1", "default"), result(buildPlan(), 0.01)] });
   world.query.worker.push(gate === undefined ? { messages: worker } : { messages: worker, gate });
   return world;
 }
@@ -308,7 +308,7 @@ describe("message", () => {
 
   it("goes to the planner with the topic's tasks when no worker runs, and becomes a new task", async () => {
     const world = oneTask([init("w1"), result(workerOutput("report"))]);
-    world.query.planner.push({ messages: [init("p2", "dontAsk"), result(buildPlan("改 README"))] });
+    world.query.planner.push({ messages: [init("p2", "default"), result(buildPlan("改 README"))] });
     world.query.worker.push({ messages: [init("w2"), result(workerOutput("report"))] });
     const supervisor = await run(world);
     world.deliver({
@@ -328,7 +328,7 @@ describe("message", () => {
 
   it("is given to a planner once even when its file cannot be moved, so nothing loops", async () => {
     const world = oneTask([init("w1"), result(workerOutput("report"))]);
-    world.query.planner.push({ messages: [init("p2", "dontAsk"), result(plan([]))] });
+    world.query.planner.push({ messages: [init("p2", "default"), result(plan([]))] });
     const supervisor = await run(world);
     world.deliver({
       kind: "message",

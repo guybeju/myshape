@@ -40,7 +40,7 @@ function running(world: World): string[] {
 function planOne(world: World, title = "整理紀錄"): void {
   world.query.planner.push({
     messages: [
-      init("p", "dontAsk"),
+      init("p", "default"),
       result(plan([{ title, repo: "app", kind: "scout", prompt: "照目標做" }])),
     ],
   });
@@ -150,7 +150,7 @@ describe("an occurrence at its time", () => {
   it("is closed done when its planner finds nothing to do", async () => {
     const world = scheduled();
     world.nowMs = Date.parse(AT);
-    world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan([]))] });
+    world.query.planner.push({ messages: [init("p", "default"), result(plan([]))] });
     const supervisor = await world.start();
     await pass(supervisor);
     await supervisor.idle();
@@ -443,7 +443,7 @@ describe("when something goes wrong", () => {
       { id: "a-1", topic: "a" },
       { id: "b-1", topic: "b" },
     ]);
-    world.query.planner.push({ messages: [init("p", "dontAsk"), result({ wrong: true })] });
+    world.query.planner.push({ messages: [init("p", "default"), result({ wrong: true })] });
     const gates = [new Gate(), new Gate()];
     for (const gate of gates)
       world.query.worker.push({ messages: [init("w"), result(workerOutput("report"))], gate });

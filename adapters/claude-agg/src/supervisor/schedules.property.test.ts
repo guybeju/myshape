@@ -177,7 +177,7 @@ describe("the supervisor with schedules over random runs", () => {
         });
         const tasks =
           random() < 0.8 ? [{ title: "做", repo: "app", kind: "scout", prompt: "p" }] : [];
-        world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan(tasks))] });
+        world.query.planner.push({ messages: [init("p", "default"), result(plan(tasks))] });
       }
       const run: Run = {
         world,

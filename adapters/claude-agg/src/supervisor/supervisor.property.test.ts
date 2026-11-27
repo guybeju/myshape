@@ -140,7 +140,7 @@ describe("the supervisor over random runs", () => {
       );
       for (let i = 0; i < 120; i += 1) {
         world.query.worker.push({ messages: outcome(random()), gate: new Gate() });
-        world.query.planner.push({ messages: [init("p", "dontAsk"), result(plan([]))] });
+        world.query.planner.push({ messages: [init("p", "default"), result(plan([]))] });
       }
       const run: Run = { world, supervisor: await world.start(), abandoned: new Set() };
       run.supervisor.tick();

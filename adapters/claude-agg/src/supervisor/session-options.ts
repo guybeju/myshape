@@ -3,7 +3,9 @@
 // sections 4.2, 4.3 and 5.3, and option A of the credential report): the
 // worker's Bash runs in the SDK's sandbox with no route to GitHub and no read
 // of the captain's credentials, its file tools stay in its worktree, and it
-// reaches the forge only through the supervisor's two tools. Every prompt
+// reaches the forge only through the supervisor's two tools. Every session
+// starts in `default` (SESSION_MODE) with no approval surface: only what is
+// listed runs without a prompt, and everything else is denied. Every prompt
 // carries board text (topic names and goals, messages, answers), so every
 // session takes its prompts as written (`verbatimPrompts`): no `@path` file
 // mention in them is expanded and no slash command runs.
@@ -232,6 +234,7 @@ export function workerSettings(session: WorkerSession, ctx: SessionContext): Set
       enabled: true,
       failIfUnavailable: true,
       allowUnsandboxedCommands: false,
+      autoAllowBashIfSandboxed: true,
       network: {
         allowedDomains: [...PACKAGE_REGISTRIES],
         deniedDomains: [...DENIED_DOMAINS],
@@ -271,6 +274,33 @@ export function forgeServer(forge: Forge): McpSdkServerConfigWithInstance {
   });
 }
 
+/**
+ * The permission mode every session starts in. With
+ * CLAUDE_CODE_SUBPROCESS_ENV_SCRUB set (always, sessionEnv), Claude Code
+ * forces this mode whatever is asked ("Permission mode forced to default —
+ * CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set"), so no session asks for another:
+ * what runs without a prompt is listed explicitly, and with no approval
+ * surface everything else is denied.
+ */
+export const SESSION_MODE = "default";
+
+/**
+ * What a worker may do without a prompt: file edits and writes inside its
+ * worktree, and, for a ship worker, the two forge tools by their full names.
+ * Bash has no allow rule: a sandboxed command runs through the sandbox's
+ * autoAllowBashIfSandboxed, so an unsandboxed one is never approved.
+ */
+export function workerAllowRules(worktree: string, ship: boolean): string[] {
+  const files = [`Edit(/${worktree}/**)`, `Write(/${worktree}/**)`];
+  return ship ? [...files, ...FORGE_TOOLS] : files;
+}
+
+/** The worktree's .git file: the file tools never change it, though it lies in the worktree. */
+export function worktreeGitRules(worktree: string): string[] {
+  const git = `/${worktree}/.git`;
+  return [`Edit(${git})`, `Edit(${git}/**)`, `Write(${git})`, `Write(${git}/**)`];
+}
+
 /** The options of one worker's `query()` (plan sections 4.3 and 5.3). */
 export function workerOptions(session: WorkerSession, ctx: SessionContext): QueryOptions {
   const scout = session.forge === null;
@@ -278,13 +308,15 @@ export function workerOptions(session: WorkerSession, ctx: SessionContext): Quer
   const deny = [
     ...denyRules(guard.home, guard.port, guard.defaultBranch),
     ...credentialReadRules(ctx.credentialFile),
+    ...worktreeGitRules(session.worktree),
     "WebFetch",
     "WebSearch",
   ];
   const options = {
     cwd: session.worktree,
-    permissionMode: "auto",
+    permissionMode: SESSION_MODE,
     permissionPrompts: "none",
+    allowedTools: workerAllowRules(session.worktree, !scout),
     disallowedTools: scout ? [...deny, "Agent"] : deny,
     hooks: { PreToolUse: [{ hooks: [preToolUseHook(guard)], onFailure: "block" }] },
     settingSources: ["project"],
@@ -303,10 +335,7 @@ export function workerOptions(session: WorkerSession, ctx: SessionContext): Quer
     ...options,
     ...(session.forge === null
       ? {}
-      : {
-          mcpServers: { [FORGE_SERVER]: forgeServer(session.forge) },
-          allowedTools: [...FORGE_TOOLS],
-        }),
+      : { mcpServers: { [FORGE_SERVER]: forgeServer(session.forge) } }),
     ...(ctx.model === undefined ? {} : { model: ctx.model }),
     ...(session.resume === undefined ? {} : { resume: session.resume }),
   };
@@ -326,7 +355,8 @@ export function plannerOptions(
 ): QueryOptions {
   const options: QueryOptions = {
     cwd,
-    permissionMode: "dontAsk",
+    permissionMode: SESSION_MODE,
+    permissionPrompts: "none",
     tools: ["Read", "Grep", "Glob"],
     allowedTools: repos.map((repo) => `Read(/${repo}/**)`),
     disallowedTools: [

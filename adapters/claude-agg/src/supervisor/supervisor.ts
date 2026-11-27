@@ -69,7 +69,12 @@ import { ScheduleStep, type MakeUp } from "./schedule-step.js";
 import { schedule, type Candidate, type Slot, type TopicStatus } from "./scheduler.js";
 import type { QueryFn } from "./sdk.js";
 import { followSession, PromptStream, type SessionReport } from "./session.js";
-import { plannerOptions, workerOptions, type SessionContext } from "./session-options.js";
+import {
+  plannerOptions,
+  SESSION_MODE,
+  workerOptions,
+  type SessionContext,
+} from "./session-options.js";
 import { checkSettings, takeLock, type RepoSetting, type Settings } from "./settings.js";
 import { StateStore, type PlannedTask } from "./state-store.js";
 import { boardTodos, todoOps, type TodoOp } from "./todos.js";
@@ -954,7 +959,7 @@ export class Supervisor {
     const options = plannerOptions(cwd, repos, this.sessionContext(null, abort));
     const run = this.deps.query({ prompt, options });
     const report = await followSession(run, prompt, abort, {
-      mode: "dontAsk",
+      mode: SESSION_MODE,
       apiKeySource: this.apiKeySource(),
       onStart: () => {},
     });
@@ -1174,7 +1179,7 @@ export class Supervisor {
     const run = this.deps.query({ prompt, options });
     this.streams.set(id, prompt);
     const report = await followSession(run, prompt, abort, {
-      mode: "auto",
+      mode: SESSION_MODE,
       apiKeySource: this.apiKeySource(),
       onStart: (init) => {
         task.session_id = init.session_id;

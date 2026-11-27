@@ -91,6 +91,7 @@ const SANDBOX_SETTINGS = {
     enabled: true,
     failIfUnavailable: true,
     allowUnsandboxedCommands: false,
+    autoAllowBashIfSandboxed: true,
     network: {
       allowedDomains: [
         "registry.npmjs.org",
@@ -127,6 +128,13 @@ const CREDENTIAL_RULES = [
   "Read(//secrets/credential)",
 ];
 
+const WORKTREE_GIT_RULES = [
+  "Edit(//work/t-1/.git)",
+  "Edit(//work/t-1/.git/**)",
+  "Write(//work/t-1/.git)",
+  "Write(//work/t-1/.git/**)",
+];
+
 /** A forge tool, called the way Claude Code calls it: over MCP, by its name. */
 async function callTool(
   options: ReturnType<typeof workerOptions>,
@@ -152,10 +160,21 @@ describe("workerOptions", () => {
     const { hooks, mcpServers, ...rest } = options;
     expect(rest).toEqual({
       cwd: "/work/t-1",
-      permissionMode: "auto",
+      permissionMode: "default",
       permissionPrompts: "none",
-      allowedTools: ["mcp__forge__push_branch", "mcp__forge__open_pr"],
-      disallowedTools: [...RULES, ...CREDENTIAL_RULES, "WebFetch", "WebSearch"],
+      allowedTools: [
+        "Edit(//work/t-1/**)",
+        "Write(//work/t-1/**)",
+        "mcp__forge__push_branch",
+        "mcp__forge__open_pr",
+      ],
+      disallowedTools: [
+        ...RULES,
+        ...CREDENTIAL_RULES,
+        ...WORKTREE_GIT_RULES,
+        "WebFetch",
+        "WebSearch",
+      ],
       settingSources: ["project"],
       projectConfigRoot: "/repos/app",
       strictMcpConfig: true,
@@ -237,18 +256,28 @@ describe("workerOptions", () => {
       "Bash(git push*)",
       ...rest.slice(5),
       ...CREDENTIAL_RULES,
+      ...WORKTREE_GIT_RULES,
       "WebFetch",
       "WebSearch",
       "Agent",
     ]);
     expect(options).not.toHaveProperty("mcpServers");
-    expect(options).not.toHaveProperty("allowedTools");
+    expect(options.allowedTools).toEqual(["Edit(//work/t-1/**)", "Write(//work/t-1/**)"]);
     expect(options.settings).toEqual(SANDBOX_SETTINGS);
     const [hook] = options.hooks.PreToolUse[0]?.hooks ?? [];
     const input = preToolUseInput("Bash", { command: "git push origin agg/t-1" }, "/work/t-1");
     const out = await hook?.(input, "u", { signal: abort.signal });
     expect(denyReason(out)).toBe(REASONS.noPush);
     expect(workerOptions(SESSION, CTX).disallowedTools).not.toContain("Agent");
+  });
+
+  it("approves no Bash call by a rule and no MCP tool by a wildcard", () => {
+    for (const forge of [FORGE, null]) {
+      const allowed = workerOptions({ ...SESSION, forge }, CTX).allowedTools ?? [];
+      expect(allowed.filter((rule) => rule.startsWith("Bash"))).toEqual([]);
+      expect(allowed.filter((rule) => rule.includes("*") && rule.startsWith("mcp__"))).toEqual([]);
+    }
+    expect(SANDBOX_SETTINGS.sandbox.autoAllowBashIfSandboxed).toBe(true);
   });
 
   it("names no model when the user set none", () => {
@@ -258,14 +287,15 @@ describe("workerOptions", () => {
 });
 
 describe("plannerOptions", () => {
-  it("reads the listed main checkouts only, in dontAsk, with no push at all", () => {
+  it("reads the listed main checkouts only, in default with no prompts, with no push at all", () => {
     const { hooks, ...rest } = plannerOptions("/work/.claude-agg-planner", ["/repos/app", "/r/b"], {
       ...CTX,
       guard: { ...guard, defaultBranch: null },
     });
     expect(rest).toEqual({
       cwd: "/work/.claude-agg-planner",
-      permissionMode: "dontAsk",
+      permissionMode: "default",
+      permissionPrompts: "none",
       tools: ["Read", "Grep", "Glob"],
       allowedTools: ["Read(//repos/app/**)", "Read(//r/b/**)"],
       disallowedTools: [

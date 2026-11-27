@@ -35,7 +35,7 @@ const BUILD_PLAN = plan([{ title: "建起來", repo: "app", kind: "ship", prompt
 /** A world whose topic `build` gets one task from the planner, and that task's worker script. */
 function oneTask(worker: object[], queues = { normal: ["build"] }): World {
   const world = new World(queues);
-  world.query.planner.push({ messages: [init("p1", "dontAsk"), result(BUILD_PLAN, 0.01)] });
+  world.query.planner.push({ messages: [init("p1", "default"), result(BUILD_PLAN, 0.01)] });
   world.query.worker.push({ messages: worker });
   return world;
 }
@@ -119,7 +119,8 @@ describe("one worker end to end", () => {
     const [planner, worker] = world.query.calls;
     expect(planner?.options).toMatchObject({
       cwd: world.plannerDir,
-      permissionMode: "dontAsk",
+      permissionMode: "default",
+      permissionPrompts: "none",
       tools: ["Read", "Grep", "Glob"],
       allowedTools: [`Read(/${REPO}/**)`],
       settingSources: [],
@@ -130,14 +131,19 @@ describe("one worker end to end", () => {
     expect(readdirSync(world.plannerDir)).toEqual([]);
     expect(worker?.options).toMatchObject({
       cwd: join(world.root, "build-1"),
-      permissionMode: "auto",
+      permissionMode: "default",
       permissionPrompts: "none",
       settingSources: ["project"],
       projectConfigRoot: REPO,
       strictMcpConfig: true,
       maxTurns: 200,
       persistSession: true,
-      allowedTools: ["mcp__forge__push_branch", "mcp__forge__open_pr"],
+      allowedTools: [
+        `Edit(/${join(world.root, "build-1")}/**)`,
+        `Write(/${join(world.root, "build-1")}/**)`,
+        "mcp__forge__push_branch",
+        "mcp__forge__open_pr",
+      ],
       verbatimPrompts: true,
     });
     expect(worker?.options.settings).toMatchObject({
@@ -165,7 +171,7 @@ describe("one worker end to end", () => {
 
   it("passes the user's model setting to every session unchanged", async () => {
     const world = oneTask([
-      init("w1", "auto", "none", "whatever-ran"),
+      init("w1", "default", "none", "whatever-ran"),
       result(workerOutput("report")),
     ]);
     world.model = "the-user-setting";
@@ -200,9 +206,9 @@ describe("how a worker can end", () => {
     expect(world.events("build-1").at(-1)).toBe("task.cleaned_up");
   });
 
-  it("stops a session that does not start in auto, and says why", async () => {
-    const world = await runOne([init("w1", "default"), result(workerOutput("report"))]);
-    const text = "session 開始時的權限模式是 default，不是 auto，已停下。";
+  it("stops a session that does not start in default, and says why", async () => {
+    const world = await runOne([init("w1", "auto"), result(workerOutput("report"))]);
+    const text = "session 開始時的權限模式是 auto，不是 default，已停下。";
     expect(world.tasks()["build-1"]?.state).toBe("failed");
     expect(world.commands.summaries).toEqual([{ task: "build-1", kind: "failed", text }]);
     expect(world.query.aborted).toBe(1);
@@ -210,7 +216,7 @@ describe("how a worker can end", () => {
 
   it("stops a session whose credential is an API key", async () => {
     const world = await runOne([
-      init("w1", "auto", "ANTHROPIC_API_KEY"),
+      init("w1", "default", "ANTHROPIC_API_KEY"),
       result(workerOutput("report")),
     ]);
     expect(world.commands.summaries[0]?.text).toBe(
@@ -302,7 +308,7 @@ describe("the subscription token", () => {
     world.query.worker.push({ messages: [init("w2")], error: new Error(`died: ${CANARY}`) });
     world.query.planner[0] = {
       messages: [
-        init("p1", "dontAsk"),
+        init("p1", "default"),
         result(
           plan([
             { title: "一", repo: "app", kind: "ship", prompt: "a" },
@@ -338,7 +344,7 @@ describe("the planner", () => {
     const world = new World({ normal: ["build"] });
     world.query.planner.push({
       messages: [
-        init("p1", "dontAsk"),
+        init("p1", "default"),
         result(plan([{ title: "外面", repo: "elsewhere", kind: "ship", prompt: "x" }])),
       ],
     });
@@ -353,7 +359,7 @@ describe("the planner", () => {
     supervisor.close();
   });
 
-  it("stops a planner session that does not start in dontAsk", async () => {
+  it("stops a planner session that does not start in default", async () => {
     const world = new World({ normal: ["build"] });
     world.query.planner.push({ messages: [init("p1", "auto"), result(BUILD_PLAN)] });
     const supervisor = await world.start();
@@ -419,7 +425,7 @@ describe("the forge tools", () => {
   it("gives a scout task no forge server at all", async () => {
     const world = new World({ normal: ["build"] });
     const scout = plan([{ title: "看看", repo: "app", kind: "scout", prompt: "只交報告" }]);
-    world.query.planner.push({ messages: [init("p1", "dontAsk"), result(scout)] });
+    world.query.planner.push({ messages: [init("p1", "default"), result(scout)] });
     world.query.worker.push({ messages: [init("w1"), PUSH, result(workerOutput("report"))] });
     const supervisor = await world.start();
     supervisor.tick();
@@ -477,7 +483,7 @@ describe("stop", () => {
   it("aborts the running worker, leaves its task to the next start, and gives the lock back", async () => {
     const gate = new Gate();
     const world = new World({ normal: ["build"] });
-    world.query.planner.push({ messages: [init("p1", "dontAsk"), result(BUILD_PLAN, 0.01)] });
+    world.query.planner.push({ messages: [init("p1", "default"), result(BUILD_PLAN, 0.01)] });
     world.query.worker.push({ messages: [init("w1"), result(workerOutput("report"))], gate });
     const supervisor = await world.start();
     supervisor.tick();

@@ -34,7 +34,12 @@ export const ENV: PlainEnv = {
 
 // --- messages ------------------------------------------------------------------
 
-export function init(session: string, mode = "auto", apiKeySource = "none", model = "test-model") {
+export function init(
+  session: string,
+  mode = "default",
+  apiKeySource = "none",
+  model = "test-model",
+) {
   return {
     type: "system",
     subtype: "init",
