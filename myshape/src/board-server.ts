@@ -612,7 +612,7 @@ function lifecycleTick(service: Service): void {
       service.board = saved.board;
       if (saved.appendError !== null) log(`records wait in the outbox: ${saved.appendError}`);
     }
-    const shown = JSON.stringify([view.turns, view.stalls, view.idle, [...evaluation.unverified]]);
+    const shown = JSON.stringify([view.turns, view.stalls, view.idle]);
     if (shown !== service.lifecycleShown || evaluation.records.length > 0) service.version += 1;
     service.lifecycleShown = shown;
   } catch (error) {

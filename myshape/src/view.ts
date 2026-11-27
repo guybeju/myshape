@@ -112,8 +112,6 @@ export interface TodoView {
   reason: string | null;
   /** The state word todos.json holds for an item in the "unknown" state (O6), else null. */
   unknown_state: string | null;
-  /** Claimed, and the aggregator's check never came within its deadline (O5). */
-  unverified: boolean;
 }
 
 export interface HoldView {
@@ -972,8 +970,8 @@ function baseView(input: ViewInput): BoardView {
 
 /**
  * The view with every card's lifecycle in it: a decision waiting on work the
- * board cannot see is in the queue once overdue (D5), an item whose check
- * never came says so (O5), and the one queue takes its turns.
+ * board cannot see is in the queue once overdue (D5), and the one queue
+ * takes its turns.
  */
 function finishView(
   base: BoardView,
@@ -998,10 +996,6 @@ function finishView(
     ...base,
     topics,
     holds,
-    todos: base.todos.map((todo) => ({
-      ...todo,
-      unverified: evaluation.unverified.has(todo.task),
-    })),
     stalls: evaluation.stalls,
     idle: evaluation.idle,
   };
@@ -1146,7 +1140,6 @@ function todoViews(input: ViewInput, view: BoardView): TodoView[] {
       state: item.state,
       reason: item.reason,
       unknown_state: item.unknown_state ?? null,
-      unverified: false,
     },
   }));
   return entries

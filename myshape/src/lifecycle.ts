@@ -79,7 +79,6 @@ export const LIFECYCLE = {
   O2: captain,
   O3: timed("O3"),
   O4: captain,
-  O5: captain,
   O6: captain,
   // schedules (stored)
   S1: time,
@@ -120,8 +119,6 @@ export interface Clock {
   state: TimedState;
   since: string;
   sig: string;
-  /** Set once the board acted on its escalation (O3 to O5), so it acts once. */
-  raised?: true;
 }
 
 /** A 沒人接 card in front of the captain, and the members the captain put off, if any. */
@@ -544,14 +541,13 @@ export function lateness(
 /**
  * Where an overdue card goes (spec/lifecycle.markdown section 2.13): a topic
  * with no work becomes the board's 沒人處理的議題 card, a decision waiting on
- * work the board cannot see goes into the queue itself, a hands-on item that
- * was never checked goes back to 要你動手, every other card joins its topic's
- * 沒人接 card. The board never proposes closing anything.
+ * work the board cannot see goes into the queue itself, and every other card,
+ * a claimed hands-on item never checked too, joins its topic's 沒人接 card.
+ * The board never proposes closing anything, nor closes an item.
  */
-export function destinationOf(state: TimedState): "idle" | "queue" | "unverified" | "stall" {
+export function destinationOf(state: TimedState): "idle" | "queue" | "stall" {
   if (state === "T2") return "idle";
-  if (state === "D5") return "queue";
-  return state === "O3" ? "unverified" : "stall";
+  return state === "D5" ? "queue" : "stall";
 }
 
 // ---------------------------------------------------------------- one look at the board
@@ -589,14 +585,12 @@ export interface StallView {
 export interface Evaluation {
   cards: Card[];
   memory: LifecycleMemory;
-  /** The board's own transitions this look made: stall.raised, stall.settled, todo.unverified. */
+  /** The board's own transitions this look made: stall.raised and stall.settled. */
   records: Draft[];
   /** The 沒人處理的議題 cards: topics with no work past their deadline. */
   idle: IdleView[];
   /** Keys of decisions waiting on work the board cannot see, now in the queue (D5). */
   queued: Set<string>;
-  /** Hands-on items whose check never came (O5). */
-  unverified: Set<string>;
   stalls: StallView[];
 }
 
@@ -636,6 +630,24 @@ function idOfKey(found: Card): string {
   return parts.slice(found.home === null ? 1 : 2).join("\t");
 }
 
+/** A member whose home's last read could not show it: named from its key alone. */
+function unreadCard(key: string, clock: Frozen<Clock>): Card {
+  const [kind = "", ...rest] = baseKey(key).split("\t");
+  const home = homeOfKey(key);
+  const id = (home === null ? rest : rest.slice(1)).join("\t");
+  const label = home === null ? id : `${home}/${id.split("\t")[0] ?? id}`;
+  return {
+    key,
+    kind: kind as CardKind,
+    state: clock.state,
+    topic: null,
+    home,
+    label,
+    sig: "",
+    count: 0,
+  };
+}
+
 /** The member lines of a 沒人接 card: one per card, its overdue states together (X6). */
 function memberLines(
   keys: readonly string[],
@@ -644,9 +656,9 @@ function memberLines(
 ): StallMember[] {
   const lines = new Map<string, StallMember>();
   for (const key of keys) {
-    const found = cards.get(key);
     const clock = clocks[key];
-    if (found === undefined || clock === undefined) continue;
+    if (clock === undefined) continue;
+    const found = cards.get(key) ?? unreadCard(key, clock);
     const base = baseKey(key);
     const line = lines.get(base) ?? {
       key: base,
@@ -662,16 +674,6 @@ function memberLines(
     lines.set(base, line);
   }
   return [...lines.values()];
-}
-
-/** The record that a hands-on item's check never came: it is back with the captain (O5). */
-function unverifiedRecord(found: Card, settings: Frozen<LifecycleSettings>): Draft {
-  return {
-    kind: "todo.unverified",
-    topic: found.topic,
-    item: idOfKey(found),
-    text: `要你動手「${found.label}」：你按了做完了，${durationWords(settings.O3.raise)}都沒有驗證，回到要你動手`,
-  };
 }
 
 /**
@@ -690,7 +692,6 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
     records: [],
     idle: [],
     queued: new Set(),
-    unverified: new Set(),
     stalls: [],
   };
   const members = new Map<string, string[]>();
@@ -700,8 +701,12 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
       continue;
     const home = found.home;
     if (home !== null && !context.fresh.has(home) && !already.has(found.key)) continue;
-    escalate(result, { members, idle: idleTopics }, found, store.settings);
+    escalate(result, { members, idle: idleTopics }, found);
   }
+  keepUnread(store.stalls, members, (key) => {
+    const home = homeOfKey(key);
+    return home !== null && !context.fresh.has(home) && clocks[key] !== undefined;
+  });
   const nameOf = (key: string): string => view.topics[key]?.name ?? key;
   const step = stallStep(store.stalls, members, nameOf, nowMs);
   const idle = idleStep(store.idle, idleTopics, nameOf, nowMs);
@@ -722,15 +727,29 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
   return result;
 }
 
+/**
+ * A member of a 沒人接 card whose home has not been read well since stays a
+ * member: only a good read can say it left (L5), and its clock still runs.
+ */
+function keepUnread(
+  stalls: Frozen<Record<string, Stall>>,
+  members: Map<string, string[]>,
+  unread: (key: string) => boolean,
+): void {
+  for (const [stallKey, stall] of Object.entries(stalls)) {
+    const list = members.get(stallKey) ?? [];
+    const kept = stall.members.filter((key) => unread(key) && !list.includes(key));
+    if (kept.length > 0) members.set(stallKey, [...list, ...kept]);
+  }
+}
+
 /** Sends one overdue card where its state goes (destinationOf). */
 function escalate(
   result: Evaluation,
   raised: { members: Map<string, string[]>; idle: string[] },
   found: Card,
-  settings: Frozen<LifecycleSettings>,
 ): void {
   const state = found.state as TimedState;
-  const clock = result.memory.clocks[found.key] as Clock;
   const { members } = raised;
   switch (destinationOf(state)) {
     case "idle":
@@ -738,12 +757,6 @@ function escalate(
       return;
     case "queue":
       result.queued.add(found.key);
-      return;
-    case "unverified":
-      result.unverified.add(idOfKey(found));
-      if (clock.raised === true) return;
-      clock.raised = true;
-      result.records.push(unverifiedRecord(found, settings));
       return;
     case "stall": {
       const key = stallKeyOf(found.topic);
@@ -800,19 +813,12 @@ export function scheduleLines(
 
 // ---------------------------------------------------------------- the stored cards' transitions
 
-/** A hands-on item's state now: O5 is a claim whose check is past its deadline. */
-export function todoState(
-  item: { state: string },
-  clock: Frozen<Clock> | undefined,
-  settings: Frozen<LifecycleSettings>,
-  nowMs: number,
-): CardState {
-  const state = TODO_STATES[item.state] ?? "O6";
-  if (state !== "O3" || clock === undefined) return state;
-  return nowMs - Date.parse(clock.since) >= settings.O3.raise * 60_000 ? "O5" : "O3";
+/** A hands-on item's state: a claim stays O3, owned by the aggregator, past its deadline too. */
+export function todoState(item: { state: string }): CardState {
+  return TODO_STATES[item.state] ?? "O6";
 }
 
-const TODO_ANY: readonly CardState[] = ["O1", "O2", "O3", "O4", "O5", "O6"];
+const TODO_ANY: readonly CardState[] = ["O1", "O2", "O3", "O4", "O6"];
 
 /**
  * The states each operation on a hands-on item may start from
@@ -821,14 +827,12 @@ const TODO_ANY: readonly CardState[] = ["O1", "O2", "O3", "O4", "O5", "O6"];
  */
 export const TODO_TRANSITIONS: Readonly<Record<string, readonly CardState[]>> = {
   "todo-add": TODO_ANY,
-  "todo-claim": ["O1", "O2", "O3", "O5"],
-  "todo-failed": ["O1", "O3", "O5"],
+  "todo-claim": ["O1", "O2", "O3"],
+  "todo-failed": ["O1", "O3"],
   "todo-done": TODO_ANY,
   "todo-obsolete": TODO_ANY,
   "todo-drop": ["O1", "O2", "O6"],
   "todo-takedown": ["O4"],
-  "todo-accept": ["O5"],
-  "todo-unclaim": ["O5"],
 };
 
 const TODO_WORDS: Record<string, string> = {
@@ -836,7 +840,6 @@ const TODO_WORDS: Record<string, string> = {
   O2: "驗證沒過",
   O3: "等驗證",
   O4: "不再需要，等你撤下",
-  O5: "按了做完了、一直沒有驗證",
   O6: "狀態不明",
 };
 

@@ -46,7 +46,7 @@ export interface TodoStore {
 export type CloseWords = "不做了" | "撤下";
 
 /** How an item left the page, on a closing record. */
-export type Outcome = "done" | "done_unverified" | "dropped" | "taken_down" | "unclaimed";
+export type Outcome = "done" | "dropped" | "taken_down";
 
 /**
  * One record about an item: every step writes one, under the item's topic
@@ -411,43 +411,6 @@ export function doneItem(store: Frozen<TodoStore>, id: string, label: string): T
     "做完了",
   );
   return changed(without(store, id), `ok ${id} 已關（做完了，${label} 已驗證）`, [event], [notice]);
-}
-
-/**
- * The captain's 當作做完，關掉 on an item whose check never came (O5): it
- * closes as done without a check, and the aggregator is told as for 做完了.
- */
-export function closeUnverified(store: Frozen<TodoStore>, id: string, label: string): TodoResult {
-  const item = itemOf(store, id);
-  if (item === undefined) return notOpen(id);
-  const actor: Actor = { by: "captain", label };
-  const event = record("todo.done", item, id, actor, "已關：你說做完了，沒有驗證", {
-    outcome: "done_unverified",
-  });
-  const notice = closing(
-    item,
-    id,
-    `使用者在看板上：「${item.title}」當作做完，關掉（${label} 沒有驗證）（${id}）`,
-    "captain",
-    "做完了",
-  );
-  return changed(without(store, id), `ok ${id} 已關（你說做完了，沒有驗證）`, [event], [notice]);
-}
-
-/** The captain's 收回，還沒做完 on an item whose check never came (O5): back to still to do. */
-export function unclaimItem(
-  store: Frozen<TodoStore>,
-  id: string,
-  now: string,
-  label: string,
-): TodoResult {
-  const item = itemOf(store, id);
-  if (item === undefined) return notOpen(id);
-  const actor: Actor = { by: "captain", label };
-  const event = record("lifecycle.answered", item, id, actor, "：你收回了，還沒做完", {
-    outcome: "unclaimed",
-  });
-  return changed(withState(store, id, "open", now, null), `ok ${id} 已收回，還沒做完`, [event]);
 }
 
 /**

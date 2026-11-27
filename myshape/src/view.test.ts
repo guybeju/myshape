@@ -696,6 +696,29 @@ describe("holds and questions", () => {
     ]);
   });
 
+  it("shows a decision it cannot read with the word sent, and a dated one whose date came as live", () => {
+    const view = buildView(
+      input({
+        homes: [
+          home("main", {
+            report: report({
+              holds: [
+                hold("odd", { hold_bucket: "unknown", unreadable: '"snoozed"' }),
+                hold("due", { hold_bucket: "dated", hold_until: "2026-07-09" }),
+              ],
+            }),
+          }),
+        ],
+      }),
+    );
+    const byTask = Object.fromEntries(view.holds.map((entry) => [entry.task, entry]));
+    expect(byTask["odd"]).toMatchObject({
+      live: false,
+      deferred_reason: '讀不懂的分類："snoozed"',
+    });
+    expect(byTask["due"]).toMatchObject({ live: true, note: "延到 2026-07-09，日期到了" });
+  });
+
   it("breaks ties between holds of one topic by task id", () => {
     const view = buildView(
       input({
@@ -881,7 +904,6 @@ describe("hands-on items", () => {
       guidance: "",
       commands: [],
       unknown_state: null,
-      unverified: false,
       state: "rejected",
       reason: "沒起來",
     });

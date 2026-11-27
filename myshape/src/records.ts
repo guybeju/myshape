@@ -25,7 +25,6 @@ export const RECORD_KINDS = [
   "todo.dropped",
   "todo.taken_down",
   "todo.marks_carried",
-  "todo.unverified",
   "hold.opened",
   "hold.answered",
   "hold.closed",

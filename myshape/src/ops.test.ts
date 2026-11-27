@@ -68,8 +68,6 @@ const FIXTURES = {
   "todo-claim": { args: { task: "open" }, fromPage: true },
   "todo-drop": { args: { task: "open" }, fromPage: true },
   "todo-takedown": { args: { task: "obsolete" }, fromPage: true },
-  "todo-accept": { args: { task: "unverified" }, fromPage: true },
-  "todo-unclaim": { args: { task: "unverified" }, fromPage: true },
   "lifecycle-settings": { args: { T2: { remind: 60, raise: 120 } }, fromPage: true },
   "lifecycle-answer": { args: { card: "stall", key: "a", days: 7 }, fromPage: true },
   "program-confirm": {
@@ -172,18 +170,13 @@ function todosFixture(): TodoStore {
       open: item("open"),
       claimed: item("claimed"),
       obsolete: item("obsolete", { captain_closes: true, reason: "不用了" }),
-      unverified: item("claimed"),
     },
   };
 }
 
-/** The item "unverified" was claimed weeks ago (O5), and topic a has a 沒人接 card in front of the captain. */
+/** Topic a has a 沒人接 card in front of the captain. */
 function lifecycleFixture(): Record<string, unknown> {
-  return {
-    v: 1,
-    clocks: { "todo\tunverified": { state: "O3", since: "2026-11-01T00:00:00Z", sig: "" } },
-    stalls: { a: { since: "2026-11-20T00:00:00Z", members: ["queued\tmain\tq1"] } },
-  };
+  return { v: 1, stalls: { a: { since: "2026-11-20T00:00:00Z", members: ["queued\tmain\tq1"] } } };
 }
 
 function series(topic: string, extra: Partial<Series> = {}): Series {
@@ -907,5 +900,91 @@ describe("each hashtag operation's arguments", () => {
     const split = reply("split", { from: "b", name: "Bit", goal: "g" }, false);
     expect(split.response.line).toBe("ok bit 已從 b 拆出，放進「一般」");
     expect(split.records.map((record) => record.kind)).toEqual(["topic.split"]);
+  });
+});
+
+describe("the lifecycle operations", () => {
+  function apply(board: StoredBoard, op: string, args: Record<string, unknown>, fromPage = true) {
+    return applyOperation(target, board, { op, args, fromPage }, WHO);
+  }
+  const lifecycleFile = (): Record<string, unknown> =>
+    JSON.parse(fs.readFileSync(paths.lifecycle, "utf8")) as Record<string, unknown>;
+
+  it("先不關 keeps a topic until a date, 14 days by default, or moves it to 待辦; never with no choice", () => {
+    const board = readBoard(paths).board;
+    const kept = apply(board, "keep", { id: "b" });
+    expect(kept.board.lifecycle.kept["b"]).toBe("2026-12-05T00:00:00.000Z");
+    expect((lifecycleFile()["kept"] as Record<string, string>)["b"]).toBe(
+      "2026-12-05T00:00:00.000Z",
+    );
+    const days = apply(board, "keep", { id: "b", days: 30 });
+    expect(days.board.lifecycle.kept["b"]).toBe("2026-12-21T00:00:00.000Z");
+    const later = apply(board, "keep", { id: "b", later: true });
+    expect(later.records.map((record) => record.kind)).toEqual(["topic.kept", "topic.moved"]);
+    expect(later.response.line).toBe("ok b 先不關，移到「待辦」");
+    expect(later.board.topics.doc.queues.later.at(-1)).toBe("b");
+    for (const bad of [0, 91, "7"])
+      expect(apply(board, "keep", { id: "b", days: bad }).response).toMatchObject({
+        code: "usage",
+      });
+  });
+
+  it("先不關 on a 沒人處理的議題 card keeps the topic until then and takes the card away", () => {
+    const board = readBoard(paths).board;
+    const idle = {
+      ...board,
+      lifecycle: { ...board.lifecycle, idle: { a: "2026-11-20T00:00:00Z" } },
+    };
+    const result = apply(idle, "lifecycle-answer", { card: "idle", key: "a", days: 3 });
+    expect(result.response).toEqual({ ok: true, line: "ok a 先不關，到 11-24" });
+    expect(result.board.lifecycle.kept["a"]).toBe("2026-11-24T00:00:00.000Z");
+    expect(result.board.lifecycle.idle).toEqual({});
+    expect(result.records).toMatchObject([
+      { kind: "lifecycle.answered", topic: "a", outcome: "kept", by: "captain" },
+    ]);
+    expect(apply(board, "lifecycle-answer", { card: "idle", key: "a" }).response).toMatchObject({
+      code: "refused",
+    });
+    expect(apply(board, "lifecycle-answer", { card: "close", key: "a" }).response).toMatchObject({
+      code: "usage",
+    });
+    expect(apply(board, "lifecycle-answer", { card: "idle" }).response).toMatchObject({
+      code: "usage",
+    });
+  });
+
+  it("refuses a hands-on operation from a state it may not start from, and changes nothing", () => {
+    const board = readBoard(paths).board;
+    const rejected = apply(board, "todo-failed", { task: "claimed", reason: "沒起來" }, false);
+    const again = apply(
+      rejected.board,
+      "todo-failed",
+      { task: "claimed", reason: "還是不行" },
+      false,
+    );
+    expect(again.response).toEqual({
+      ok: false,
+      code: "refused",
+      line: "claimed 現在是「驗證沒過」，不能 todo-failed；現在能做的：todo-claim、todo-done、todo-obsolete、todo-drop。",
+    });
+    expect(again.committed).toBeNull();
+    expect(apply(board, "todo-takedown", { task: "open" }).response).toMatchObject({
+      code: "refused",
+    });
+  });
+
+  it("keeps the deadline settings and the lifecycle answers on the page only", () => {
+    const board = readBoard(paths).board;
+    for (const op of ["lifecycle-settings", "lifecycle-answer"])
+      expect(apply(board, op, {}, false).response).toEqual({
+        ok: false,
+        code: "refused",
+        line: `${op} 是使用者在頁面上按的，不能從指令送。`,
+      });
+    expect(
+      apply(board, "lifecycle-settings", { T2: { remind: 9, raise: 1 } }).response,
+    ).toMatchObject({
+      code: "usage",
+    });
   });
 });

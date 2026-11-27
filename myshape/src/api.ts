@@ -140,8 +140,8 @@ const answer: Route = (host, body) => {
 };
 
 /**
- * The captain's 不做了, 好，撤下 and 當作做完，關掉: the item leaves the page and
- * cannot be put back by the captain, so each takes two steps, bound to the item.
+ * The captain's 不做了 and 好，撤下: the item leaves the page and cannot be put
+ * back by the captain, so both take two steps, bound to the item.
  */
 function todoClose(op: string): Route {
   return (host, body) => {
@@ -258,9 +258,6 @@ export const ROUTES: Record<string, Route> = {
     fromTopicOp(host.topicOp("todo-claim", { task: field(body, "task") })),
   "POST todos/drop": todoClose("todo-drop"),
   "POST todos/takedown": todoClose("todo-takedown"),
-  "POST todos/accept": todoClose("todo-accept"),
-  "POST todos/unclaim": (host, body) =>
-    fromTopicOp(host.topicOp("todo-unclaim", { task: field(body, "task") })),
   "POST lifecycle/answer": topicRoute("lifecycle-answer"),
   "POST lifecycle/settings": topicRoute("lifecycle-settings"),
   "POST writes/resend": resend,

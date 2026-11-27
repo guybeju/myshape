@@ -849,9 +849,7 @@ function parseClock(raw: unknown): Clock | null {
   const state = TIMED_STATES.find((name) => name === raw["state"]);
   const since = stringField(raw, "since");
   if (state === undefined || since === null || Number.isNaN(Date.parse(since))) return null;
-  const clock: Clock = { state, since, sig: textField(raw, "sig") };
-  if (raw["raised"] === true) clock.raised = true;
-  return clock;
+  return { state, since, sig: textField(raw, "sig") };
 }
 
 function parseStall(raw: unknown): Stall | null {

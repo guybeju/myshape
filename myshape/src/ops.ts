@@ -169,9 +169,7 @@ function transitionProblem(
   const id = stringField(args, "task");
   const item = id === null || !Object.hasOwn(ctx.todos.items, id) ? undefined : ctx.todos.items[id];
   if (id === null || item === undefined) return null;
-  const clock = ctx.lifecycle.clocks[`todo\t${id}`];
-  const state = todoState(item, clock, ctx.lifecycle.settings, Date.parse(ctx.now));
-  return todoTransitionProblem(op, id, state);
+  return todoTransitionProblem(op, id, todoState(item));
 }
 
 /** The `reason` argument: absent, a string, or null when it is something else. */
@@ -757,16 +755,6 @@ export const OPERATIONS = {
   },
   "todo-drop": { channel: "page", commitFile: "todos", run: closeByCaptain("不做了") },
   "todo-takedown": { channel: "page", commitFile: "todos", run: closeByCaptain("撤下") },
-  "todo-accept": {
-    channel: "page",
-    commitFile: "todos",
-    run: onItem((ctx, task) => todos.closeUnverified(ctx.todos, task, ctx.label)),
-  },
-  "todo-unclaim": {
-    channel: "page",
-    commitFile: "todos",
-    run: onItem((ctx, task) => todos.unclaimItem(ctx.todos, task, ctx.now, ctx.label)),
-  },
   "lifecycle-settings": {
     channel: "page",
     commitFile: "lifecycle",

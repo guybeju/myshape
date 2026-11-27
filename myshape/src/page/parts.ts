@@ -249,14 +249,8 @@ const TODO_NOTE: Record<TodoView["state"], (reason: string) => Child> = {
   unknown: (word) => h("div", { class: "wr bad" }, `看板不認得這個項目的狀態：${word}`),
 };
 
-/** Where an item stands: as its state says, or, for a claim whose check never came, that it is back with you (O5). */
+/** Where an item stands, with the word todos.json holds for a state the board does not know. */
 function todoNote(todo: TodoView): Child {
-  if (todo.unverified)
-    return h(
-      "div",
-      { class: "wr bad" },
-      `你按了做完了，${agentName()} 一直沒有驗證；回到你這裡決定`,
-    );
   return TODO_NOTE[todo.state](
     todo.state === "unknown" ? (todo.unknown_state ?? "") : (todo.reason ?? ""),
   );
@@ -265,17 +259,6 @@ function todoNote(todo: TodoView): Child {
 function todoButtons(actions: Actions, todo: TodoView, key: string): Child {
   const close = (route: string, answer: string): void =>
     actions.ask(key, route, { task: todo.task, answer });
-  if (todo.unverified)
-    return h(
-      "div",
-      { class: "btns" },
-      h("button", { onclick: () => close("todos/accept", "當作做完，關掉") }, "當作做完，關掉"),
-      h(
-        "button",
-        { onclick: () => actions.send("todos/unclaim", { task: todo.task }) },
-        "收回，還沒做完",
-      ),
-    );
   if (todo.state === "claimed") return null;
   if (todo.state === "unknown")
     return h(
