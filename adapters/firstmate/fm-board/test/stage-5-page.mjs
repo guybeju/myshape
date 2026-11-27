@@ -47,6 +47,17 @@ export default async function run(page) {
   }
   await page.waitFor("the milestone summary", has("PR 開好了"));
 
+  // The 用量 panel shows the Claude usage the stand-in quota-axi reported, measured long
+  // ago: the numbers are there, and marked as no longer current.
+  const usage = `(document.querySelector("#sidebar .usage")?.innerText ?? "")`;
+  await page.waitFor("the 用量 panel", `${usage}.includes("用量") && ${usage}.includes("5 小時") && ${usage}.includes("37%")`);
+  for (const text of ["7 天", "12.5%", "已經過時", "後重置"]) {
+    if (!(await page.evaluate(`${usage}.includes(${JSON.stringify(text)})`)))
+      throw new Error(`the 用量 panel must show ${text}`);
+  }
+  if ((await page.evaluate(`document.querySelectorAll("#sidebar .usage-item.stale").length`)) !== 2)
+    throw new Error("both of the stand-in's metrics are old and must read as stale");
+
   // Queued work nobody tagged with a topic is listed under 未分類, folded. A captain hold
   // without a topic already has its card, so it is not listed a second time.
   const untagged = `document.querySelector('details[data-key="queued:untagged"]')`;

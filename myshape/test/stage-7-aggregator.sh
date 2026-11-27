@@ -174,6 +174,34 @@ test_fm_work_reaches_the_page() {
   pass "every part of the fed work reaches the page (AT2.1)"
 }
 
+# Status metrics (status-metrics.markdown): the example's block reaches the page read
+# against the board's clock; a bad entry is left out and counted while the rest stays;
+# a block of another version is not used, and the rest of the report still is.
+test_fm_status_metrics() {
+  local main="$AGG_FM/fm/main.json" now later item='.metrics[] | select(.home == "main") | .groups[0].items[0]'
+  assert_equals "Claude|ok|5 小時|37|%|normal|reset|true" \
+    "$(state_of "$FMH" '.metrics[] | select(.home == "main") | .groups[0] | "\(.label)|\(.state)|\(.items[0] | "\(.label)|\(.value)|\(.unit)|\(.severity)|\(.stale)|\(.reset_passed)")"')" \
+    "the example's metric must reach the page, and read as past its reset rather than current"
+  now=$(jq -rn 'now | todate')
+  later=$(jq -rn 'now + 7200 | todate')
+  jq --arg now "$now" --arg later "$later" \
+    '.metrics.items = [.metrics.items[0] + {measured_at: $now, resets_at: $later, value: 96, severity: "critical"},
+                       {id: "bad id", label: "x", value: 1}]' "$main" > "$main.tmp" && mv "$main.tmp" "$main"
+  refresh "$FMH"
+  wait_for "the new reading" is "96|critical||false" state_of "$FMH" "$item | \"\\(.value)|\\(.severity)|\\(.stale // \"\")|\\(.reset_passed)\""
+  assert_equals "1|items[1]：id 不是合格的 id" "$(state_of "$FMH" '.metrics[] | select(.home == "main") | "\(.dropped)|\(.first_drop)"')" \
+    "a bad entry must be left out and counted, and the rest kept"
+  jq '.metrics.v = 2' "$main" > "$main.tmp" && mv "$main.tmp" "$main"
+  refresh "$FMH"
+  wait_for "the block of another version" is "格式版本是 2，看板只認得 1" state_of "$FMH" '.metrics[] | select(.home == "main") | .problem'
+  assert_equals "A,B" "$(state_of "$FMH" '.holds[] | select(.task == "call-close") | .options | join(",")')" \
+    "a metrics block the board cannot use must leave the rest of the report in use"
+  cp "$CONTRACT/report-main.json" "$main"
+  refresh "$FMH"
+  wait_for "the example again" is "reset" state_of "$FMH" "$item | .stale"
+  pass "a home's metrics reach the page, read against the board's clock, and a bad entry or block hides nothing else"
+}
+
 # AT2.2: one feed call per home, each with its own cursor.
 test_fm_every_home_is_read_with_its_own_cursor() {
   local first ledger_sha
@@ -1139,7 +1167,8 @@ test_nothing_is_left() {
   pass "no board is left running and no Firstmate file was reached"
 }
 
-fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_every_home_is_read_with_its_own_cursor \
+fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_status_metrics \
+  test_fm_every_home_is_read_with_its_own_cursor \
   test_fm_message test_fm_answers test_fm_filing test_fm_notices test_fm_hands_on test_fm_direct test_fm_delivery_states \
   test_fm_resend_after_a_restart \
   test_fm_a_crash_mid_write test_fm_whole_page_states test_fm_refresh test_fm_summaries \

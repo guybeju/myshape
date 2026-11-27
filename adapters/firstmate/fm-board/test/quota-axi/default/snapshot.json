@@ -1,0 +1,6 @@
+{"schemaVersion":3,"providers":[
+{"provider":"claude","label":"Claude","source":"oauth","windows":[
+ {"id":"five_hour","label":"session","kind":"session","percentUsed":37,"percentRemaining":63,"resetsAt":"2099-01-01T05:00:00.000Z","windowSeconds":18000},
+ {"id":"seven_day","label":"week","kind":"weekly","percentUsed":12.5,"percentRemaining":87.5,"resetsAt":"2099-01-03T00:00:00.000Z","windowSeconds":604800}],
+ "state":{"status":"fresh","stale":false,"sourcesTried":["oauth"],"refreshedAt":"2026-11-27T15:46:51.000Z"}}
+]}

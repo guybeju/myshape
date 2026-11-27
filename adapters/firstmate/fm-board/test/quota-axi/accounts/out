@@ -1,0 +1,189 @@
+{
+  "generatedAt": "2026-11-27T16:23:18.852Z",
+  "schemaVersion": 6,
+  "providers": [
+    {
+      "provider": "claude",
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentRemaining": 18.96,
+          "resetsAt": "2099-01-01T05:00:00.000Z",
+          "pace": {
+            "status": "unknown",
+            "reason": "future_cycle_start"
+          }
+        },
+        {
+          "id": "seven_day",
+          "label": "week",
+          "kind": "weekly",
+          "percentRemaining": 60,
+          "resetsAt": "2099-01-03T00:00:00.000Z",
+          "pace": {
+            "status": "unknown",
+            "reason": "future_cycle_start"
+          }
+        },
+        {
+          "id": "model:fable",
+          "label": "Fable week",
+          "kind": "model",
+          "percentRemaining": 95,
+          "resetsAt": "2099-01-02T00:00:00.000Z",
+          "pace": {
+            "status": "unknown",
+            "reason": "future_cycle_start"
+          }
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-11-27T15:46:51.000Z",
+        "reused": true
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 18.96,
+            "boundedBy": [
+              "five_hour",
+              "seven_day"
+            ],
+            "limitingWindowIds": [
+              "five_hour"
+            ],
+            "pace": {
+              "status": "unknown",
+              "unknownWindowIds": [
+                "five_hour",
+                "seven_day"
+              ]
+            },
+            "runway": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "five_hour",
+                "seven_day"
+              ]
+            },
+            "selection": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "five_hour",
+                "seven_day"
+              ]
+            }
+          },
+          {
+            "scope": "model:fable",
+            "status": "known",
+            "effectivePercentRemaining": 18.96,
+            "boundedBy": [
+              "five_hour",
+              "seven_day",
+              "model:fable"
+            ],
+            "limitingWindowIds": [
+              "five_hour"
+            ],
+            "pace": {
+              "status": "unknown",
+              "unknownWindowIds": [
+                "five_hour",
+                "seven_day",
+                "model:fable"
+              ]
+            },
+            "runway": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "five_hour",
+                "seven_day",
+                "model:fable"
+              ]
+            },
+            "selection": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "five_hour",
+                "seven_day",
+                "model:fable"
+              ]
+            }
+          }
+        ]
+      },
+      "accountKey": "default",
+      "accountKeys": [
+        "default"
+      ]
+    },
+    {
+      "provider": "claude",
+      "accountKey": "profile:0123456789abcdef01234567",
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentRemaining": 4,
+          "resetsAt": "2099-01-01T03:00:00.000Z",
+          "pace": {
+            "status": "unknown",
+            "reason": "future_cycle_start"
+          }
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-11-27T15:40:00.000Z",
+        "reused": true
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 4,
+            "boundedBy": [
+              "five_hour"
+            ],
+            "limitingWindowIds": [
+              "five_hour"
+            ],
+            "pace": {
+              "status": "unknown",
+              "unknownWindowIds": [
+                "five_hour"
+              ]
+            },
+            "runway": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "five_hour"
+              ]
+            },
+            "selection": {
+              "status": "unknown",
+              "unmeasurableWindowIds": [
+                "five_hour"
+              ]
+            }
+          }
+        ]
+      },
+      "accountKeys": [
+        "profile:0123456789abcdef01234567"
+      ]
+    }
+  ]
+}

@@ -22,6 +22,9 @@ unset FM_DATA_OVERRIDE FM_STATE_OVERRIDE FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE
 export FM_SNAPSHOT_NOW=2026-07-25T00:00:00Z
 export TB_LOG="$TMP_ROOT/calls.log" TB_PLAY="$TMP_ROOT/play" TB_REMOTES="$TMP_ROOT/remotes"
 export FEED_ON_LOG="$TMP_ROOT/fm-on.log" FEED_ON_FAIL="$TMP_ROOT/fm-on-fail"
+# The stand-in quota-axi (helpers.sh) logs every call here.
+export TB_QUOTA_LOG="$TMP_ROOT/quota.log"
+QUOTA="$ROOT/fm-board/test/quota-axi"
 mkdir -p "$TB_PLAY" "$TB_REMOTES" "$FEED_ON_FAIL"
 : > "$TB_LOG"
 
@@ -307,6 +310,7 @@ test_a_missing_capability_is_exit_4() {
   printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$ROOT/bin/fm-fleet-snapshot.sh" > "$gap/bin/fm-fleet-snapshot.sh"
   chmod +x "$gap/bin/fm-fleet-snapshot.sh"
   line="這個 home 的 first mate 缺少封存 blocker 的修正：$(cd "$gap/bin" && pwd)/fm-fleet-snapshot.sh 會把已搬進 Done 封存的 blocker 當成沒完成，項目會看起來卡住，所以先不回報。把 fork 的這個修正（bin/fm-fleet-snapshot.sh 呼叫 bin/fm-backlog-archive-lib.sh 的 fm_backlog_archived_done_ids）移植到那個 code root，再更新。"
+  : > "$TB_QUOTA_LOG"
   for home in main sm1 far1; do
     rc=0
     out=$(feed "$gap" "$home" 0 - 2>"$TMP_ROOT/err") || rc=$?
@@ -314,6 +318,7 @@ test_a_missing_capability_is_exit_4() {
     assert_equals "$line" "$(cat "$TMP_ROOT/err")" "feed $home: stderr must be exactly the one line naming the gap"
     assert_equals '' "$out" "feed $home: a home that cannot report must print no report"
   done
+  assert_equals '' "$(cat "$TB_QUOTA_LOG")" "a home that cannot report must not run quota-axi"
   rc=0
   feed "$gap" main 0 - 0 - >/dev/null 2>&1 || rc=$?
   expect_code 4 "$rc" "feed main with a closed decisions' cursor on a Firstmate without the fix"
@@ -323,6 +328,95 @@ test_a_missing_capability_is_exit_4() {
     expect_code 0 "$(feed_code "$gap" "$home" 0 -)" "feed $home once the real snapshot is back"
   done
   pass "a Firstmate without the archived-blocker fix cannot report: exit 4 with one line, for every home"
+}
+
+# usage_of <case-dir>: the metrics block of feed main with the stand-in quota-axi answering
+# from <case-dir>; it fails the test when the feed itself fails.
+usage_of() {
+  local out
+  out=$(TB_QUOTA_PLAY=$1 feed "$FAKE" main 0 -) || fail "feed main failed with quota-axi answering from $1"
+  jq -c '.metrics' <<< "$out"
+}
+
+# path_without_quota: PATH without any directory that holds a quota-axi.
+path_without_quota() {
+  local dir kept='' IFS=:
+  for dir in $PATH; do
+    [ -x "$dir/quota-axi" ] || kept="${kept:+$kept:}$dir"
+  done
+  printf '%s\n' "$kept"
+}
+
+# Only the stand-in answers, with the flags that keep the read from asking the vendor each
+# time, from refreshing a credential, from prompting and from spending quota.
+test_the_main_report_carries_this_machines_claude_usage() {
+  local metrics
+  with_ledger_on "$MAIN"
+  : > "$TB_QUOTA_LOG"
+  metrics=$(usage_of "$QUOTA/default")
+  assert_equals '{"v":1,"stale_after_s":600,"groups":[{"id":"claude:default","label":"Claude","state":"ok","note":""}],"items":[{"id":"claude:default.five_hour","group":"claude:default","label":"5 小時","value":37,"unit":"%","severity":"normal","measured_at":"2026-11-27T15:46:51.000Z","resets_at":"2099-01-01T05:00:00.000Z"},{"id":"claude:default.seven_day","group":"claude:default","label":"7 天","value":12.5,"unit":"%","severity":"normal","measured_at":"2026-11-27T15:46:51.000Z","resets_at":"2099-01-03T00:00:00.000Z"}]}' \
+    "$metrics" "the main report must carry each window's used percentage, its reset and when the vendor answered"
+  assert_equals '--provider claude --json --no-credential-refresh --max-age 300' "$(cat "$TB_QUOTA_LOG")" \
+    "feed must run quota-axi once, for Claude, with no credential refresh and a reuse bound"
+  assert_equals '' "$(grep -E -e '--allow|--full|--profile' "$TB_QUOTA_LOG")" \
+    "feed must never let quota-axi prompt, spend quota or print account identity"
+  pass "the main report carries this machine's Claude usage from quota-axi, read with bounded, read-only flags"
+}
+
+test_usage_of_several_accounts() {
+  local metrics
+  with_ledger_on "$MAIN"
+  metrics=$(usage_of "$QUOTA/accounts")
+  assert_equals 'claude:default|Claude|ok claude:profile:0123456789abcdef01234567|Claude · profile:0123456789abcdef01234567|ok' \
+    "$(jq -r '[.groups[] | "\(.id)|\(.label)|\(.state)"] | join(" ")' <<< "$metrics")" \
+    "every account lane quota-axi reports must be its own group, named by its non-secret key"
+  assert_equals 'claude:default.five_hour|5 小時|81|warn|2026-11-27T15:46:51.000Z claude:default.seven_day|7 天|40|normal|2026-11-27T15:46:51.000Z claude:default.model:fable|Fable week|5|normal|2026-11-27T15:46:51.000Z claude:profile:0123456789abcdef01234567.five_hour|5 小時|96|critical|2026-11-27T15:40:00.000Z' \
+    "$(jq -r '[.items[] | "\(.id)|\(.label)|\(.value)|\(.severity)|\(.measured_at)"] | join(" ")' <<< "$metrics")" \
+    "each lane's windows must carry its used percentage, rounded, with the hint at 80 and 95 and the lane's own time"
+  pass "each Claude account lane is its own group of windows"
+}
+
+test_usage_that_cannot_be_read_shows_as_such() {
+  local garbage="$TMP_ROOT/quota-garbage" slow="$TMP_ROOT/quota-slow" out start
+  with_ledger_on "$MAIN"
+  assert_equals 'unavailable|quota-axi：unavailable（not_in_snapshot）|0' \
+    "$(usage_of "$QUOTA/unavailable" | jq -r '"\(.groups[0].state)|\(.groups[0].note)|\(.items | length)"')" \
+    "a lane quota-axi could not read (its exit 1) must say so, with no number"
+  assert_equals 'stale|quota-axi：stale（fetch failed）|0' \
+    "$(usage_of "$QUOTA/stale" | jq -r '"\(.groups[0].state)|\(.groups[0].note)|\(.items | length)"')" \
+    "a stale cached reading must not pass as current numbers"
+  assert_equals 'claude|unavailable|quota-axi 讀取失敗（exit 2），這次沒有用量。' \
+    "$(usage_of "$QUOTA/invalid" | jq -r '"\(.groups[0].id)|\(.groups[0].state)|\(.groups[0].note)"')" \
+    "a failing quota-axi must leave a note and no number"
+  mkdir -p "$garbage"
+  printf 'not json\n' > "$garbage/out"
+  printf '0\n' > "$garbage/code"
+  assert_equals 'quota-axi 的輸出讀不懂，這次沒有用量。' "$(usage_of "$garbage" | jq -r '.groups[0].note')" \
+    "output that is not a report must leave a note and no number"
+  out=$(PATH=$(path_without_quota) feed "$FAKE" main 0 -) || fail "feed main failed without quota-axi"
+  assert_equals 'unavailable|這台機器沒有 quota-axi，看不到 Claude 的用量。' \
+    "$(jq -r '"\(.metrics.groups[0].state)|\(.metrics.groups[0].note)"' <<< "$out")" "a machine without quota-axi must say so"
+  assert_equals 'run-a' "$(jq -r '[.tasks[].id] | join(" ")' <<< "$out")" "the rest of the report must not depend on quota-axi"
+  mkdir -p "$slow"
+  cp "$QUOTA/default/out" "$QUOTA/default/code" "$slow/"
+  printf '30\n' > "$slow/sleep"
+  start=$(date +%s)
+  out=$(TB_QUOTA_PLAY=$slow feed "$FAKE" main 0 -) || fail "feed main failed with a slow quota-axi"
+  [ "$(($(date +%s) - start))" -lt 25 ] || fail "a slow quota-axi must not hold the read past its bound"
+  assert_equals 'quota-axi 在 10 秒內沒有回答，這次沒有用量。|run-a' \
+    "$(jq -r '"\(.metrics.groups[0].note)|\([.tasks[].id] | join(" "))"' <<< "$out")" \
+    "a slow quota-axi must be cut off at its bound and the report still printed"
+  pass "a missing, failing, slow or stale quota-axi shows as such, never as numbers, and never fails the read"
+}
+
+test_only_the_main_report_carries_usage() {
+  with_ledger_on "$SM"
+  : > "$TB_QUOTA_LOG"
+  assert_equals 'false false' \
+    "$(feed "$FAKE" sm1 0 - | jq -r 'has("metrics")') $(feed "$FAKE" far1 0 - | jq -r 'has("metrics")')" \
+    "a secondmate's report must carry no metrics"
+  assert_equals '' "$(cat "$TB_QUOTA_LOG")" "reading a secondmate's home must not run quota-axi"
+  pass "only the main home's report carries this machine's usage"
 }
 
 # archive_row <home> <id> <answer-line...>: appends one released row to <home>'s Done archive.
@@ -528,7 +622,9 @@ test_the_reader_asks_for_board_input_when_the_snapshot_offers_it() {
 }
 
 fm_test_run test_main_report_carries_the_backlog test_main_report_has_the_contract_keys \
-  test_aggregator_block_and_read_hints test_ledger_hint_only_when_the_ledger_is_off \
+  test_aggregator_block_and_read_hints test_the_main_report_carries_this_machines_claude_usage \
+  test_usage_of_several_accounts test_usage_that_cannot_be_read_shows_as_such test_only_the_main_report_carries_usage \
+  test_ledger_hint_only_when_the_ledger_is_off \
   test_secondmates_are_read_in_their_own_homes test_remote_failures test_a_missing_capability_is_exit_4 \
   test_closed_decisions test_usage_errors test_topics_reads_the_tag_files_of_the_home \
   test_topics_leaves_a_remote_home_and_bad_arguments_to_the_full_read \

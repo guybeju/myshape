@@ -1,0 +1,10 @@
+{"schemaVersion":3,"providers":[
+{"provider":"claude","label":"Claude","source":"oauth","windows":[
+ {"id":"five_hour","label":"session","kind":"session","percentUsed":81.04,"percentRemaining":18.96,"resetsAt":"2099-01-01T05:00:00.000Z","windowSeconds":18000},
+ {"id":"seven_day","label":"week","kind":"weekly","percentUsed":40,"percentRemaining":60,"resetsAt":"2099-01-03T00:00:00.000Z","windowSeconds":604800},
+ {"id":"model:fable","label":"Fable week","kind":"model","percentUsed":5,"percentRemaining":95,"resetsAt":"2099-01-02T00:00:00.000Z","windowSeconds":604800}],
+ "state":{"status":"fresh","stale":false,"sourcesTried":["oauth"],"refreshedAt":"2026-11-27T15:46:51.000Z"}},
+{"provider":"claude","accountKey":"profile:0123456789abcdef01234567","label":"Claude","source":"oauth","windows":[
+ {"id":"five_hour","label":"session","kind":"session","percentUsed":96,"percentRemaining":4,"resetsAt":"2099-01-01T03:00:00.000Z","windowSeconds":18000}],
+ "state":{"status":"fresh","stale":false,"sourcesTried":["oauth"],"refreshedAt":"2026-11-27T15:40:00.000Z"}}
+]}

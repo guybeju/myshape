@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# A stand-in for quota-axi, first on PATH in every suite of fm-board/test
+# (helpers.sh), so that no test reads this machine's Claude quota through
+# bin/fm-board.sh feed. It appends its arguments, one call per line, to
+# $TB_QUOTA_LOG when that is set, and answers from the case directory
+# $TB_QUOTA_PLAY, or from default/ beside it when that is unset: it waits the
+# seconds in <case>/sleep when there is one, prints <case>/out and exits with
+# <case>/code.
+#
+# Each case's out is what quota-axi 0.1.69 printed for
+#   QUOTA_AXI_SNAPSHOT=<case>/snapshot.json quota-axi --provider claude --json \
+#     --no-credential-refresh --max-age 300
+# (the snapshot's path in invalid/out shortened), except stale/out: quota-axi
+# serves a snapshot only as a fresh reading, so it is default/out with the
+# state a stale cached reading carries in the default tier.
+set -u
+
+here=$(cd "$(dirname "$0")" && pwd)
+case_dir=${TB_QUOTA_PLAY:-$here/default}
+if [ -n "${TB_QUOTA_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$TB_QUOTA_LOG"
+fi
+if [ -f "$case_dir/sleep" ]; then
+  sleep "$(cat "$case_dir/sleep")"
+fi
+cat "$case_dir/out"
+exit "$(cat "$case_dir/code" 2>/dev/null || echo 0)"
