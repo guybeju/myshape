@@ -262,8 +262,12 @@ export default async function run(page) {
   // in the card's own queue sends nothing, a drop in another queue lands last there. Back under
   // 照優先順序 the queues show what the board kept; a last drag restores the walk's order.
   const dropOn = (name, queue, onto, half) => `(() => { const d = ${drag(name, queue, onto, half)}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`;
+  // The one-at-a-time cards keep their own order rules: 等你決定 and 要你動手 read the same.
+  const oneAtATime = `JSON.stringify(["等你決定", "要你動手"].map((title) => [...document.querySelectorAll("section")].find((box) => box.querySelector("h2")?.textContent === title)?.innerText ?? ""))`;
+  const before = await page.evaluate(oneAtATime);
   await page.click("#sidebar .order button", "新的在上");
   await page.waitFor("the cards listed by creation time", `document.querySelector('.queue[data-queue="normal"]').dataset.byTime === "true" && document.querySelector('.queue[data-queue="high"] .empty').textContent.startsWith("照建立時間排列中：拖到別的佇列會排在那裡的最後") && ${has("照建立時間排列只改顯示的順序")}`);
+  if ((await page.evaluate(oneAtATime)) !== before) throw new Error("the card order must not touch 等你決定 or 要你動手");
   await page.evaluate(dropOn("Idea", "normal", "Billing", "upper"));
   await page.evaluate(dropOn("Login", "normal", "Billing", "upper"));
   await page.waitFor("the drop into another queue", queueHas("normal", "Login"));
