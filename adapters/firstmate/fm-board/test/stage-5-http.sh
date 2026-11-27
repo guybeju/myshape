@@ -554,7 +554,9 @@ test_a_second_decision_waits_its_turn() {
     "a queued item whose decision waits its turn must say so"
   cp "$TMP_ROOT/backlog.before" "$MAIN/data/backlog.md"
   api refresh '{}' >/dev/null
-  assert_equals "false" "$(state '[.holds[].waits_turn] | any')" "with one decision left nothing waits"
+  assert_equals "call-1:false" \
+    "$(state '[.holds[] | select(.task | startswith("call-")) | "\(.task):\(.waits_turn)"] | join(" ")')" \
+    "with the second call gone the first is in front again"
   pass "a second decision waits its turn in the page's state, and its queued item says so"
 }
 
