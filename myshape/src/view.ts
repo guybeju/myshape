@@ -30,6 +30,19 @@ export interface HomeSnapshot {
   lastOkAt: number | null;
   error: string | null;
   version: HomeVersion;
+  /** How long a good read counts as current; the input's staleMs when not given. */
+  staleAfterMs?: number;
+}
+
+/** How old a home's last good read may be and still count as current. */
+function staleLimit(home: HomeSnapshot, staleMs: number): number {
+  return home.staleAfterMs === undefined ? staleMs : home.staleAfterMs;
+}
+
+/** Whether a home's last read was good and is still current. */
+export function isFresh(home: HomeSnapshot, nowMs: number, staleMs: number): boolean {
+  if (home.report === null || home.lastOkAt === null) return false;
+  return nowMs - home.lastOkAt <= staleLimit(home, staleMs);
 }
 
 export interface ViewInput {
@@ -427,7 +440,7 @@ function homeView(home: HomeSnapshot, input: ViewInput): HomeView {
     version: home.version,
     ledger_enabled: home.report?.ledger_enabled ?? null,
     ledger_hint: home.report?.ledger_hint ?? null,
-    stale: age === null || age > input.staleMs,
+    stale: age === null || age > staleLimit(home, input.staleMs),
     last_ok_seconds_ago: age === null ? null : Math.floor(age / 1000),
     error: home.error,
   };
@@ -891,12 +904,7 @@ function topicViews(topics: Frozen<TopicState>): Record<string, TopicView> {
 
 /** The lifecycle's inputs when the caller gives none: no clocks, every home with a report fresh. */
 function plainContext(input: ViewInput): LifecycleContext {
-  const reported = input.homes.filter(
-    (home) =>
-      home.report !== null &&
-      home.lastOkAt !== null &&
-      input.nowMs - home.lastOkAt <= input.staleMs,
-  );
+  const reported = input.homes.filter((home) => isFresh(home, input.nowMs, input.staleMs));
   return {
     store: emptyLifecycle(),
     schedules: [],
@@ -905,6 +913,7 @@ function plainContext(input: ViewInput): LifecycleContext {
     fresh: new Set(reported.map((home) => home.id)),
     present: new Set(input.homes.map((home) => home.id)),
     questions: new Map(),
+    readFrom: new Map(),
     label: input.label,
     nowMs: input.nowMs,
   };

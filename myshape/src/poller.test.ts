@@ -14,6 +14,8 @@ const TIMINGS: PollTimings = {
   timeoutMs: 111,
   idleMs: 600,
   staleMs: 1000,
+  slowMs: 900_000,
+  slowFarMs: 3_600_000,
 };
 
 interface Setup {
@@ -123,7 +125,14 @@ describe("reading the main home", () => {
   it("starts knowing only the main home, unread", () => {
     const { poller } = setup();
     expect(poller.snapshots()).toEqual([
-      { id: "main", report: null, lastOkAt: null, error: null, version: "unknown" },
+      {
+        id: "main",
+        report: null,
+        lastOkAt: null,
+        error: null,
+        version: "unknown",
+        staleAfterMs: 1_800_000,
+      },
     ]);
     expect(poller.hasMainReport()).toBe(false);
     expect(poller.knows("main")).toBe(true);
@@ -134,6 +143,8 @@ describe("reading the main home", () => {
       timeoutMs: 60_000,
       idleMs: 120_000,
       staleMs: 180_000,
+      slowMs: 900_000,
+      slowFarMs: 3_600_000,
     });
   });
 
@@ -593,6 +604,75 @@ describe("scheduling", () => {
     s.poller.stop();
     await new Promise((resolve) => setTimeout(resolve, 450));
     expect(s.calls).toHaveLength(0);
+  });
+});
+
+describe("reading with nobody looking", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const count = (s: Setup, home: string): number =>
+    s.calls.filter((call) => feedOf(call).startsWith(`${home} `)).length;
+
+  it("reads each home 15 minutes after its last read, and a home hinted slower than the default hourly", async () => {
+    const s = setup();
+    s.answers.set("main", () =>
+      report({ secondmates: [{ id: "near" }, { id: "far", read_every_s: 60 }] }),
+    );
+    s.poller.start();
+    await vi.advanceTimersByTimeAsync(899_999);
+    expect(s.calls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(count(s, "main")).toBe(1);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect([count(s, "main"), count(s, "near"), count(s, "far")]).toEqual([5, 4, 1]);
+    expect(s.poller.active).toBe(false);
+  });
+
+  it("goes back to every home's own interval once someone looks, and to the slow one after", async () => {
+    const s = setup();
+    s.poller.start();
+    s.poller.touch();
+    await vi.advanceTimersByTimeAsync(TIMINGS.idleMs - 1);
+    const viewed = count(s, "main");
+    expect(viewed).toBeGreaterThan(1);
+    await vi.advanceTimersByTimeAsync(899_000);
+    expect(count(s, "main")).toBe(viewed);
+    await vi.advanceTimersByTimeAsync(TIMINGS.idleMs + 15_000);
+    expect(count(s, "main")).toBe(viewed + 1);
+  });
+
+  it("reads nothing once stopped", async () => {
+    const s = setup();
+    s.poller.start();
+    s.poller.stop();
+    await vi.advanceTimersByTimeAsync(2_000_000);
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it("knows when each home's last good read began, and keeps it through a failed one", async () => {
+    const s = setup();
+    expect(s.poller.goodReadsFrom()).toEqual(new Map());
+    const start = Date.now();
+    await s.poller.readNow("main");
+    expect(s.poller.goodReadsFrom()).toEqual(new Map([["main", start]]));
+    vi.setSystemTime(start + 5000);
+    s.answers.set("main", () => ({ code: 1, stdout: "", stderr: "down" }));
+    await s.poller.readNow("main");
+    expect(s.poller.goodReadsFrom()).toEqual(new Map([["main", start]]));
+  });
+
+  it("counts a read as fresh for twice the slow interval with nobody looking, the stale limit otherwise", async () => {
+    const s = setup();
+    s.answers.set("main", () => report({ secondmates: [{ id: "far", read_every_s: 60 }] }));
+    await s.poller.readNow("main");
+    const limits = (): number[] => s.poller.snapshots().map((home) => home.staleAfterMs ?? 0);
+    expect(limits()).toEqual([1_800_000, 7_200_000]);
+    s.poller.touch();
+    expect(limits()).toEqual([TIMINGS.staleMs, TIMINGS.staleMs]);
   });
 });
 

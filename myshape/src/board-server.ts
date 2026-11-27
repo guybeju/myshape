@@ -56,7 +56,14 @@ import { commitChange, loadBoard } from "./store.js";
 import type { CommitTarget, LeftoverProposal, StoredBoard } from "./store.js";
 import * as topics from "./topics.js";
 import type { TodoNotice } from "./todos.js";
-import { buildView, evaluateBoard, placeTask, turnNoticeText, turnsTaken } from "./view.js";
+import {
+  buildView,
+  evaluateBoard,
+  isFresh,
+  placeTask,
+  turnNoticeText,
+  turnsTaken,
+} from "./view.js";
 import type { AskMessage } from "./stalls.js";
 import type { BoardView, TurnView, ViewInput } from "./view.js";
 import { scheduleLines } from "./lifecycle.js";
@@ -553,12 +560,7 @@ function sha256Hex(text: string): string {
 function lifecycleContext(service: Service): LifecycleContext {
   const nowMs = Date.now();
   const homes = service.poller.snapshots();
-  const fresh = homes.filter(
-    (home) =>
-      home.report !== null &&
-      home.lastOkAt !== null &&
-      nowMs - home.lastOkAt <= service.timings.staleMs,
-  );
+  const fresh = homes.filter((home) => isFresh(home, nowMs, service.timings.staleMs));
   const resolve = (id: string): string => topics.resolveTopicId(service.board.topics.doc, id);
   const writes = [...service.writes.records.values()].map((write) => ({
     kind: write.action.kind,
@@ -567,6 +569,7 @@ function lifecycleContext(service: Service): LifecycleContext {
     topic: write.topic === null ? null : resolve(write.topic),
     state: write.state,
     question_sha256: write.action.kind === "answer" ? write.action.question_sha256 : null,
+    settledAt: service.writes.settledAt(write.id),
   }));
   const questions = homes.flatMap((home) =>
     (home.report?.holds ?? []).map((hold): [string, string] => [
@@ -582,6 +585,7 @@ function lifecycleContext(service: Service): LifecycleContext {
     fresh: new Set(fresh.map((home) => home.id)),
     present: new Set(homes.map((home) => home.id)),
     questions: new Map(questions),
+    readFrom: service.poller.goodReadsFrom(),
     label: labelOf(service),
     nowMs,
   };
@@ -829,6 +833,8 @@ function pollTimings(): PollTimings {
     readMs: override("READ", DEFAULT_TIMINGS.readMs),
     idleMs: override("IDLE", DEFAULT_TIMINGS.idleMs),
     staleMs: override("STALE", DEFAULT_TIMINGS.staleMs),
+    slowMs: override("SLOW", DEFAULT_TIMINGS.slowMs),
+    slowFarMs: override("SLOW_FAR", DEFAULT_TIMINGS.slowFarMs),
   };
 }
 
@@ -1185,6 +1191,7 @@ function loadService(boot: Boot): Service {
   announceConfirmed(service, loaded.confirmed);
   service.notifier.start(service.board.topics);
   startClock(service);
+  service.poller.start();
   return service;
 }
 

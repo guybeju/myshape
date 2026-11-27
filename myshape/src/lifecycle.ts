@@ -185,6 +185,8 @@ export interface WriteLine {
   topic: string | null;
   state: string;
   question_sha256: string | null;
+  /** When the write reached its state, epoch ms, or null when the board does not know. */
+  settledAt: number | null;
 }
 
 /** A schedule as the lifecycle reads it. */
@@ -213,6 +215,8 @@ export interface LifecycleContext {
   present: ReadonlySet<string>;
   /** SHA-256 of each hold's question, by "home\ttask". */
   questions: ReadonlyMap<string, string>;
+  /** When the last good read of each home began, epoch ms. */
+  readFrom: ReadonlyMap<string, number>;
   /** What the board's sentences call the aggregator. */
   label: string;
   nowMs: number;
@@ -246,8 +250,8 @@ function noTopic(found: Card): Card[] {
 const ANSWER_SENDING = new Set(["waiting", "sending", "retrying"]);
 const ANSWER_FAILED = new Set(["failed", "undelivered", "unknown"]);
 
-/** The state of the board's latest answer to a decision, if it sent one for this question. */
-function answerState(context: LifecycleContext, hold: HoldView): string | null {
+/** The board's latest answer to a decision, if it sent one for this question. */
+function answerOf(context: LifecycleContext, hold: HoldView): WriteLine | undefined {
   const sha = context.questions.get(`${hold.home}\t${hold.task}`);
   const own = context.writes.filter(
     (write) =>
@@ -256,8 +260,18 @@ function answerState(context: LifecycleContext, hold: HoldView): string | null {
       write.task === hold.task &&
       write.question_sha256 === sha,
   );
-  const last = own.at(-1);
-  return last === undefined ? null : last.state;
+  return own.at(-1);
+}
+
+/**
+ * Whether a good read of the answer's home began after the answer reached
+ * its state: only such a read can say the decision is still open once
+ * answered. A read in flight when the answer arrived may predate it.
+ */
+function readSince(context: LifecycleContext, write: WriteLine): boolean {
+  if (write.settledAt === null) return true;
+  const from = context.readFrom.get(write.home);
+  return from !== undefined && from > write.settledAt;
 }
 
 /**
@@ -315,12 +329,20 @@ interface HoldFacts {
   hold: HoldView;
   /** The state of the board's own answer to it, if it sent one. */
   sent: string | null;
+  /** Whether a good read began after that answer reached its state. */
+  readSince: boolean;
   visible: () => boolean;
+}
+
+/** An answer still going, or one delivered that no read since could check: the board's to finish. */
+function answerGoing(facts: HoldFacts): boolean {
+  if (facts.sent === null) return false;
+  return ANSWER_SENDING.has(facts.sent) || (facts.sent === "delivered" && !facts.readSince);
 }
 
 const HOLD_RULES: Rules<HoldFacts> = [
   ["D10", ({ hold }) => hold.stale],
-  ["D6", ({ sent }) => sent !== null && ANSWER_SENDING.has(sent)],
+  ["D6", answerGoing],
   ["D7", ({ sent }) => sent !== null && ANSWER_FAILED.has(sent)],
   ["D8", ({ sent }) => sent === "delivered"],
   ["D9", ({ hold }) => hold.bucket === "unknown"],
@@ -333,7 +355,10 @@ const HOLD_RULES: Rules<HoldFacts> = [
 /** A decision's state, first match wins (spec/lifecycle.markdown, 待決事項). */
 function holdState(view: BoardView, context: LifecycleContext, hold: HoldView): CardState {
   const visible = (): boolean => visibleWait(view, hold.home, hold.blockers, new Set([hold.task]));
-  return firstState(HOLD_RULES, { hold, sent: answerState(context, hold), visible }, "D1");
+  const answer = answerOf(context, hold);
+  const sent = answer === undefined ? null : answer.state;
+  const since = answer !== undefined && readSince(context, answer);
+  return firstState(HOLD_RULES, { hold, sent, readSince: since, visible }, "D1");
 }
 
 function holdCards(view: BoardView, context: LifecycleContext): Card[] {

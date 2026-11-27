@@ -142,6 +142,7 @@ function context(store: LifecycleStore, extra: Partial<LifecycleContext> = {}): 
     fresh: new Set(["main"]),
     present: new Set(["main"]),
     questions: new Map(),
+    readFrom: new Map([["main", NOW - 1000]]),
     label: "plain",
     nowMs: NOW,
     ...extra,
@@ -232,16 +233,18 @@ describe("the state of every card", () => {
   });
 
   it("puts a decision whose answer is being sent, failed, or delivered but still open in D6, D7, D8", () => {
-    const write = (taskId: string, state: string) => ({
+    const write = (taskId: string, state: string, settledAt: number | null = NOW - 5000) => ({
       kind: "answer",
       home: "main",
       task: taskId,
       topic: null,
       state,
       question_sha256: "sha",
+      settledAt,
     });
+    const ids = ["a", "b", "c", "d", "e", "f"];
     const { evaluation } = look(
-      [home("main", { report: report({ holds: [hold("a"), hold("b"), hold("c"), hold("d")] }) })],
+      [home("main", { report: report({ holds: ids.map((id) => hold(id)) }) })],
       emptyLifecycle(),
       {
         context: {
@@ -253,14 +256,34 @@ describe("the state of every card", () => {
               ...write("d", "delivered"),
               question_sha256: "an older question",
             },
+            // Delivered after the last good read began: that read may predate the answer.
+            write("e", "delivered", NOW - 1000),
+            write("f", "delivered", null),
           ],
-          questions: new Map(["a", "b", "c", "d"].map((id) => [`main\t${id}`, "sha"])),
+          questions: new Map(ids.map((id) => [`main\t${id}`, "sha"])),
         },
       },
     );
-    expect(
-      ["a", "b", "c", "d"].map((id) => stateOf(evaluation.cards, `hold\tmain\t${id}`)),
-    ).toEqual(["D6", "D7", "D8", "D1"]);
+    expect(ids.map((id) => stateOf(evaluation.cards, `hold\tmain\t${id}`))).toEqual([
+      "D6",
+      "D7",
+      "D8",
+      "D1",
+      "D6",
+      "D8",
+    ]);
+    const unread = look(
+      [home("main", { report: report({ holds: [hold("c")] }) })],
+      emptyLifecycle(),
+      {
+        context: {
+          writes: [write("c", "delivered")],
+          questions: new Map([["main\tc", "sha"]]),
+          readFrom: new Map(),
+        },
+      },
+    );
+    expect(stateOf(unread.evaluation.cards, "hold\tmain\tc")).toBe("D6");
   });
 
   it("classifies queued items, and flags one with no topic", () => {
@@ -937,6 +960,7 @@ describe("the edges of each rule", () => {
       topic: null,
       state,
       question_sha256: "sha",
+      settledAt: NOW - 5000,
     });
     const { evaluation } = look(
       [home("main", { report: report({ holds: [hold("a")] }) })],

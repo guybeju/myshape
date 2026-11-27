@@ -147,6 +147,21 @@ describe("fixed ids", () => {
   });
 });
 
+describe("when a write reached its state", () => {
+  it("is the time of its last audit line, kept across a restart, and unknown for a write it never had", async () => {
+    const first = rig();
+    vi.setSystemTime(T0 + 1000);
+    const record = submit(first, PRE, notice(T0 + 900_000));
+    vi.setSystemTime(T0 + 2000);
+    await until(() => record.state === "delivered");
+    expect(first.engine.settledAt(PRE)).toBe(T0 + 2000);
+    first.engine.stop();
+    vi.setSystemTime(T0 + 9000);
+    expect(rig().engine.settledAt(PRE)).toBe(T0 + 2000);
+    expect(first.engine.settledAt("w-none")).toBeNull();
+  });
+});
+
 describe("expiry", () => {
   it("reads a notice's expires_at and nothing else", () => {
     expect(expiresAt(notice(T0))).toBe(T0);
