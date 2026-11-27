@@ -96,10 +96,12 @@ describe("ageText", () => {
 });
 
 describe("valueText", () => {
-  it("writes a percentage to one decimal and any other value with its unit", () => {
+  it("writes a percentage to one decimal and any other value as sent, with its unit", () => {
     expect(valueText(item({ value: 37 }))).toBe("37%");
     expect(valueText(item({ value: 12.54 }))).toBe("12.5%");
     expect(valueText(item({ value: 1.5, unit: "USD" }))).toBe("1.5 USD");
+    expect(valueText(item({ value: 3.25, unit: "USD" }))).toBe("3.25 USD");
+    expect(valueText(item({ value: 1234.5678, unit: "" }))).toBe("1234.5678");
     expect(valueText(item({ value: 3, unit: "" }))).toBe("3");
   });
 });

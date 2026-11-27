@@ -387,7 +387,8 @@ test_in_home_answers_passes_through() {
   root="$TMP_ROOT/answers-root"
   mkdir -p "$root/bin"
   cp "$ROOT"/bin/fm-board.sh "$ROOT"/bin/fm-board-lib.sh "$ROOT"/bin/fm-board-io-lib.sh "$ROOT"/bin/myshape-lib.sh \
-    "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$root/bin/"
+    "$ROOT"/bin/fm-primary-scope-lib.sh "$ROOT"/bin/fm-secondmate-registry-lib.sh "$ROOT"/bin/fm-timeout-lib.sh \
+    "$root/bin/"
   cat > "$root/bin/fm-captain-hold.sh" <<'SH'
 #!/usr/bin/env bash
 { printf 'argv=%s\n' "$*"; printf 'home=%s\n' "$FM_HOME"; printf 'stdin=%s\n' "$(cat)"; } > "$FM_HOME/captured"

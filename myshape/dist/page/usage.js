@@ -47,12 +47,11 @@ const STALE_TEXT = {
     reset: "重置之後還沒有新的數字",
     old: "已經過時",
 };
-/** The number as written: a percentage to one decimal, any other value with its unit. */
+/** The number as written: a percentage to one decimal, any other value as sent, with its unit. */
 export function valueText(item) {
-    const figure = String(Number(item.value.toFixed(1)));
     if (item.unit === "%")
-        return `${figure}%`;
-    return item.unit === "" ? figure : `${figure} ${item.unit}`;
+        return `${Number(item.value.toFixed(1))}%`;
+    return item.unit === "" ? String(item.value) : `${item.value} ${item.unit}`;
 }
 const GROUP_PILL = {
     ok: null,
