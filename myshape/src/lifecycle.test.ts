@@ -349,6 +349,19 @@ describe("the state of every card", () => {
       "Q9",
     ]);
     expect(stateOf(evaluation.cards, "queued\tmain\tdated-later")).toBe("Q3");
+    // A day past the date to the millisecond, the date no longer explains the wait.
+    const edge = look([
+      home("main", {
+        report: report({
+          queued: [
+            queued("a-day-on", { hold: "x", hold_until: ago(DAY) }),
+            queued("just-before", { hold: "x", hold_until: ago(DAY - 1) }),
+          ],
+        }),
+      }),
+    ]);
+    expect(stateOf(edge.evaluation.cards, "queued\tmain\ta-day-on")).toBe("Q5");
+    expect(stateOf(edge.evaluation.cards, "queued\tmain\tjust-before")).toBe("Q6");
     expect(isTimed("Q6")).toBe(false);
     expect(isTimed("Q9")).toBe(true);
     expect(evaluation.memory.clocks["queued\tmain\tdated"]).toBeUndefined();
