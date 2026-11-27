@@ -234,6 +234,7 @@ async function drive(options: QueryOptions, prompt: string, stopAtInit = false):
   const stream = new PromptStream(prompt);
   const messages: SDKMessage[] = [];
   const stderr: string[] = [];
+  let thrown: string | undefined;
   try {
     for await (const message of query({
       prompt: stream,
@@ -244,7 +245,8 @@ async function drive(options: QueryOptions, prompt: string, stopAtInit = false):
       if (stopAtInit && message.type === "system" && message.subtype === "init") break;
     }
   } catch (error) {
-    messages.push({ type: "error", message: redact(String(error)) } as unknown as SDKMessage);
+    thrown = redact(String(error));
+    messages.push({ type: "error", message: thrown } as unknown as SDKMessage);
   } finally {
     stream.close();
     options.abortController.abort();
@@ -265,8 +267,32 @@ async function drive(options: QueryOptions, prompt: string, stopAtInit = false):
     sessionId: typeof id === "string" ? id : undefined,
   };
   report(prompt.split("\n").slice(3).join(" / "), run);
+  findings.push(...sessionEnd(run, thrown));
   if (run.stderr.trim() !== "") findings.push(`  stderr: ${run.stderr.trim().slice(0, 600)}`);
   return run;
+}
+
+/** How a session started and ended, for the findings: init's model and source, the result, any exception. */
+function sessionEnd(run: Run, thrown: string | undefined): string[] {
+  const { init, result } = run;
+  const lines = [
+    `  init: model ${String(init?.["model"])}, apiKeySource ${String(init?.["apiKeySource"])}`,
+  ];
+  if (result === undefined) {
+    lines.push("  result: none");
+  } else {
+    const fields = ["subtype", "is_error", "num_turns", "duration_ms", "stop_reason"]
+      .filter((key) => key in result)
+      .map((key) => `${key} ${JSON.stringify(result[key])}`);
+    lines.push(`  result: ${fields.join(", ")}`);
+    const said = result["result"] ?? result["errors"];
+    if (said !== undefined) {
+      const text = typeof said === "string" ? said : JSON.stringify(said);
+      lines.push(`  result text: ${redact(text).slice(0, 600).replaceAll("\n", " | ")}`);
+    }
+  }
+  if (thrown !== undefined) lines.push(`  query() threw: ${thrown.slice(0, 600)}`);
+  return lines;
 }
 
 /** The session started in the expected mode with the settings' credential. */
