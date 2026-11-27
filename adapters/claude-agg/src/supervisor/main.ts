@@ -167,9 +167,10 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
   passes.run();
   deps.log(`claude-agg: running (pid ${deps.pid}); stop it with Ctrl-C or kill ${deps.pid}`);
   const signal = await deps.stopSignal;
+  const stopped = supervisor.stop();
   deps.log(`claude-agg: ${signal}: stopping; running sessions are aborted`);
   await passes.close();
-  await supervisor.stop();
+  await stopped;
   deps.log("claude-agg: stopped");
   return 0;
 }

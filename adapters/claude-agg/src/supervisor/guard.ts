@@ -44,8 +44,8 @@ export const REASONS = {
   board: "只有 supervisor 會寫看板：worker 不跑 myshape.sh。",
   home: "worker 不碰看板的 home（包括 state/myshape/ 與 agg/）。",
   merge: "worker 不合併 PR：推分支、開 PR，合併由 captain 決定。",
-  pushDefault: "worker 不推預設分支：推自己的 agg/<task> 分支。",
-  pushUnnamed: "要寫明推哪個分支，例如 git push origin agg/<task>。",
+  pushDefault: "worker 不推預設分支：用 push_branch 工具推自己的 agg/<task> 分支。",
+  pushUnnamed: "worker 不自己推送：用 push_branch 工具推自己的 agg/<task> 分支。",
   port: "worker 不連看板的埠。",
   noPush: "這個 session 不推任何東西。",
 } as const;

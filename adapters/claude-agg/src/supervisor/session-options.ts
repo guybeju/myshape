@@ -216,9 +216,10 @@ export function credentialReadRules(credentialFile: string): string[] {
 /**
  * The flag-settings layer of a worker session: the sandbox around its shell
  * commands, and its file tools kept to its working directory. The main
- * checkout is named outside the working directories, whatever
- * `projectConfigRoot` makes of it; its .git stays readable for the worktree's
- * git.
+ * checkout is also listed in workingDirectoriesExclude; the SDK documents
+ * that a listed path that is itself a working directory is still let
+ * through, so whether `projectConfigRoot` makes it one is what real-binary
+ * check 7 settles. Its .git stays readable for the worktree's git.
  */
 export function workerSettings(session: WorkerSession, ctx: SessionContext): Settings {
   return {

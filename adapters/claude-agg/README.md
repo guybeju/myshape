@@ -45,8 +45,10 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   read nothing under the home directory but the worktree, the main
   checkout's `.git` and the settings' `readPaths` (the gh login, `~/.ssh`,
   Claude's own credentials, the credential file and the board home are denied
-  by name too), and write only the worktree. Its file tools stay in the
-  worktree (`block{Reads,Writes}OutsideWorkingDirectories`), the same paths
+  by name too), and write only the worktree, the main checkout's shared
+  `.git` (not its `hooks/` or `config`: the sandbox allows that for a linked
+  worktree) and the sandbox's own temporary directory. Its file tools stay in
+  the worktree (`block{Reads,Writes}OutsideWorkingDirectories`), the same paths
   are denied to `Read`, `Grep` and `Glob`, it has no `WebFetch` or
   `WebSearch`, and `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` takes the credential
   out of every command, hook and MCP server it starts;
