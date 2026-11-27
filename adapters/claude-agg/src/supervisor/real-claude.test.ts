@@ -451,6 +451,62 @@ function probeRewritten(options: QueryOptions, target: string, probe = PROBE): Q
   };
 }
 
+/** What the sandbox prints when it refuses a read or write, on macOS (Seatbelt) or Linux (bwrap). */
+const SANDBOX_REFUSAL = /Operation not permitted|Permission denied|Read-only file system/;
+
+/**
+ * One worker session whose only step is the T1 probe `probe`, rewritten by
+ * the test hook into the fixed `target`.
+ */
+async function probeSession(repo: Repo, probe: string, target: string): Promise<Run> {
+  const abort = new AbortController();
+  const options = probeRewritten(
+    workerOptions(
+      {
+        worktree: repo.worktree,
+        mainCheckout: repo.main,
+        resume: undefined,
+        forge: await forgeFor(repo),
+      },
+      context(abort),
+    ),
+    target,
+    probe,
+  );
+  return drive(denyRealHome(options), STEPS([`Run in Bash: ${probe}`]));
+}
+
+/**
+ * The sandbox-block criteria: the rewritten command really ran (its own exit
+ * lines are in its output), each step exited nonzero, and the output holds
+ * the sandbox's refusal. A command an earlier layer stopped is not a pass:
+ * the case is skipped as "sandbox not exercised (stopped by <layer>)".
+ *
+ * Returns:
+ *   false when the case was skipped.
+ */
+function expectSandboxRefused(
+  test: { skip: (note: string) => void },
+  label: string,
+  run: Run,
+  probe: string,
+  steps: readonly string[],
+): boolean {
+  const use = bashCall(run, probe);
+  const out = reachedSandbox(label, use);
+  if (out === undefined) {
+    test.skip(`sandbox not exercised (stopped by ${stoppedBy(use) ?? "?"})`);
+    return false;
+  }
+  findings.push(`- ${label}: ${out.slice(0, 300).replaceAll("\n", " | ")}`);
+  for (const step of steps) {
+    expect(out, "the rewritten command ran").toContain(step);
+    expect(out).not.toContain(`${step}0`);
+  }
+  expect(out, "the sandbox refused it").toMatch(SANDBOX_REFUSAL);
+  return true;
+}
+
 /** One worker session with the supervisor's options (and the test's model and turn cap). */
 async function session(
   repo: Repo,
@@ -1139,4 +1195,75 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
     },
     STEP_MS,
   );
+
+  // Security's sandbox-block cases (consult, final delta read): the
+  // sandbox's own read and write blocks, reached by commands that no deny
+  // rule names and that the CLI's path analysis lets through, so the sandbox
+  // is the layer that refuses. All T1 probes, selected by -t "sandbox-blocks".
+  it(
+    "sandbox-blocks (i): sandboxed Bash cannot read an ordinary file under HOME",
+    async (test) => {
+      const repo = repository();
+      const marker = "NOTES-MARKER-not-a-secret";
+      const notes = join(home(), "notes.txt");
+      writeFileSync(notes, `${marker}\n`);
+      const probe = "echo probe-home-notes";
+      const run = await probeSession(repo, probe, `cat ${notes}; echo "read-exit=$?"`);
+      expectStarted(run);
+      expect(run.transcript).not.toContain(marker);
+      expectSandboxRefused(test, "sandbox-blocks (i)", run, probe, ["read-exit="]);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "sandbox-blocks (ii): sandboxed Bash cannot read a shared temporary file outside its own TMPDIR",
+    async (test) => {
+      const repo = repository();
+      const marker = "SHARED-TMP-MARKER-not-a-secret";
+      const shared = join(scratch, "shared-notes.txt");
+      writeFileSync(shared, `${marker}\n`);
+      const probe = "echo probe-shared-tmp";
+      const run = await probeSession(repo, probe, `cat ${shared}; echo "read-exit=$?"`);
+      expectStarted(run);
+      expect(run.transcript).not.toContain(marker);
+      expectSandboxRefused(test, "sandbox-blocks (ii)", run, probe, ["read-exit="]);
+    },
+    STEP_MS,
+  );
+
+  const gitWrites: { what: string; target: (main: string, worktree: string) => string }[] = [
+    {
+      what: "git config --local",
+      target: (main) => `git -C ${main} config --local agg.probe 1; echo "write-exit=$?"`,
+    },
+    {
+      what: "cp into hooks/",
+      target: (main, worktree) =>
+        `cp ${join(worktree, "README")} ${join(main, ".git", "hooks", "pre-commit")}; echo "write-exit=$?"`,
+    },
+    {
+      what: "a node script writing config and a hook",
+      target: (main) =>
+        `node -e "const fs=require('fs');fs.appendFileSync(process.argv[1],'[agg]\\n');fs.writeFileSync(process.argv[2],'#!/bin/sh\\n')" ${join(main, ".git", "config")} ${join(main, ".git", "hooks", "pre-commit")}; echo "write-exit=$?"`,
+    },
+  ];
+  for (const { what, target } of gitWrites) {
+    it(
+      `sandbox-blocks (iii): sandboxed Bash cannot write the main checkout's .git with ${what}`,
+      async (test) => {
+        const repo = repository();
+        const hooks = join(repo.main, ".git", "hooks");
+        mkdirSync(hooks, { recursive: true });
+        const config = readFileSync(join(repo.main, ".git", "config"));
+        const probe = `echo probe-git-write-${what.replaceAll(/\W+/g, "-")}`;
+        const run = await probeSession(repo, probe, target(repo.main, repo.worktree));
+        expectStarted(run);
+        expect(readFileSync(join(repo.main, ".git", "config")).equals(config)).toBe(true);
+        expect(existsSync(join(hooks, "pre-commit"))).toBe(false);
+        expectSandboxRefused(test, `sandbox-blocks (iii) ${what}`, run, probe, ["write-exit="]);
+      },
+      STEP_MS,
+    );
+  }
 });
