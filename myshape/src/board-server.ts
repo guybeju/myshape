@@ -834,7 +834,6 @@ function pollTimings(): PollTimings {
     idleMs: override("IDLE", DEFAULT_TIMINGS.idleMs),
     staleMs: override("STALE", DEFAULT_TIMINGS.staleMs),
     slowMs: override("SLOW", DEFAULT_TIMINGS.slowMs),
-    slowFarMs: override("SLOW_FAR", DEFAULT_TIMINGS.slowFarMs),
   };
 }
 

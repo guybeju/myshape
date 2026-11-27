@@ -762,6 +762,30 @@ test_plain_lifecycle_fields() {
   pass "the queued fields read with and without them, and the board reminds the aggregator once of what it cannot read (AT6.7)"
 }
 
+# AT6.8: with nobody looking the board still reads, at the slow interval
+# (contracts section 10), shortened here to 1.5 s; its status still says it
+# does not poll every home's interval.
+test_plain_reads_with_nobody_looking() {
+  local agg stub home before
+  agg=$TMP_ROOT/agg-slow
+  stub=$(sa_install_stub plain "$agg")
+  home=$(sa_home slow)
+  sa_bind "$home" "$stub"
+  printf '%s\n' '{"tasks": [{"id": "s1", "kind": "job", "state": "working"}]}' > "$agg/plain/main.json"
+  SA_ENV=("${BASE_ENV[@]}" MYSHAPE_IDLE_MS=1000 MYSHAPE_SLOW_MS=1500)
+  sa "$home" open >/dev/null || fail "the slow board did not start"
+  SA_ENV=("${BASE_ENV[@]}")
+  sa_confirm "$home"
+  # The confirmation was the last viewer: once the idle limit passes, only the slow reads go on.
+  sleep 2
+  before=$(feeds_of "$agg" main)
+  sleep 4
+  [ "$(feeds_of "$agg" main)" -gt "$before" ] || fail "with nobody looking the board must still read its homes"
+  assert_contains "$(sa "$home" status)" "輪詢：沒在跑" "with nobody looking the board must not poll every home's interval"
+  sa "$home" stop >/dev/null
+  pass "with nobody looking the board still reads every home, slowly (AT6.8)"
+}
+
 # AT6.6: no text the board emits names Firstmate.
 test_plain_texts_name_no_firstmate() {
   local texts
@@ -1121,7 +1145,8 @@ fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_every_home_is_re
   test_fm_a_crash_mid_write test_fm_whole_page_states test_fm_refresh test_fm_summaries \
   test_plain_setup test_plain_work test_plain_ledger test_plain_second_home test_plain_banners \
   test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel test_plain_hands_on \
-  test_plain_changes_are_marked test_plain_lifecycle_fields test_plain_texts_name_no_firstmate \
+  test_plain_changes_are_marked test_plain_lifecycle_fields test_plain_reads_with_nobody_looking \
+  test_plain_texts_name_no_firstmate \
   test_bind_setup test_bind_a_tracked_program_needs_no_confirmation \
   test_bind_an_override_keeps_the_exemption_only_for_the_own_location test_bind_paths_only \
   test_bind_a_confirmation_is_bound_to_the_bytes test_bind_a_fixed_environment test_bind_only_the_page_confirms \
