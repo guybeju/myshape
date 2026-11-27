@@ -1,7 +1,7 @@
 // The page's controller: polls the board, keeps the page state, runs the
 // actions buttons ask for, and handles dragging topics between queues.
 import type { Queue } from "#board/topics.js";
-import { getJson, postJson, takeToken } from "./api.js";
+import { getJson, postJson, takeToken, tokenInHash } from "./api.js";
 import type { Reply } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
 import { dropAnchor } from "./drop.js";
@@ -375,6 +375,12 @@ app.addEventListener("dragend", () => {
 });
 
 window.addEventListener("hashchange", () => {
+  // A link from `open` pasted into this tab changes only the fragment; loading
+  // the page again takes its token the way the first load does.
+  if (tokenInHash(location.hash) !== null) {
+    location.reload();
+    return;
+  }
   page.panel = null;
   const filter = parseFilterHash(location.hash);
   if (filter !== null) page.filter = filter;
