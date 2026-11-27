@@ -3,14 +3,17 @@
 // sections 4.2, 4.3 and 5.3, and option A of the credential report): the
 // worker's Bash runs in the SDK's sandbox with no route to GitHub and no read
 // of the captain's credentials, its file tools stay in its worktree, and it
-// reaches the forge only through the supervisor's two tools. It loads one
-// plugin, the supervisor's own (plugin.ts), for the worker skill. Every session
-// starts in `default` (SESSION_MODE) with no approval surface: only what is
-// listed runs without a prompt, and everything else is denied. The one
-// exception is the Skill tool: in this CLI version (2.1.332) a Skill call
-// needs no allow rule (shown on the Mac), and the worker skill loads because
-// it carries only a name and a description. A skill brings text only, and
-// every tool it leads to is held to the same rules. Every prompt
+// reaches the forge only through the supervisor's two tools. A worker has
+// only the built-in tools of WORKER_TOOLS (the SDK's `tools`), and the forge
+// tools besides for a ship. It loads one plugin, the supervisor's own
+// (plugin.ts), and of all the skills it can see may use only the worker skill
+// (the SDK's `skills`, which also adds its allow rule). Every session starts
+// in `default` (SESSION_MODE) with no approval surface: only what is listed
+// runs without a prompt, and everything else is denied. That does not hold
+// for a skill by itself: in this CLI version (2.1.332) a skill that carries
+// only safe properties runs with no allow rule (shown on the Mac), which is
+// why a worker's skills are listed. A skill brings text only, and every tool
+// it leads to is held to the same rules. Every prompt
 // carries board text (topic names and goals, messages, answers), so every
 // session takes its prompts as written (`verbatimPrompts`): no `@path` file
 // mention in them is expanded and no slash command runs.
@@ -27,6 +30,7 @@ import type { PlainEnv } from "./commands.js";
 import { AUTH_VARIABLE, CREDENTIAL_PATHS, type Credential } from "./credential.js";
 import type { Forge, ToolAnswer } from "./forge.js";
 import { preToolUseHook, type GuardContext } from "./guard.js";
+import { WORKER_SKILL } from "./plugin.js";
 import type { QueryOptions } from "./sdk.js";
 
 export const WORKER_MAX_TURNS = 200;
@@ -219,6 +223,29 @@ export const FORGE_TOOLS = [
   `mcp__${FORGE_SERVER}__open_pr`,
 ] as const;
 
+/**
+ * The built-in tools a worker has, ship and scout alike (the SDK's `tools`,
+ * the CLI's `--tools`): the CLI withholds every other built-in tool, and
+ * leaves MCP tools alone, so a ship worker still has the forge tools.
+ */
+export const WORKER_TOOLS = [
+  "Bash",
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+  "Skill",
+  "StructuredOutput",
+] as const;
+
+/**
+ * The skills a worker may use (the SDK's `skills`): the SDK adds
+ * `Skill(claude-agg:claude-agg-worker)` to the allow rules, and the Skill tool
+ * refuses every skill not listed.
+ */
+export const WORKER_SKILLS = [WORKER_SKILL] as const;
+
 export interface WorkerSession {
   /** The worker's git worktree, outside the board home. */
   worktree: string;
@@ -351,9 +378,8 @@ export const SESSION_MODE = "default";
  * What a worker may do without a prompt: file edits and writes inside its
  * worktree and, for a ship worker, the two forge tools by their full names.
  * Bash has no allow rule: the guard approves a sandboxed command, so an
- * unsandboxed one is never approved. The worker skill needs no rule: in this
- * CLI version a Skill call needs no allow rule, and the skill loads because
- * it carries only a name and a description.
+ * unsandboxed one is never approved. The SDK adds one rule to these,
+ * `Skill(claude-agg:claude-agg-worker)`, from the worker's `skills`.
  */
 export function workerAllowRules(worktree: string, ship: boolean): string[] {
   const files = [`Edit(/${worktree}/**)`, `Write(/${worktree}/**)`];
@@ -414,6 +440,8 @@ export function workerOptions(session: WorkerSession, ctx: SessionContext): Quer
     cwd: session.worktree,
     permissionMode: SESSION_MODE,
     permissionPrompts: "none",
+    tools: [...WORKER_TOOLS],
+    skills: [...WORKER_SKILLS],
     allowedTools: workerAllowRules(session.worktree, !scout),
     disallowedTools: scout ? [...deny, "Agent"] : deny,
     hooks: { PreToolUse: [{ hooks: [preToolUseHook(guard)], onFailure: "block" }] },
