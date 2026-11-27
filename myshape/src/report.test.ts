@@ -165,6 +165,20 @@ describe("parseReport", () => {
           on_answer: "close",
           hold_set: "2026-11-20T06:10:00Z",
         },
+        // A bucket the board does not know keeps the decision, unreadable (D9), with the word sent.
+        {
+          id: "h2",
+          title: "",
+          question: "",
+          hold_bucket: "unknown",
+          unreadable: '"weird"',
+          hold_until: null,
+          unresolved_blocker_ids: [],
+          hold_age_days: null,
+          origin: "",
+          on_answer: null,
+          hold_set: null,
+        },
       ],
       status_decisions: [{ id: "t1", key: "default", summary: "which?" }],
       topics: { t1: "billing 2026-07-01T00:00:00Z" },
@@ -216,12 +230,22 @@ describe("parseReport", () => {
       ).toEqual({ status, to_offset: 0, to_prefix_sha256: "-", more: false });
   });
 
-  it("reads a hold with no bucket as due now, and drops one with a word it does not know", () => {
+  it("reads a hold with no bucket as due now, and keeps one with a word it does not know as unreadable", () => {
     const holds = ok({
       ...FULL,
-      holds: [{ id: "a" }, { id: "b", hold_bucket: null }, { id: "c", hold_bucket: "weird" }],
+      holds: [
+        { id: "a" },
+        { id: "b", hold_bucket: null },
+        { id: "c", hold_bucket: "weird" },
+        { id: "d", hold_bucket: 7 },
+      ],
     }).holds;
-    expect(holds.map((hold) => `${hold.id}:${hold.hold_bucket}`)).toEqual(["a:live", "b:live"]);
+    expect(holds.map((hold) => `${hold.id}:${hold.hold_bucket}:${hold.unreadable ?? ""}`)).toEqual([
+      "a:live:",
+      "b:live:",
+      'c:unknown:"weird"',
+      "d:unknown:7",
+    ]);
   });
 
   it("reads the optional aggregator block and ledger hint", () => {

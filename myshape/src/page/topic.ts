@@ -8,14 +8,12 @@ import {
   closedTodoEntries,
   draftInput,
   holdCard,
-  inFront,
   light,
   liveTodos,
   todoCard,
   queuedRow,
   questionRow,
   summaryRow,
-  turnFold,
   updateRow,
   when,
   writeRows,
@@ -24,6 +22,7 @@ import type { ClosedEntry } from "./parts.js";
 import { QUEUE_LABEL, agentName } from "./state.js";
 import { topicTagEditor } from "./tags.js";
 import { topicSchedule } from "./schedule-parts.js";
+import { queueCards } from "./cards.js";
 import type { Actions, Page, View } from "./state.js";
 
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
@@ -174,6 +173,11 @@ function closedDecisionEntries(view: View, id: string): ClosedEntry[] {
     }));
 }
 
+/**
+ * The topic's part of the one queue (its decisions, close proposal, and the
+ * board's 沒人處理的議題 and 沒人接 cards), then what is deferred, the worker
+ * questions and the closed decisions.
+ */
 function decisions(page: Page, view: View, actions: Actions, id: string): Child {
   const topic = view.topics[id];
   const holds = view.holds.filter((hold) => hold.topic === id);
@@ -182,22 +186,14 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
     "section",
     {},
     h("h2", {}, "待決"),
-    topic?.close_reason == null
+    topic?.kept_until == null
       ? null
       : h(
-          "div",
-          { class: "card" },
-          h("span", { class: "pill warn" }, "提議關閉"),
-          ` ${agentName()} 認為這個議題可以關了：${topic.close_reason}`,
-          h(
-            "div",
-            { class: "btns" },
-            h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"),
-            h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"),
-          ),
+          "p",
+          { class: "note" },
+          `先不關，到 ${when(Date.parse(topic.kept_until) / 1000).slice(0, 5)}`,
         ),
-    holds.filter(inFront).map((hold) => holdCard(page, view, actions, hold, false)),
-    turnFold(holds),
+    queueCards(page, view, actions, (owner) => owner === id),
     deferred.length === 0
       ? null
       : h(

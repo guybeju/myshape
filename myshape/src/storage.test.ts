@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emptySchedules } from "./schedules.js";
+import { emptyLifecycle } from "./lifecycle.js";
 import { emptyConfirmations } from "./confirmations.js";
 import * as files from "./files.js";
 import { Journal, Offsets, Summaries } from "./journal.js";
@@ -56,7 +57,15 @@ function boardOf(state: TopicState): StoredBoard {
     confirmations: emptyConfirmations(),
     hashtags: emptyHashtags(),
     schedules: emptySchedules(),
-    outbox: { topics: [], todos: [], confirmations: [], hashtags: [], schedules: [] },
+    lifecycle: emptyLifecycle(),
+    outbox: {
+      topics: [],
+      todos: [],
+      confirmations: [],
+      hashtags: [],
+      schedules: [],
+      lifecycle: [],
+    },
   };
 }
 
@@ -176,6 +185,7 @@ describe("layout", () => {
       confirmations: "/d/myshape/confirmations.json",
       hashtags: "/d/myshape/hashtags.json",
       schedules: "/d/myshape/schedules.json",
+      lifecycle: "/d/myshape/lifecycle.json",
     });
   });
 
@@ -399,6 +409,10 @@ describe("store", () => {
     };
     fs.writeFileSync(paths.topics, JSON.stringify(raw));
     const { doc } = loadBoard(target, "plain").board.topics;
+    // A queue entry that names no topic is dropped, and says so (T10).
+    expect(saved.map((record) => record.text)).toContain(
+      "佇列裡的 ghost、3 不是看板上的議題，拿掉了",
+    );
     // A proposal listed in a queue by hand is not in it; it is confirmed like any other.
     expect(doc.queues).toEqual({ high: ["a"], normal: ["p"], later: [] });
     expect(doc.merged).toEqual({ old: "a" });
@@ -411,9 +425,10 @@ describe("store", () => {
       paths.topics,
       JSON.stringify({ ...raw, next_seq: 9, queues: undefined, merged: undefined }),
     );
+    // A topic in no queue goes last in 一般 (T10), so no topic is ever where nobody sees it.
     expect(loadTopicState(paths).state.doc).toMatchObject({
       next_seq: 9,
-      queues: { high: [], normal: ["p"], later: [] },
+      queues: { high: [], normal: ["p", "a"], later: [] },
       merged: {},
     });
     fs.writeFileSync(paths.topics, JSON.stringify({ ...raw, next_seq: 2.5 }));
@@ -1093,5 +1108,89 @@ describe("a change and its record survive a crash between them", () => {
     failing = true;
     commitTopic(board, archive(board.topics, "a", "T2"));
     expect(() => restart()).toThrow("看板寫不進紀錄（disk full）");
+  });
+});
+
+describe("lifecycle.json", () => {
+  const actor = { by: "board" as const, label: "plain" };
+
+  it("saves the board's memory without a record, keeping the outbox, and its transitions with theirs", () => {
+    const board = boardOf(emptyState());
+    const clocks = {
+      "topic\ta": { state: "T2" as const, since: "2026-11-27T00:00:00.000Z", sig: "" },
+    };
+    const memory = { clocks, homes: {}, stalls: {}, idle: {} };
+    const quiet = commitChange(target, board, { file: "memory", memory, records: [] }, actor);
+    if (!quiet.ok) throw new Error(quiet.line);
+    expect(saved).toEqual([]);
+    expect(readBoard(paths).board.lifecycle.clocks).toEqual(clocks);
+    const draft = { kind: "stall.raised" as const, topic: "a", text: "raised" };
+    const loud = commitChange(
+      target,
+      quiet.board,
+      { file: "memory", memory, records: [draft] },
+      actor,
+    );
+    if (!loud.ok) throw new Error(loud.line);
+    expect(saved.map((record) => record.kind)).toEqual(["stall.raised"]);
+    const again = commitChange(target, loud.board, { file: "memory", memory, records: [] }, actor);
+    if (!again.ok) throw new Error(again.line);
+    expect(readBoard(paths).board.outbox.lifecycle.map((record) => record.kind)).toEqual([
+      "stall.raised",
+    ]);
+  });
+
+  it("reads what is whole, skips the rest, and reads a bad setting as its default", () => {
+    fs.writeFileSync(
+      paths.lifecycle,
+      JSON.stringify({
+        v: 1,
+        settings: { T2: { remind: 9, raise: 1 }, A3: { remind: 5, raise: 60 } },
+        kept: { a: "2026-12-01T00:00:00Z", b: 3 },
+        clocks: {
+          ok: { state: "Q5", since: "2026-11-27T00:00:00Z" },
+          bad: { state: "Q99", since: "x" },
+        },
+        stalls: { a: { since: "s", members: ["m"], deferred: { until: "u", members: [1] } }, b: 3 },
+        idle: { a: "s" },
+      }),
+    );
+    const { lifecycle } = readBoard(paths).board;
+    expect(lifecycle.settings.T2).toEqual({ remind: 1440, raise: 4320 });
+    expect(lifecycle.settings.A3).toEqual({ remind: 5, raise: 60 });
+    expect(lifecycle.kept).toEqual({ a: "2026-12-01T00:00:00Z" });
+    expect(lifecycle.clocks).toEqual({
+      ok: { state: "Q5", since: "2026-11-27T00:00:00Z", sig: "" },
+    });
+    expect(lifecycle.stalls).toEqual({ a: { since: "s", members: ["m"] } });
+    expect(lifecycle.idle).toEqual({ a: "s" });
+    fs.writeFileSync(paths.lifecycle, JSON.stringify({ v: 2 }));
+    expect(() => readBoard(paths)).toThrow(/lifecycle\.json 讀不懂/);
+  });
+
+  it("keeps a hands-on item whose state it does not know, and writes the word back as it was (O6)", () => {
+    const item = {
+      title: "T",
+      topic: "a",
+      action: "do",
+      commands: [],
+      state: "snoozed",
+      created_at: "T",
+    };
+    fs.writeFileSync(
+      paths.todos,
+      JSON.stringify({ v: 1, items: { odd: item, open: { ...item, state: "open" } } }),
+    );
+    const read = readBoard(paths).board;
+    expect(read.todos.items["odd"]).toMatchObject({ state: "unknown", unknown_state: "snoozed" });
+    expect(read.topics.doc.todos).toEqual({});
+    const records = [{ kind: "todo.opened" as const, topic: "a", text: "x" }] as const;
+    const result = commitChange(target, read, { file: "todos", next: read.todos, records }, actor);
+    if (!result.ok) throw new Error(result.line);
+    const written = JSON.parse(fs.readFileSync(paths.todos, "utf8")) as {
+      items: Record<string, unknown>;
+    };
+    expect(written.items["odd"]).toMatchObject({ state: "snoozed" });
+    expect(written.items["odd"]).not.toHaveProperty("unknown_state");
   });
 });

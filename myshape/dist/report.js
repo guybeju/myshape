@@ -20,20 +20,21 @@ function onAnswerOf(value) {
     const found = ON_ANSWER.find((name) => name === value);
     return found === undefined ? null : found;
 }
-/** A hold with no bucket is due now; an unknown word drops the hold. */
+/** A hold with no bucket is due now; any other word the board does not know is unreadable. */
 function bucketOf(value) {
     if (value === undefined || value === null)
         return "live";
-    const found = HOLD_BUCKETS.find((name) => name === value);
-    return found === undefined ? null : found;
+    return HOLD_BUCKETS.find((name) => name === value) ?? "unknown";
 }
 function parseHold(raw) {
     const id = stringField(raw, "id");
-    const bucket = bucketOf(raw["hold_bucket"]);
-    if (id === null || bucket === null)
+    if (id === null)
         return null;
+    const word = raw["hold_bucket"];
+    const bucket = bucketOf(word);
     const age = raw["hold_age_days"];
     return {
+        ...(bucket === "unknown" ? { unreadable: String(JSON.stringify(word)).slice(0, 64) } : {}),
         id,
         title: textField(raw, "title"),
         question: textField(raw, "question"),

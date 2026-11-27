@@ -63,11 +63,11 @@ function writeRow(page, actions, write) {
         : null);
 }
 /** The status lines of the writes that match, newest first, shown where they were sent from. */
-export function writeRows(page, actions, matches) {
+export function writeRows(page, actions, matches, limit = 5) {
     const writes = (page.view?.writes ?? []).filter((write) => matches(write) && write.state !== "ignored");
     return writes
         .toSorted((a, b) => b.created_at - a.created_at)
-        .slice(0, 5)
+        .slice(0, limit)
         .map((write) => writeRow(page, actions, write));
 }
 /** What sending an answer will do to the item, in the words the card shows. */
@@ -92,16 +92,6 @@ function holdMeta(view, actions, hold, showTopic) {
 /** True for a live decision shown now, with its answer buttons; not one waiting its turn. */
 export function inFront(hold) {
     return hold.live && !hold.waits_turn;
-}
-/**
- * The line that stands for the decisions waiting their turn: only how many,
- * no question and no buttons, so only the ones in front can be answered.
- */
-export function turnFold(holds) {
-    const waiting = holds.filter((hold) => hold.waits_turn).length;
-    if (waiting === 0)
-        return null;
-    return h("p", { class: "note turns" }, `還有 ${waiting} 個決定排隊，輪到時才顯示`);
 }
 /** One backlog item that no worker has been dispatched for. */
 export function queuedRow(item) {
@@ -143,11 +133,18 @@ const TODO_NOTE = {
     claimed: () => h("div", { class: "wr" }, `你已按做完了，等 ${agentName()} 驗證`),
     rejected: (reason) => h("div", { class: "wr bad" }, `${agentName()} 驗證沒過：${reason}`),
     obsolete: (reason) => h("div", { class: "wr" }, `${agentName()}：不再需要了。${reason}`),
+    unknown: (word) => h("div", { class: "wr bad" }, `看板不認得這個項目的狀態：${word}`),
 };
+/** Where an item stands, with the word todos.json holds for a state the board does not know. */
+function todoNote(todo) {
+    return TODO_NOTE[todo.state](todo.state === "unknown" ? (todo.unknown_state ?? "") : (todo.reason ?? ""));
+}
 function todoButtons(actions, todo, key) {
     const close = (route, answer) => actions.ask(key, route, { task: todo.task, answer });
     if (todo.state === "claimed")
         return null;
+    if (todo.state === "unknown")
+        return h("div", { class: "btns" }, h("button", { onclick: () => close("todos/drop", "不做了") }, "不做了"));
     if (todo.state === "obsolete")
         return h("div", { class: "btns" }, h("button", { onclick: () => close("todos/takedown", "撤下") }, "好，撤下"));
     return h("div", { class: "btns" }, h("button", { onclick: () => actions.claim(todo.task) }, "做完了"), h("button", { onclick: () => close("todos/drop", "不做了") }, "不做了"));
@@ -161,7 +158,7 @@ function todoConfirm(page, actions, key) {
 /** Something the captain has to do by hand: what, any guidance, each command to copy, and where it stands. */
 export function todoCard(page, view, actions, todo, showTopic) {
     const key = `todo:${todo.task}`;
-    return h("div", { class: "card todo", "data-todo": todo.task }, h("div", { class: "meta" }, showTopic ? topicLink(view, todo.topic, actions) : null, h("span", { class: "note" }, todo.task)), h("b", {}, todo.title), TODO_NOTE[todo.state](todo.reason ?? ""), h("div", {}, todo.what), todo.guidance === "" ? null : h("div", { class: "guide" }, todo.guidance), todo.commands.map(commandBlock), todoButtons(actions, todo, key), todoConfirm(page, actions, key));
+    return h("div", { class: "card todo", "data-todo": todo.task }, h("div", { class: "meta" }, showTopic ? topicLink(view, todo.topic, actions) : null, h("span", { class: "note" }, todo.task)), h("b", {}, todo.title), todoNote(todo), h("div", {}, todo.what), todo.guidance === "" ? null : h("div", { class: "guide" }, todo.guidance), todo.commands.map(commandBlock), todoButtons(actions, todo, key), todoConfirm(page, actions, key));
 }
 export function holdCard(page, view, actions, hold, showTopic) {
     const key = `answer:${hold.home}/${hold.task}`;

@@ -29,6 +29,7 @@ export function boardPaths(config) {
         confirmations: path.join(boardDataDir, "confirmations.json"),
         hashtags: path.join(boardDataDir, "hashtags.json"),
         schedules: path.join(boardDataDir, "schedules.json"),
+        lifecycle: path.join(boardDataDir, "lifecycle.json"),
     };
 }
 const CONFIG_FLAGS = [

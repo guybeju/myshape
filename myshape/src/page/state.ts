@@ -51,6 +51,18 @@ export type View = BoardView & {
   writes: WriteView[];
   hashtags: HashtagView;
   schedules: ScheduleView;
+  /** The captain's deadline settings, each with its default (board-server.ts lifecycleView). */
+  lifecycle: {
+    settings: {
+      state: string;
+      label: string;
+      unit: string;
+      remind: number;
+      raise: number;
+      default_remind: number;
+      default_raise: number;
+    }[];
+  };
 };
 
 /** The first half of a two-step action, waiting for the captain to confirm. */

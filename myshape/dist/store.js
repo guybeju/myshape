@@ -1,10 +1,10 @@
 // Loads the board's state files and is their only writer. A change and its
 // records are saved together: commitChange renames the change's commit file
-// (topics.json, todos.json, confirmations.json, hashtags.json or
-// schedules.json) with the
-// records in its `outbox`, then appends them to events.jsonl,
-// and every later commit (and every start) first saves any outbox record the
-// journal still lacks.
+// (topics.json, todos.json, confirmations.json, hashtags.json, schedules.json
+// or lifecycle.json) with the records in its `outbox`, then appends them to
+// events.jsonl, and every later commit (and every start) first saves any
+// outbox record the journal still lacks. The one change without a record is
+// the board's memory of what it saw (lifecycle.ts LifecycleMemory).
 import fs from "node:fs";
 import { isRecord, readJsonFile, stringField, stringRecord, textField, writeFileAtomic, } from "./files.js";
 import { OPTIONAL_TEXT_FIELDS, stampRecord } from "./records.js";
@@ -13,6 +13,8 @@ import { emptyConfirmations } from "./confirmations.js";
 import { carryMarks, emptyTodos, isValidItemId, withProjection } from "./todos.js";
 import { emptyHashtags, parseHashtags, reconcile } from "./hashtags.js";
 import { emptySchedules, parseSchedules } from "./schedules.js";
+import { emptyLifecycle } from "./lifecycle.js";
+import { TIMED_STATES, parseSettings } from "./lifecycle-settings.js";
 const FILE_MODE = 0o644;
 function parseCloseProposal(raw) {
     if (!isRecord(raw) || typeof raw["at"] !== "string" || typeof raw["reason"] !== "string")
@@ -107,6 +109,25 @@ function parseTodos(raw) {
     }
     return todos;
 }
+/** Puts every topic no queue holds last in 一般 (T10); returns them. */
+function placeMisplaced(doc) {
+    const queued = new Set(QUEUES.flatMap((queue) => doc.queues[queue]));
+    const misplaced = Object.entries(doc.topics)
+        .filter(([id]) => !queued.has(id))
+        .map(([id, topic]) => ({ id, name: topic.name }));
+    for (const { id } of misplaced)
+        doc.queues.normal.push(id);
+    return misplaced;
+}
+/** Queue entries that name no topic: they are dropped when the queues are read. */
+function droppedEntries(raw, topics) {
+    return QUEUES.flatMap((queue) => {
+        const list = raw[queue];
+        return Array.isArray(list)
+            ? list.filter((id) => typeof id !== "string" || !Object.hasOwn(topics, id))
+            : [];
+    }).map(String);
+}
 /**
  * Reads the live topics. A leftover proposal is confirmed here, at the end of
  * the queue it was proposed for, so no topic is ever left waiting.
@@ -137,11 +158,12 @@ function parseDoc(raw) {
         .map((key) => waiting.get(key));
     for (const proposal of oldestFirst)
         doc.queues[proposal.queue].push(proposal.id);
+    const misplaced = placeMisplaced(doc);
     doc.merged = stringRecord(raw["merged"]);
     doc.history = parseHistory(raw["history"]);
     doc.todos = parseTodos(raw["todos"]);
     doc.next_seq = parseNextSeq(raw["next_seq"]);
-    return { doc, confirmed: oldestFirst };
+    return { doc, confirmed: oldestFirst, misplaced, dropped: droppedEntries(queues, topics) };
 }
 function parseArchive(raw) {
     if (!isRecord(raw) || raw["v"] !== 1 || !isRecord(raw["topics"])) {
@@ -241,6 +263,7 @@ function flushOutbox(sink, outbox) {
         ...outbox.confirmations,
         ...outbox.hashtags,
         ...outbox.schedules,
+        ...outbox.lifecycle,
     ];
     for (const record of waiting) {
         if (sink.has(record.rid))
@@ -279,8 +302,15 @@ function writeTodos(paths, board, next, outbox) {
     const topics = withProjection(board.topics, next);
     writeIfChanged(paths.topics, serialize({ ...topics.doc, outbox: board.outbox.topics }), EMPTY_DOC);
     fs.mkdirSync(paths.boardDataDir, { recursive: true });
-    writeFileAtomic(paths.todos, serialize({ ...next, outbox }), FILE_MODE);
+    writeFileAtomic(paths.todos, serialize({ ...next, items: storedItems(next), outbox }), FILE_MODE);
     return topics;
+}
+/** The items as todos.json keeps them: one in the "unknown" state keeps the word it was read with. */
+function storedItems(store) {
+    return Object.fromEntries(Object.entries(store.items).map(([id, item]) => {
+        const { unknown_state: word, ...rest } = item;
+        return [id, item.state === "unknown" ? { ...rest, state: word ?? "" } : rest];
+    }));
 }
 /**
  * Writes a file that is its own commit point: the captain's confirmations,
@@ -323,7 +353,30 @@ function writeChange(paths, board, change, stamp) {
         const outbox = { ...board.outbox, schedules: records };
         return { board: { ...board, schedules: change.next, outbox }, records };
     }
-    const part = writeSchedulePart(paths, board, change.schedules, stamp);
+    if (change.file === "lifecycle" || change.file === "memory")
+        return { board: writeLifecycle(paths, board, change, records), records };
+    return writeTopicChange(paths, board, change, { records, stamp });
+}
+/**
+ * Writes lifecycle.json: a captain's change whole, or the board's memory over
+ * what the file holds. A memory change with no record keeps the file's outbox.
+ */
+function writeLifecycle(paths, board, change, records) {
+    const next = change.file === "lifecycle" ? change.next : { ...board.lifecycle, ...change.memory };
+    const kept = records.length === 0 ? board.outbox.lifecycle : records;
+    writeOwnFile(paths, "lifecycle", next, kept);
+    return { ...board, lifecycle: next, outbox: { ...board.outbox, lifecycle: kept } };
+}
+/**
+ * Writes a topic change: its part in lifecycle.json and in schedules.json
+ * first, then topics.json, then its follow-up in hashtags.json.
+ */
+function writeTopicChange(paths, board, change, saved) {
+    const { records, stamp } = saved;
+    if (change.lifecycle !== undefined)
+        writeOwnFile(paths, "lifecycle", change.lifecycle, board.outbox.lifecycle);
+    const lifecycle = change.lifecycle ?? board.lifecycle;
+    const part = writeSchedulePart(paths, { ...board, lifecycle }, change.schedules, stamp);
     writeTopics(paths, board.topics, change.next, records);
     const next = {
         ...part.board,
@@ -397,8 +450,9 @@ export function readBoard(paths) {
     const rawConfirmations = readFile(paths.confirmations);
     const rawHashtags = readFile(paths.hashtags);
     const rawSchedules = readFile(paths.schedules);
+    const rawLifecycle = readFile(paths.lifecycle);
     const live = rawTopics === null
-        ? { doc: empty.doc, confirmed: [] }
+        ? { doc: empty.doc, confirmed: [], misplaced: [], dropped: [] }
         : parseFile(paths.topics, rawTopics, parseDoc);
     const gone = rawArchive === null
         ? { archive: empty.archive, proposals: [] }
@@ -418,22 +472,40 @@ export function readBoard(paths) {
             confirmations,
             hashtags: readHashtags(paths, rawHashtags, state),
             schedules,
+            lifecycle: parseOr(paths.lifecycle, rawLifecycle, parseLifecycle, emptyLifecycle),
             outbox: {
                 topics: parseOutbox(rawTopics),
                 todos: parseOutbox(rawTodos),
                 confirmations: parseOutbox(rawConfirmations),
                 hashtags: parseOutbox(rawHashtags),
                 schedules: parseOutbox(rawSchedules),
+                lifecycle: parseOutbox(rawLifecycle),
             },
         },
         hasTodos: store !== null,
         confirmed: live.confirmed,
         archivedProposals: gone.proposals,
+        misplaced: live.misplaced,
+        dropped: live.dropped,
     };
 }
-/** The records of confirming leftover proposals, live and archived; null when there are none. */
+/** The records of confirming leftover proposals and of repairing the queues; null when there are none. */
 function confirmRecords(read) {
     const drafts = [
+        ...read.misplaced.map((topic) => ({
+            kind: "topic.moved",
+            topic: topic.id,
+            text: `議題「${topic.name}」不在任何佇列裡，放到「一般」最後`,
+        })),
+        ...(read.dropped.length === 0
+            ? []
+            : [
+                {
+                    kind: "topic.moved",
+                    topic: null,
+                    text: `佇列裡的 ${read.dropped.join("、")} 不是看板上的議題，拿掉了`,
+                },
+            ]),
         ...read.confirmed.map((proposal) => ({
             kind: "topic.confirmed",
             topic: proposal.id,
@@ -488,26 +560,36 @@ const ITEM_STATES = ["open", ...TODO_STATES];
 function stringList(raw) {
     return Array.isArray(raw) && raw.every((value) => typeof value === "string") ? raw : null;
 }
-/** One stored item, or null when it lacks what the page needs to show it. */
+/** An item's state, or "unknown" with the word read for one this board does not know (O6). */
+function itemState(word) {
+    const state = ITEM_STATES.find((name) => name === word);
+    if (state !== undefined)
+        return { state };
+    return { state: "unknown", unknown_state: typeof word === "string" ? word : "" };
+}
+/**
+ * One stored item, or null when it lacks what the page needs to show it. A
+ * state word this board does not know keeps the item, in the "unknown" state
+ * (O6), with the word it was read with.
+ */
 function parseItem(raw) {
     if (!isRecord(raw))
         return null;
     const title = stringField(raw, "title");
     const action = stringField(raw, "action");
-    const state = ITEM_STATES.find((name) => name === raw["state"]);
     const commands = stringList(raw["commands"]);
     const topic = raw["topic"];
-    if (title === null || action === null || state === undefined || commands === null)
+    if (title === null || action === null || commands === null)
         return null;
     if (topic !== null && typeof topic !== "string")
         return null;
     return {
+        ...itemState(raw["state"]),
         title,
         topic,
         action,
         guidance: textField(raw, "guidance"),
         commands,
-        state,
         reason: stringField(raw, "reason"),
         at: textField(raw, "at"),
         by: textField(raw, "by"),
@@ -555,5 +637,59 @@ function parseConfirmations(raw) {
             const parsed = parseConfirmation(entry);
             return parsed === null ? [] : [parsed];
         }),
+    };
+}
+function parseClock(raw) {
+    if (!isRecord(raw))
+        return null;
+    const state = TIMED_STATES.find((name) => name === raw["state"]);
+    const since = stringField(raw, "since");
+    if (state === undefined || since === null || Number.isNaN(Date.parse(since)))
+        return null;
+    return { state, since, sig: textField(raw, "sig") };
+}
+function parseStall(raw) {
+    if (!isRecord(raw))
+        return null;
+    const since = stringField(raw, "since");
+    const members = stringList(raw["members"]);
+    if (since === null || members === null)
+        return null;
+    const deferred = raw["deferred"];
+    if (!isRecord(deferred))
+        return { since, members };
+    const until = stringField(deferred, "until");
+    const put = stringList(deferred["members"]);
+    return until === null || put === null
+        ? { since, members }
+        : { since, members, deferred: { until, members: put } };
+}
+/** Each entry of an object that `parse` reads; the others are skipped. */
+function entriesOf(raw, parse) {
+    const found = {};
+    if (!isRecord(raw))
+        return found;
+    for (const [key, value] of Object.entries(raw)) {
+        const parsed = parse(value);
+        if (parsed !== null && key !== "__proto__")
+            found[key] = parsed;
+    }
+    return found;
+}
+/** data/myshape/lifecycle.json; what is not whole is skipped, an invalid setting reads as its default. */
+function parseLifecycle(raw) {
+    if (!isRecord(raw) || raw["v"] !== 1)
+        throw new Error("expected an object with v: 1");
+    const memory = {
+        clocks: entriesOf(raw["clocks"], parseClock),
+        homes: entriesOf(raw["homes"], stringList),
+        stalls: entriesOf(raw["stalls"], parseStall),
+        idle: stringRecord(raw["idle"]),
+    };
+    return {
+        v: 1,
+        settings: parseSettings(raw["settings"]),
+        kept: stringRecord(raw["kept"]),
+        ...memory,
     };
 }

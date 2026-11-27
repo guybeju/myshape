@@ -117,13 +117,14 @@ export function writeRows(
   page: Page,
   actions: Actions,
   matches: (write: WriteView) => boolean,
+  limit = 5,
 ): Child {
   const writes = (page.view?.writes ?? []).filter(
     (write) => matches(write) && write.state !== "ignored",
   );
   return writes
     .toSorted((a, b) => b.created_at - a.created_at)
-    .slice(0, 5)
+    .slice(0, limit)
     .map((write) => writeRow(page, actions, write));
 }
 
@@ -176,16 +177,6 @@ function holdMeta(view: View, actions: Actions, hold: HoldView, showTopic: boole
 /** True for a live decision shown now, with its answer buttons; not one waiting its turn. */
 export function inFront(hold: HoldView): boolean {
   return hold.live && !hold.waits_turn;
-}
-
-/**
- * The line that stands for the decisions waiting their turn: only how many,
- * no question and no buttons, so only the ones in front can be answered.
- */
-export function turnFold(holds: HoldView[]): Child {
-  const waiting = holds.filter((hold) => hold.waits_turn).length;
-  if (waiting === 0) return null;
-  return h("p", { class: "note turns" }, `還有 ${waiting} 個決定排隊，輪到時才顯示`);
 }
 
 /** One backlog item that no worker has been dispatched for. */
@@ -255,12 +246,26 @@ const TODO_NOTE: Record<TodoView["state"], (reason: string) => Child> = {
   claimed: () => h("div", { class: "wr" }, `你已按做完了，等 ${agentName()} 驗證`),
   rejected: (reason) => h("div", { class: "wr bad" }, `${agentName()} 驗證沒過：${reason}`),
   obsolete: (reason) => h("div", { class: "wr" }, `${agentName()}：不再需要了。${reason}`),
+  unknown: (word) => h("div", { class: "wr bad" }, `看板不認得這個項目的狀態：${word}`),
 };
+
+/** Where an item stands, with the word todos.json holds for a state the board does not know. */
+function todoNote(todo: TodoView): Child {
+  return TODO_NOTE[todo.state](
+    todo.state === "unknown" ? (todo.unknown_state ?? "") : (todo.reason ?? ""),
+  );
+}
 
 function todoButtons(actions: Actions, todo: TodoView, key: string): Child {
   const close = (route: string, answer: string): void =>
     actions.ask(key, route, { task: todo.task, answer });
   if (todo.state === "claimed") return null;
+  if (todo.state === "unknown")
+    return h(
+      "div",
+      { class: "btns" },
+      h("button", { onclick: () => close("todos/drop", "不做了") }, "不做了"),
+    );
   if (todo.state === "obsolete")
     return h(
       "div",
@@ -310,7 +315,7 @@ export function todoCard(
       h("span", { class: "note" }, todo.task),
     ),
     h("b", {}, todo.title),
-    TODO_NOTE[todo.state](todo.reason ?? ""),
+    todoNote(todo),
     h("div", {}, todo.what),
     todo.guidance === "" ? null : h("div", { class: "guide" }, todo.guidance),
     todo.commands.map(commandBlock),

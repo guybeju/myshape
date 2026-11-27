@@ -499,7 +499,7 @@ test_plain_setup() {
   "holds": [
     { "id": "h-live", "title": "選一個", "question": "用哪個？\n選項：A | B", "hold_bucket": "live" },
     { "id": "h-text", "title": "說說看", "question": "要怎麼做？", "hold_bucket": "live" },
-    { "id": "h-dated", "title": "之後", "question": "下週再說", "hold_bucket": "dated", "hold_until": "2026-12-01" },
+    { "id": "h-dated", "title": "之後", "question": "下週再說", "hold_bucket": "dated", "hold_until": "2099-12-01" },
     { "id": "h-none", "title": "沒有桶", "question": "沒寫 bucket" }
   ],
   "status_decisions": [ { "id": "j2", "key": "k", "summary": "j2 asks the agent" } ],

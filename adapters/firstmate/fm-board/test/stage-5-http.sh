@@ -336,7 +336,7 @@ test_every_change_leaves_a_record() {
   covered_ops="$covered_ops schedule-add schedule-close schedule-delete schedule-edit schedule-pause"
   covered_ops="$covered_ops schedule-resume schedule-rt schedule-skip schedule-take split"
   covered_ops="$covered_ops todo-add todo-done todo-failed todo-obsolete"
-  covered_routes="GET state|POST agents/tag|POST direct|POST hashtags/add|POST hashtags/color|POST hashtags/delete|POST hashtags/lock|POST hashtags/merge|POST hashtags/remove|POST hashtags/rename|POST hashtags/revert|POST hashtags/seen|POST hashtags/settings|POST holds/answer|POST messages|POST programs/confirm|POST refresh"
+  covered_routes="GET state|POST agents/tag|POST direct|POST hashtags/add|POST hashtags/color|POST hashtags/delete|POST hashtags/lock|POST hashtags/merge|POST hashtags/remove|POST hashtags/rename|POST hashtags/revert|POST hashtags/seen|POST hashtags/settings|POST holds/answer|POST lifecycle/answer|POST lifecycle/settings|POST messages|POST programs/confirm|POST refresh"
   covered_routes="$covered_routes|POST schedules/add|POST schedules/close|POST schedules/delete|POST schedules/edit|POST schedules/lock|POST schedules/pause|POST schedules/pause-all|POST schedules/resume|POST schedules/revert|POST schedules/rt|POST schedules/seen|POST schedules/settings|POST schedules/skip"
   covered_routes="$covered_routes|POST todos/claim|POST todos/drop|POST todos/takedown|POST topics/archive|POST topics/goal|POST topics/keep|POST topics/merge|POST topics/move|POST topics/rename|POST topics/reopen|POST views/delete|POST views/save|POST writes/ignore|POST writes/resend"
   assert_equals "$covered_ops" "$ops" "every socket operation needs a case here"
@@ -424,6 +424,11 @@ test_every_change_leaves_a_record() {
   records_after hashtag.lock_changed "hashtags/lock" api hashtags/lock '{"name":"AI_INFRA","locked":true}'
   records_after hashtag.color_changed "hashtags/color" api hashtags/color '{"name":"AI_INFRA","color":"c4"}'
   records_after hashtag.settings_changed "hashtags/settings" api hashtags/settings '{"per_topic_max":7}'
+  records_after lifecycle.settings_changed "lifecycle/settings" api lifecycle/settings '{"A3":{"remind":30,"raise":240}}'
+  # Nothing is overdue this soon, so the board has none of its own cards to answer: refused, nothing saved.
+  records_after - "lifecycle/answer" api lifecycle/answer '{"card":"idle","key":"rec","days":3}'
+  assert_equals refused "$(api lifecycle/answer '{"card":"stall","key":"rec","days":3}' | jq -r '.error')" \
+    "a 沒人接 answer with no card in front of the captain must be refused"
   records_after hashtag.view_saved "views/save" api views/save '{"name":"工作","none":["AI_INFRA"]}'
   records_after hashtag.view_deleted "views/delete" api views/delete '{"id":"v1"}'
   records_after hashtag.seen "hashtags/seen" api hashtags/seen '{}'

@@ -258,6 +258,8 @@ export const ROUTES: Record<string, Route> = {
     fromTopicOp(host.topicOp("todo-claim", { task: field(body, "task") })),
   "POST todos/drop": todoClose("todo-drop"),
   "POST todos/takedown": todoClose("todo-takedown"),
+  "POST lifecycle/answer": topicRoute("lifecycle-answer"),
+  "POST lifecycle/settings": topicRoute("lifecycle-settings"),
   "POST writes/resend": resend,
   "POST writes/ignore": (host, body) => fromProblem(host.writes.ignore(field(body, "write_id"))),
   "POST programs/confirm": confirmProgram,

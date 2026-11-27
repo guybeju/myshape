@@ -119,7 +119,7 @@ setup_fleet() {
   Captain hold origin: ship-b
 - [ ] call-loose - Loose call (repo: sample) (kind: captain) (hold: unrelated question) (hold-kind: captain)
   Captain hold set: 2026-07-23T00:00:00Z
-- [ ] call-dated - Dated call (repo: sample) (kind: captain) (hold: revisit) (hold-kind: captain) (hold-until: 2026-12-01)
+- [ ] call-dated - Dated call (repo: sample) (kind: captain) (hold: revisit) (hold-kind: captain) (hold-until: 2099-12-01)
   Captain hold set: 2026-07-20T00:00:00Z
 
 ## Done
@@ -166,7 +166,7 @@ test_agents_lights_and_placement() {
 test_holds_are_placed_and_ordered() {
   local out
   out=$(view '.holds | map("\(.task):\(.topic // "-"):\(if .live then "live" else .deferred_reason end)") | join(" ")')
-  assert_equals "call-login:login:live ship-a:billing:live call-origin:later:live call-loose:-:live call-dated:-:延到 2026-12-01" "$out" \
+  assert_equals "call-login:login:live ship-a:billing:live call-origin:later:live call-loose:-:live call-dated:-:延到 2099-12-01" "$out" \
     "holds must be ordered live first, by the topic's queue, with unsorted last, then deferred"
   assert_equals 'A 家|B 家' "$(view '.holds[] | select(.task == "call-login") | .options | join("|")')" \
     "an option line at the end of the question must become buttons"

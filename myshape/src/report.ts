@@ -38,13 +38,16 @@ export type OnAnswer = "close" | "release";
 const ON_ANSWER: readonly OnAnswer[] = ["close", "release"];
 
 export const HOLD_BUCKETS = ["live", "aged", "dated", "blocked"] as const;
-export type HoldBucket = (typeof HOLD_BUCKETS)[number];
+/** A bucket the board knows, or "unknown" for any other word: that decision is unreadable (D9), not dropped. */
+export type HoldBucket = (typeof HOLD_BUCKETS)[number] | "unknown";
 
 export interface ReportHold {
   id: string;
   title: string;
   question: string;
   hold_bucket: HoldBucket;
+  /** The word the home sent, when the board could not read it as a bucket. */
+  unreadable?: string;
   hold_until: string | null;
   unresolved_blocker_ids: string[];
   hold_age_days: number | null;
@@ -175,19 +178,20 @@ function onAnswerOf(value: unknown): OnAnswer | null {
   return found === undefined ? null : found;
 }
 
-/** A hold with no bucket is due now; an unknown word drops the hold. */
-function bucketOf(value: unknown): HoldBucket | null {
+/** A hold with no bucket is due now; any other word the board does not know is unreadable. */
+function bucketOf(value: unknown): HoldBucket {
   if (value === undefined || value === null) return "live";
-  const found = HOLD_BUCKETS.find((name) => name === value);
-  return found === undefined ? null : found;
+  return HOLD_BUCKETS.find((name) => name === value) ?? "unknown";
 }
 
 function parseHold(raw: Record<string, unknown>): ReportHold | null {
   const id = stringField(raw, "id");
-  const bucket = bucketOf(raw["hold_bucket"]);
-  if (id === null || bucket === null) return null;
+  if (id === null) return null;
+  const word = raw["hold_bucket"];
+  const bucket = bucketOf(word);
   const age = raw["hold_age_days"];
   return {
+    ...(bucket === "unknown" ? { unreadable: String(JSON.stringify(word)).slice(0, 64) } : {}),
     id,
     title: textField(raw, "title"),
     question: textField(raw, "question"),
