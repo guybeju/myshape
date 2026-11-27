@@ -211,6 +211,8 @@ describe("queued", () => {
     captain: false,
     blockers: [],
     topic_hint: null,
+    hold_until: null,
+    turn: false,
     ...extra,
   });
 
@@ -755,6 +757,8 @@ describe("decisions at once", () => {
           captain: true,
           blockers: [],
           topic_hint: null,
+          hold_until: null,
+          turn: false,
         })),
       }),
     }),
@@ -944,6 +948,8 @@ describe("hands-on items", () => {
       captain: true,
       blockers: [],
       topic_hint: null,
+      hold_until: null,
+      turn: false,
     };
     const view = buildView(
       input({ homes: [home("main", { report: report({ queued: [queued] }) })] }),

@@ -3,7 +3,12 @@
 // state of every card the board knows, derived from what it shows, and the
 // clocks that time the states the aggregator owns. Pure: board-server.ts
 // commits what evaluate returns.
-import { TIMED_STATES, defaultSettings, durationWords } from "./lifecycle-settings.js";
+import {
+  DATE_GRACE_MINUTES,
+  TIMED_STATES,
+  defaultSettings,
+  durationWords,
+} from "./lifecycle-settings.js";
 import type { LifecycleSettings, TimedState } from "./lifecycle-settings.js";
 import type { Draft, Frozen } from "./records.js";
 import { MAIN_HOME } from "./journal.js";
@@ -59,8 +64,10 @@ export const LIFECYCLE = {
   Q3: captain,
   Q4: timed("Q4"),
   Q5: timed("Q5"),
+  Q6: time,
   Q7: time,
   Q8: timed("Q8"),
+  Q9: timed("Q9"),
   Q10: board,
   NT: timed("NT"),
   // agents (read)
@@ -338,22 +345,37 @@ interface QueuedFacts {
   topic: TopicView | undefined;
   stale: boolean;
   visible: () => boolean;
+  nowMs: number;
+}
+
+/** Whether a dated wait still explains the item: until one day past its date. */
+function datedWait(item: QueuedView, nowMs: number): boolean {
+  if (item.hold_until === null) return false;
+  return nowMs < Date.parse(item.hold_until) + DATE_GRACE_MINUTES * 60_000;
 }
 
 const QUEUED_RULES: Rules<QueuedFacts> = [
   ["Q10", ({ stale }) => stale],
+  ["Q9", ({ item }) => item.unreadable !== null],
   ["Q2", ({ item }) => item.captain],
   ["Q4", ({ topic }) => topic?.status === "archived"],
   ["Q3", ({ topic }) => topic?.queue === "later"],
   ["Q7", ({ item, visible }) => item.blockers.length > 0 && visible()],
   ["Q8", ({ item }) => item.blockers.length > 0],
+  ["Q6", ({ item, nowMs }) => datedWait(item, nowMs)],
+  ["Q1", ({ item }) => item.turn],
   ["Q5", ({ item }) => item.held],
 ];
 
-function queuedState(view: BoardView, item: QueuedView, stale: boolean): CardState {
+function queuedState(
+  view: BoardView,
+  item: QueuedView,
+  stale: boolean,
+  nowMs: number,
+): CardState {
   const topic = item.topic === null ? undefined : view.topics[item.topic];
   const visible = (): boolean => visibleWait(view, item.home, item.blockers, new Set([item.task]));
-  return firstState(QUEUED_RULES, { item, topic, stale, visible }, "Q1");
+  return firstState(QUEUED_RULES, { item, topic, stale, visible, nowMs }, "Q1");
 }
 
 function queuedCards(view: BoardView, context: LifecycleContext): Card[] {
@@ -365,7 +387,7 @@ function queuedCards(view: BoardView, context: LifecycleContext): Card[] {
       topic: item.topic,
       label: `${item.home}/${item.task}`,
     };
-    const found = card("queued", parts, queuedState(view, item, stale));
+    const found = card("queued", parts, queuedState(view, item, stale, context.nowMs));
     return [found, ...(stale ? [] : noTopic(found))];
   });
 }

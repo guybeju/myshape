@@ -93,6 +93,12 @@ export interface QueuedView {
   captain: boolean;
   held: boolean;
   blockers: string[];
+  /** When the aggregator says the item's wait ends, or null. */
+  hold_until: string | null;
+  /** True when the aggregator starts it by itself once its turn or a free place comes. */
+  turn: boolean;
+  /** What the board could not read in the item's optional fields, or null. */
+  unreadable: string | null;
 }
 
 /**
@@ -334,7 +340,10 @@ function deferredReason(hold: ReportHold): string | null {
 
 function waitingFor(item: ReportQueued): string | null {
   if (item.captain) return "等你決定";
-  if (item.hold !== null) return `停著：${item.hold}`;
+  if (item.hold !== null)
+    return item.hold_until === null
+      ? `停著：${item.hold}`
+      : `停著：${item.hold}（延到 ${item.hold_until}）`;
   if (item.blockers.length > 0) return `等 ${item.blockers.join("、")} 完成`;
   return null;
 }
@@ -959,6 +968,9 @@ function baseView(input: ViewInput): BoardView {
         captain: item.captain,
         held: item.hold !== null,
         blockers: [...item.blockers],
+        hold_until: item.hold_until,
+        turn: item.turn,
+        unreadable: item.unreadable === undefined ? null : item.unreadable,
       });
     }
     view.questions.push(...questionsOf(home.id, home.report, placer));

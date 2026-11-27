@@ -102,6 +102,8 @@ function queued(id: string, extra: Partial<ReportQueued> = {}): ReportQueued {
     captain: false,
     blockers: [],
     topic_hint: "hi",
+    hold_until: null,
+    turn: false,
     ...extra,
   };
 }
@@ -294,6 +296,39 @@ describe("the state of every card", () => {
     ]);
     expect(stateOf(evaluation.cards, "queued\tmain\tloose\tNT")).toBe("NT");
     expect(stateOf(evaluation.cards, "queued\tmain\tready\tNT")).toBeUndefined();
+  });
+
+  it("reads a queued item's date and turn: Q6 until a day past its date, Q1 when it starts by itself, Q9 when unreadable", () => {
+    const { evaluation } = look([
+      home("main", {
+        report: report({
+          queued: [
+            queued("dated", { hold: "waiting for CI", hold_until: "2026-12-05" }),
+            queued("just-past", { hold: "waiting for CI", hold_until: "2026-11-26T01:00:00Z" }),
+            queued("long-past", { hold: "waiting for CI", hold_until: "2026-11-25" }),
+            queued("past-free", { hold_until: "2026-11-25" }),
+            queued("turn", { hold: "a free place", turn: true }),
+            queued("bad", { hold: "x", unreadable: 'turn: "yes"' }),
+            queued("bad-ask", { captain: true, hold: "pick", unreadable: 'hold_until: "soon"' }),
+            queued("dated-later", { topic_hint: "lt", hold_until: "2026-12-05" }),
+          ],
+        }),
+      }),
+    ]);
+    const ids = ["dated", "just-past", "long-past", "past-free", "turn", "bad", "bad-ask"];
+    expect(ids.map((id) => stateOf(evaluation.cards, `queued\tmain\t${id}`))).toEqual([
+      "Q6",
+      "Q6",
+      "Q5",
+      "Q1",
+      "Q1",
+      "Q9",
+      "Q9",
+    ]);
+    expect(stateOf(evaluation.cards, "queued\tmain\tdated-later")).toBe("Q3");
+    expect(isTimed("Q6")).toBe(false);
+    expect(isTimed("Q9")).toBe(true);
+    expect(evaluation.memory.clocks["queued\tmain\tdated"]).toBeUndefined();
   });
 
   it("classifies agents, and a stale home's as waiting for a read", () => {
