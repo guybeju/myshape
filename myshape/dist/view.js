@@ -3,6 +3,7 @@ import { QUEUES, resolveTopicId } from "./topics.js";
 import { itemTopic } from "./todos.js";
 import { emptyLifecycle, evaluate } from "./lifecycle.js";
 import { BOARD_CAP, TURN_ORDER } from "./lifecycle-settings.js";
+import { boardMetrics } from "./metrics.js";
 /** How old a home's last good read may be and still count as current. */
 function staleLimit(home, staleMs) {
     return home.staleAfterMs === undefined ? staleMs : home.staleAfterMs;
@@ -612,6 +613,7 @@ function baseView(input) {
         stalls: [],
         idle: [],
         updates: updatesOf(input, placer),
+        metrics: boardMetrics(input.homes.map((home) => ({ id: home.id, metrics: home.report?.metrics ?? null })), input.nowMs),
         summaries: input.summaries
             .map((summary) => ({
             ...summary,

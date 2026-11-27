@@ -11,10 +11,12 @@ import { frame } from "./frame.js";
 import { NO_FILTER, filterHash, parseFilterHash, viewFilter } from "./filter.js";
 import type { Filter } from "./filter.js";
 import { ORDER_KEY, parseOrder } from "./sort.js";
-import { QUEUES, agentName, setAgentLabel } from "./state.js";
+import { QUEUES, agentName, currentTopic, setAgentLabel } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 
 const POLL_MS = 5000;
+/** How often the 用量 panel is redrawn so its times stay current. */
+const USAGE_REDRAW_MS = 30_000;
 const TOAST_MS = 6000;
 const NOTIFY_SECONDS = 30;
 const FAILURES_BEFORE_DOWN = 3;
@@ -438,6 +440,11 @@ window.addEventListener("hashchange", () => {
 });
 document.addEventListener("visibilitychange", () => void poll());
 window.setInterval(() => void poll(), POLL_MS);
+window.setInterval(() => {
+  // The 用量 panel writes its times relative to now; nothing the board sends changes them.
+  if (document.hidden || currentTopic() !== null || (page.view?.metrics.length ?? 0) === 0) return;
+  render();
+}, USAGE_REDRAW_MS);
 window.setInterval(() => {
   // Keeps the confirmation countdown current and drops confirmations that ran out.
   if (page.pending.size === 0) return;

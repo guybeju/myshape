@@ -2,6 +2,8 @@
 // section 4), parsed and checked once where it enters the service.
 import { isRecord, stringField, stringRecord, textField } from "./files.js";
 import { isValidItemId } from "./todos.js";
+import { parseMetrics } from "./metrics.js";
+import type { Metrics } from "./metrics.js";
 
 export const REPORT_SCHEMA = 1;
 
@@ -162,6 +164,8 @@ export interface HomeReport {
   closed_holds: ClosedHold[];
   /** Null for a home whose code does not report closed decisions. */
   closed_cursor: ClosedCursor | null;
+  /** The aggregator's status metrics for the home, shown and never acted on (metrics.ts). */
+  metrics: Metrics;
 }
 
 export type ParsedReport =
@@ -416,6 +420,7 @@ export function parseReport(stdout: string): ParsedReport {
       secondmates: records(raw["secondmates"]).map(parseFeedHome).filter(present),
       closed_holds: records(raw["closed_holds"]).map(parseClosedHold).filter(present),
       closed_cursor: parseClosedCursor(raw["closed_cursor"]),
+      metrics: parseMetrics(raw["metrics"]),
     },
   };
 }

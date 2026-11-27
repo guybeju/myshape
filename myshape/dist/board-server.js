@@ -31,6 +31,7 @@ import { localLabel, machineTimeZone } from "./schedule-time.js";
 import { TICK_MS, endedNotices, tick } from "./schedule-clock.js";
 import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
+import { boardMetrics, metricFlags } from "./metrics.js";
 import { buildView, evaluateBoard, isFresh, placeTask, turnNoticeText, turnsTaken, } from "./view.js";
 import { scheduleLines } from "./lifecycle.js";
 import { ASK_LABEL, DEFAULT_DEADLINES, STATE_LABEL, TIMED_STATES } from "./lifecycle-settings.js";
@@ -286,11 +287,15 @@ function viewVersion(service) {
         .snapshots()
         .map((home) => home.lastOkAt === null || nowMs - home.lastOkAt > service.timings.staleMs ? "1" : "0");
     // A program changing on disk is a change no write announces either, and an
-    // occurrence passing its closes_by is one even when the clock saves nothing.
+    // occurrence passing its closes_by is one even when the clock saves nothing;
+    // nor does a metric's crossing its stale limit or its reset time.
     const open = openKeys(service.board.schedules, nowMs);
+    const metrics = metricFlags(boardMetrics(service.poller
+        .snapshots()
+        .map((home) => ({ id: home.id, metrics: home.report?.metrics ?? null })), nowMs));
     const reach = crypto
         .createHash("sha256")
-        .update(JSON.stringify([blockedReasons(service), programsToConfirm(service), open]))
+        .update(JSON.stringify([blockedReasons(service), programsToConfirm(service), open, metrics]))
         .digest("hex")
         .slice(0, 12);
     return `${service.version}-${stale.join("")}-${reach}`;

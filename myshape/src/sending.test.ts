@@ -28,6 +28,7 @@ import {
   parseOutcome,
 } from "./writes.js";
 import type { Action, WriteRecord, WriteTimings } from "./writes.js";
+import { NO_METRICS } from "./metrics.js";
 
 const exit = (code: number | null, stdout = "", stderr = ""): CommandResult => ({
   code,
@@ -100,6 +101,7 @@ function report(extra: Partial<HomeReport>): HomeReport {
     secondmates: [],
     closed_holds: [],
     closed_cursor: null,
+    metrics: NO_METRICS,
     ...extra,
   };
 }

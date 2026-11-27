@@ -253,6 +253,7 @@ describe("parseReport", () => {
         },
       ],
       closed_cursor: { status: "delta", to_offset: 7, to_prefix_sha256: "s2", more: true },
+      metrics: { kind: "none" },
     });
   });
 
@@ -351,6 +352,7 @@ describe("parseReport", () => {
       secondmates: [],
       closed_holds: [],
       closed_cursor: null,
+      metrics: { kind: "none" },
     });
   });
 
@@ -412,5 +414,31 @@ describe("parseReport task ids", () => {
     expect(ids(report.holds)).toEqual([LONGEST]);
     expect(ids(report.status_decisions)).toEqual([LONGEST]);
     expect(ids(report.closed_holds)).toEqual([LONGEST]);
+  });
+});
+
+describe("metrics", () => {
+  const minimal = { schema: 1, ledger: { status: "absent", to_offset: 0, to_prefix_sha256: "-" } };
+
+  it("reads a report's metrics block, and none when it has none", () => {
+    const parsed = parseReport(
+      JSON.stringify({
+        ...minimal,
+        metrics: { v: 1, items: [{ id: "cost", label: "今天", value: 1.5, unit: "USD" }] },
+      }),
+    );
+    expect(parsed.kind === "ok" && parsed.report.metrics).toMatchObject({
+      kind: "ok",
+      items: [{ id: "cost", value: 1.5, unit: "USD" }],
+    });
+    const none = parseReport(JSON.stringify(minimal));
+    expect(none.kind === "ok" && none.report.metrics).toEqual({ kind: "none" });
+  });
+
+  it("keeps the rest of a report whose metrics block is unreadable", () => {
+    const parsed = parseReport(JSON.stringify({ ...minimal, code_commit: "c", metrics: { v: 9 } }));
+    expect(parsed.kind).toBe("ok");
+    expect(parsed.kind === "ok" && parsed.report.code_commit).toBe("c");
+    expect(parsed.kind === "ok" && parsed.report.metrics.kind).toBe("unreadable");
   });
 });

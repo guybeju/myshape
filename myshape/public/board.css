@@ -102,3 +102,14 @@ table.settings input[type=text]{width:7em}
 .strip .cell .t{color:var(--mute)}
 .strip .cell.missed,.strip .cell.untaken,.strip .cell.timed_out{background:#fff4d6}
 .strip .cell.done{background:#e1f3e7}
+.usage{background:#fff;border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:10px}
+.usage h3{margin-top:4px}
+.usage-group{margin-top:6px}
+.usage-group.off{color:var(--mute)}
+.usage-line{display:flex;gap:6px;align-items:baseline}
+.usage-line .grow{flex:1;min-width:0;overflow-wrap:anywhere}
+.usage-item{padding:4px 0;border-top:1px solid var(--line)}
+.usage-item meter{width:100%;height:8px}
+.usage-item.stale{opacity:.6}
+.usage-item.sev-warn b{color:var(--amber)}
+.usage-item.sev-critical b{color:var(--red)}

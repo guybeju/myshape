@@ -38,6 +38,7 @@ import { emptyTodos } from "./todos.js";
 import type { TodoItem, TodoStore } from "./todos.js";
 import { evaluateBoard } from "./view.js";
 import type { HomeSnapshot, ViewInput } from "./view.js";
+import { NO_METRICS } from "./metrics.js";
 
 const NOW = Date.parse("2026-11-27T00:00:00Z");
 const MINUTE = 60_000;
@@ -73,6 +74,7 @@ function report(extra: Partial<HomeReport> = {}): HomeReport {
     secondmates: [],
     closed_holds: [],
     closed_cursor: null,
+    metrics: NO_METRICS,
     ...extra,
   };
 }

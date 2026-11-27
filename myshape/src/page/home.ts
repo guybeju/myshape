@@ -31,6 +31,7 @@ import { filterBar, mergeTagNote, topicChips } from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
 import { lifecycleSettings, queueCards, undelivered } from "./cards.js";
+import { usagePanel } from "./usage.js";
 
 /** The topics the captain's filter shows, with what each matched; null when nothing is filtered. */
 type Shown = Map<string, string[]> | null;
@@ -199,6 +200,7 @@ export function sidebar(page: Page, view: View, actions: Actions): Child {
   return h(
     "div",
     { id: "sidebar" },
+    usagePanel(view.metrics, Date.now()),
     h("h2", {}, "優先順序"),
     orderButtons(page, view, actions, order),
     nowStrip(page, view, actions),
