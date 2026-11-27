@@ -106,6 +106,7 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 
 - `tasks[]`、`holds[]` 取自 `fm-fleet-snapshot.sh`：它的參數解析有 `--board-input` 這個 case 標籤時（某一行以 `--board-input)` 或 `--json|--board-input)` 這樣的標籤開頭；只出現在註解或 usage 文字裡不算）用 `--board-input`，沒有時用 `--json`（`fm-board-lib.sh` 的 `tb_snapshot_mode`）；`tasks` 與 `backlog.records[]`。`holds[]` 只收 `hold_kind` 是 captain 的紀錄，原因以 `動手：` 開頭的也收（第 3.3 節）。`origin` 從 hold 內文的 `Captain hold origin:` 那一行取出，取不到就是空字串。`on_answer` 取自 `Captain hold on answer:` 那一行（`fm-captain-hold.sh hold --on-answer` 寫的），沒有那一行或值不是 `close`、`release` 就是 `null`。
 - `holds[].hold_set` 取自 snapshot 的 `hold_set`（`Captain hold set:` 那一行）。
+- `queued[]` 是 snapshot 的每一筆排隊中的 backlog 項目：`hold` 是 hold 的原因原文，`captain` 是 hold kind 是不是 `captain`，`blockers` 是 `unresolved_blocker_ids`，`topic_hint` 取自內文的 `topic:` 那一行；`hold_until` 是 hold 的日期（`tasks-axi hold --until`，沒有是 `null`），`turn` 只在 hold kind 是 `load` 時是 `true`：等容量的項目，有空位 first mate 照 `order` 派，看板把它當成排到就做（contracts C14）。其他 kind（`external`、`parked`、`future`）與派工計畫的 `看板佇列：` hold 都是 `false`。
 - `closed_holds[]` 是每一筆最新的 Resolution 紀錄（`Resolution recorded by fm-captain-hold.`，或已經退役的 `fm-decision-hold` 寫的），來自 snapshot 的每一筆 backlog 項目（放行的還在佇列裡，也算），加上 `--closed-since` 的游標之後 Done 的保留搬進封存檔的。
   封存檔是 backlog 根目錄的 `.tasks.toml` 的 `[markdown] archive`，沒寫就是 backlog 旁的 `done-archive.md`；backend 不是 markdown 時沒有封存（`absent`）。
   `mode`、`digest` 取自 `Resolution mode:`、`Decision digest:`；`Captain decision:` 下第一行是 `Captain answered this call through <來源>.` 時，`source`、`answer`、`label` 取自那一行與 `Answer:`、`Answer as shown to the captain:`，其他的 `source` 是空字串，`answer` 是第一行（最多 300 字）。`occurrence` 是那一筆的 Resolution 紀錄數。
@@ -127,6 +128,7 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 | `message` | — | `fm-inbox.sh note --request-id tb-<id> -`，stdin「［議題：<名稱>（<id>）］」換行後接文字 | exit 0 已送達；3 重試（存了但沒叫醒 first mate，同一個 id 重放會補叫醒）；其他失敗 |
 | `notice` | — | 同上，stdin 是 `text` | 同上 |
 | `notice`，`event` 是 `decision.front` | — | 照 `notice`：一則筆記，stdin 是 `text`（「看板上輪到 <home>/<task> 的決定了（…）」，或輪到提議關閉、「沒人處理的議題」、「沒人接」卡的同一種句子），request id 是 `tb-w-d-<16 位十六進位>` | 照 `notice` |
+| `notice`，`event` 是 `stall.nudge` | — | 照 `notice`：一則筆記，stdin 是 `text`（「看板提醒：這些卡沒有人接手…」），request id 是 `tb-w-n-<16 位十六進位>` | 照 `notice` |
 | `notice`，`event` 是 `todo.closed` | — | 使用者按的照 `notice`；aggregator 自己關的什麼都不跑；不看 `item.ref` | 使用者按的照 `notice`；aggregator 自己關的已送達；`item.id` 格式不對是失敗 |
 | `direct` | `main` | `fm-send.sh <task> <文字>` | 0 已送達；輸出有 `is not resolvable` 是失敗「這個 worker 已經結束或找不到，訊息沒有送出。」；其他失敗 |
 | `direct` | secondmate | `fm-send.sh <id> --fire-and-forget <id 的 SHA-256 前 16 位> 轉給 <task>：<文字>` | 0 已送達；3 而且是遠端的是重試；其他失敗 |
@@ -140,6 +142,7 @@ fork 補上的方法：把 `carry` 的這個修正移植過去，也就是 `bin/
 - 給 worker 的文字以 `/`、`$`、`!` 或 `-` 開頭也是失敗；看板本來就擋，這裡再擋一次，因為 `fm-send.sh` 不收 `--` 終止符。
 
 `decision.front` 是看板在排隊的卡輪到時送的（contracts 第 7.1 節；那條佇列也排提議關閉與看板的「沒人處理的議題」「沒人接」卡，[lifecycle](../../myshape/spec/lifecycle.markdown) 第 4 節）；這一側不另外處理，和其他通知一樣是一則筆記。
+`stall.nudge` 是看板的提醒：有卡過了提醒期限還沒有人接手（lifecycle 第 1 節）；使用者在「沒人接」卡上按的〔請 first mate 處理〕是一則 `message`，request id 是 `tb-w-a-<16 位十六進位>`。兩者這一側都不另外處理，是一則筆記；first mate 怎麼處置寫在規則範本（第 6 節）。
 這些通知的內容和改版前一樣（contracts 第 7 節改版前是看板自己跑這些指令）；差別只有「議題變成可派」的通知改成說發生了什麼（「議題「X」離開「待辦」，排在「一般」第 3，現在可派」，規則第 5 行「看板通知議題可派時也重新評估」照樣適用），不再寫「請跑 order 重新評估」，和每一個頁面上的決定各送一則。
 
 測試：`fm-board/test/stage-2-deliver.sh`（每一種紀錄對三種 home 跑的指令、參數、stdin 與 `FM_HOME`，每一種結果，通知的內容逐位元組，`decision.front` 的也是；裝了 `tasks-axi` 時用真的 `fm-captain-hold.sh` 作答一次）；第三到五段的看板測試經 `tb_make_fake_root` 跑真的 `fm-board.sh`。
@@ -235,7 +238,7 @@ snapshot 的 JSON 裡用到的欄位（少了哪一個，對應的東西就從�
 | `tasks[].id`、`.kind`、`.current_state.state`、`.current_state.source`、`.current_state.detail` | agent 的燈號。`state` 是 `working` 且 `detail` 剛好是 `harness busy (fm-spawn)` 時當成「還沒開始」（C32） |
 | `tasks[].hints.open_decisions[]` 的 `verb`（只取 `needs-decision`）、`key`、`summary` | worker 提問 |
 | `backlog.records[]` 的 `structured`、`state`（`queued`、`done`）、`id`、`title`、`kind` | 排隊中的項目 |
-| `backlog.records[]` 的 `hold_kind`（`captain`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、排隊項目在等什麼 |
+| `backlog.records[]` 的 `hold_kind`（`captain`；排隊項目另看 `load`）、`hold_reason`、`hold_bucket`（`live`、`aged`、`dated`、`blocked`）、`hold_until`、`hold_age_days`、`unresolved_blocker_ids` | 待決事項、排隊項目在等什麼；排隊項目的 `hold_until` 與 `turn`（第 3.1 節） |
 | `backlog.records[].body_lines[]` 裡 `Captain hold origin: <id>` 那一行 | 待決事項沒有自己的議題標記時，跟著來源 task 的議題 |
 | `backlog.records[].body_lines[]` 裡 `Captain hold on answer: close\|release` 那一行 | 作答時送 `done` 還是 `release`（第 8 節） |
 | `backlog.records[].body_lines[]` 裡 `topic: <議題 id>` 那一行 | 排隊中的項目沒有議題標記時用它（C51）；first mate 轉交項目時寫的 |
