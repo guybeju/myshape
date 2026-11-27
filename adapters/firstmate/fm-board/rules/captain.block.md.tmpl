@@ -1,4 +1,4 @@
-<!-- myshape:begin v12（由 fm-board.sh install-rules 維護，要改請改範本） -->
+<!-- myshape:begin v13（由 fm-board.sh install-rules 維護，要改請改範本） -->
 ## 議題看板（主 home）
 - 新工作先用 `myshape.sh list` 找它的議題 id；沒有合適的就跑 `myshape.sh create <名稱> --goal <一行>` 建一個再 `fm-board.sh tag`；我指定佇列才加 `--queue`。議題要窄：一件具體的事一個議題，不開什麼都能裝的大議題。
 - hashtag 你可自己貼撕，事後說明；開新的特別點出。
@@ -13,6 +13,6 @@
 - 要我親手做的事（sudo 指令、登入）不要只寫在聊天：跑 `myshape.sh todo add <task-id> <標題> --topic <議題 id> --do <一行>`，每個要我跑的指令一個 `--cmd`，其他說明放 `--note`。我說做完了就驗證，再跑 `myshape.sh todo done <task-id>` 或 `todo failed <task-id> --reason <一行>`；不再需要時跑 `todo obsolete <task-id> --reason <一行>`。
 - secondmate 回報某則「轉給」的訊息送不出去時，在聊天告訴我是哪一則、為什麼。
 - 上面這幾種通知一件一行，細節留在看板，不在聊天重述。
-- `merge`、`split`、`move`、`rename`、`goal`、`archive`、`reopen`、`stop`、`restart`、`reset-token`、`install-rules` 只在我明講時才跑。
+- `merge`、`split`、`rename`、`goal`、`archive`、`reopen`、`stop`、`restart`、`reset-token`、`install-rules` 只在我明講時才跑。
 - `myshape.sh` 或 `fm-board.sh` 回 3 就原樣重做一次；回 69 就把它印的那一行原文轉告我，其他工作照常，不自己修、不重試，等我修好再重做。
 <!-- myshape:end -->
