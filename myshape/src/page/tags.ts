@@ -119,7 +119,7 @@ function keywordRow(page: Page, view: View, actions: Actions): Child {
       none: filter.none,
       text: filter.text,
       untagged: filter.untagged,
-      order: cardOrder(page, view),
+      order: cardOrder(page, view.hashtags.views),
     });
     actions.draft("view-name", "");
   };

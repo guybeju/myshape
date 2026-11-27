@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { generator } from "#board/seeded-random.test-helper.js";
 import { NO_FILTER, shownTopics } from "./filter.js";
 import type { FilterSource } from "./filter.js";
-import { parseOrder, shownOrder, sortCards } from "./sort.js";
+import { cardOrder, parseOrder, shownOrder, sortCards } from "./sort.js";
 
 const born: Record<string, string> = {
   a: "2026-11-01T00:00:00Z",
@@ -60,7 +60,10 @@ describe("the order of a queue's cards", () => {
   it("only reorders: every card is listed once, and the two directions mirror each other", () => {
     const random = generator(20261127);
     for (let round = 0; round < 200; round += 1) {
-      const ids = Array.from({ length: Math.floor(random() * 9) }, (_, index) => `t${index}`);
+      const ids = Array.from(
+        { length: Math.floor(random() * (round < 150 ? 9 : 120)) },
+        (_, index) => `t${index}`,
+      );
       const times = new Map(
         ids.map((id) => [id, random() < 0.2 ? "" : `2026-11-0${1 + Math.floor(random() * 3)}`]),
       );
@@ -72,6 +75,12 @@ describe("the order of a queue's cards", () => {
         expect(key(newest[index - 1] as string)).toBeGreaterThanOrEqual(
           key(newest[index] as string),
         );
+      const rank = new Map(ids.map((id, index) => [id, index]));
+      for (let index = 1; index < newest.length; index += 1) {
+        const [before, after] = [newest[index - 1] as string, newest[index] as string];
+        if (key(before) === key(after))
+          expect(rank.get(before) as number).toBeLessThan(rank.get(after) as number);
+      }
       const groups = (list: string[]) => list.map((id) => String(key(id)));
       expect(groups(sortCards(ids, "oldest", at))).toEqual(groups(newest).toReversed());
     }
@@ -131,6 +140,14 @@ describe("which order the page shows", () => {
   it("is the chosen saved view's", () => {
     expect(shownOrder("work", views, "oldest")).toBe("newest");
     expect(shownOrder("home", views, "oldest")).toBe("priority");
+  });
+
+  it("follows the page's filter: its saved view, else the page's own order", () => {
+    const work = [{ id: "work", order: "oldest" as const }];
+    expect(cardOrder({ filter: { ...NO_FILTER, view: "work" }, order: "newest" }, work)).toBe(
+      "oldest",
+    );
+    expect(cardOrder({ filter: NO_FILTER, order: "newest" }, work)).toBe("newest");
   });
 
   it("is the page's own without a saved view, or when the view is gone", () => {

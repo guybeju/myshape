@@ -194,7 +194,7 @@ function orderButtons(page: Page, view: View, actions: Actions, order: CardOrder
 
 export function sidebar(page: Page, view: View, actions: Actions): Child {
   const shown = shownOf(page, view);
-  const order = cardOrder(page, view);
+  const order = cardOrder(page, view.hashtags.views);
   return h(
     "div",
     { id: "sidebar" },

@@ -139,16 +139,20 @@ describe("the drop hint", () => {
   });
 
   it("says a filter is on, how many cards it orders among, and how many stay put", () => {
-    expect(dropHint(3, 2, false)).toBe("拖到這裡");
-    expect(dropHint(3, 2, true)).toBe(
+    expect(dropHint(3, 2, false, false)).toBe("拖到這裡");
+    expect(dropHint(3, 2, true, false)).toBe(
       "篩選中：只在看得到的 3 個議題之間排順序，沒列出的 2 個位置不變",
     );
-    expect(dropHint(0, 2, true)).toBe("篩選中：這裡沒有看得到的議題，放下會排在沒列出的 2 個之後");
-    expect(dropHint(1, 0, true)).toBe(
+    expect(dropHint(0, 2, true, false)).toBe(
+      "篩選中：這裡沒有看得到的議題，放下會排在沒列出的 2 個之後",
+    );
+    expect(dropHint(1, 0, true, false)).toBe(
       "篩選中：只在看得到的 1 個議題之間排順序，沒列出的 0 個位置不變",
     );
-    expect(dropHint(0, 1, true)).toBe("篩選中：這裡沒有看得到的議題，放下會排在沒列出的 1 個之後");
-    expect(dropHint(0, 0, true)).toBe("篩選中：放下會排在這個佇列最後");
+    expect(dropHint(0, 1, true, false)).toBe(
+      "篩選中：這裡沒有看得到的議題，放下會排在沒列出的 1 個之後",
+    );
+    expect(dropHint(0, 0, true, false)).toBe("篩選中：放下會排在這個佇列最後");
   });
 });
 

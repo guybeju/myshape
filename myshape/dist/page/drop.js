@@ -31,7 +31,7 @@ export function timeDropAnchor(from, to) {
  * The hint a queue shows while a card is dragged: `shown` cards listed,
  * `unlisted` not; `byTime` when the cards are listed by creation time.
  */
-export function dropHint(shown, unlisted, filtered, byTime = false) {
+export function dropHint(shown, unlisted, filtered, byTime) {
     if (byTime)
         return `照建立時間排列中：拖到別的佇列會排在那裡的最後${filtered ? "（連沒列出的也算）" : ""}，在原來的佇列裡放下不會改順序`;
     if (!filtered)

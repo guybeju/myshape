@@ -81,7 +81,7 @@ function orderButtons(page, view, actions, order) {
 }
 export function sidebar(page, view, actions) {
     const shown = shownOf(page, view);
-    const order = cardOrder(page, view);
+    const order = cardOrder(page, view.hashtags.views);
     return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), orderButtons(page, view, actions, order), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
 }
 function section(title, ...children) {

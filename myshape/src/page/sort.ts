@@ -3,7 +3,10 @@
 // the order the aggregator dispatches in, stay as they are. Pure, so it is
 // tested on its own. The reasons are in spec/card-sort.markdown.
 import type { CardOrder, SavedView } from "#board/hashtags.js";
-import type { Page, View } from "./state.js";
+import type { Page } from "./state.js";
+
+/** What the order needs of a saved view. */
+type SavedOrder = Pick<SavedView & { id: string }, "id" | "order">;
 
 /** The orders the page offers. Kept here because page scripts cannot load modules outside dist/page. */
 const ORDERS: readonly CardOrder[] = ["priority", "newest", "oldest"];
@@ -13,35 +16,41 @@ export const ORDER_KEY = "myshape.card-order";
 
 /** The remembered order as stored; 照優先順序 for nothing, or for anything else. */
 export function parseOrder(raw: string | null): CardOrder {
-  return ORDERS.find((order) => order === raw) ?? "priority";
+  const known = ORDERS.find((order) => order === raw);
+  return known === undefined ? "priority" : known;
 }
 
 /** The order shown: the chosen saved view's, or the page's own when no saved view is chosen. */
 export function shownOrder(
   view: string | null,
-  views: readonly Pick<SavedView & { id: string }, "id" | "order">[],
+  views: readonly SavedOrder[],
   own: CardOrder,
 ): CardOrder {
-  return views.find((saved) => saved.id === view)?.order ?? own;
+  const saved = views.find((entry) => entry.id === view);
+  return saved === undefined ? own : saved.order;
 }
 
-/** The order the sidebar lists the queues' cards in right now. */
+/** The order the sidebar lists the queues' cards in right now, given the board's saved views. */
 export function cardOrder(
   page: Pick<Page, "filter" | "order">,
-  view: Pick<View, "hashtags">,
+  views: readonly SavedOrder[],
 ): CardOrder {
-  return shownOrder(page.filter.view, view.hashtags.views, page.order);
+  return shownOrder(page.filter.view, views, page.order);
 }
+
+/** Before every time a Date can hold (±8.64e15 ms), and still a number a difference can be taken of. */
+const BEFORE_ALL = Number.MIN_SAFE_INTEGER;
 
 /** A creation time as a moment; one that cannot be read is older than every other. */
 function moment(created: string): number {
   const at = Date.parse(created);
-  return Number.isNaN(at) ? -Infinity : at;
+  return Number.isNaN(at) ? BEFORE_ALL : at;
 }
 
 /**
  * The queue's cards in `order`. By creation time, newest or oldest first;
- * topics created at one moment keep their priority order in both directions.
+ * topics created at one moment keep their priority order in both directions,
+ * because the sort is stable and they compare equal.
  */
 export function sortCards(
   queue: readonly string[],
@@ -49,8 +58,8 @@ export function sortCards(
   createdAt: (id: string) => string,
 ): string[] {
   if (order === "priority") return [...queue];
-  const sign = order === "newest" ? -1 : 1;
-  const cards = queue.map((id, rank) => ({ id, rank, at: moment(createdAt(id)) }));
-  cards.sort((a, b) => (a.at === b.at ? a.rank - b.rank : sign * (a.at < b.at ? -1 : 1)));
+  const direction = order === "newest" ? -1 : 1;
+  const cards = queue.map((id) => ({ id, at: moment(createdAt(id)) }));
+  cards.sort((a, b) => direction * (a.at - b.at));
   return cards.map((card) => card.id);
 }

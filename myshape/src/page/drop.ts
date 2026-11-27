@@ -52,7 +52,7 @@ export function dropHint(
   shown: number,
   unlisted: number,
   filtered: boolean,
-  byTime = false,
+  byTime: boolean,
 ): string {
   if (byTime)
     return `照建立時間排列中：拖到別的佇列會排在那裡的最後${filtered ? "（連沒列出的也算）" : ""}，在原來的佇列裡放下不會改順序`;
