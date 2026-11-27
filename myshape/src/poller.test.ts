@@ -680,12 +680,15 @@ describe("reading with nobody looking", () => {
     expect(s.poller.goodReadsFrom()).toEqual(new Map());
   });
 
-  it("reads nothing once stopped", async () => {
-    const s = setup();
+  it("reads nothing once stopped, and reads again once started again", async () => {
+    const s = setup({ ...TIMINGS, slowMs: 1 });
     s.poller.start();
     s.poller.stop();
-    await vi.advanceTimersByTimeAsync(2_000_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(s.calls).toHaveLength(0);
+    s.poller.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(s.calls.length).toBeGreaterThan(0);
   });
 
   it("knows when each home's last good read began, and keeps it through a failed one", async () => {
