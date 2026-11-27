@@ -96,11 +96,14 @@ wait_for() {  # <description> <command...>: retry the command for up to 15 secon
   done
 }
 
+# The board's own reminders (notice stall.nudge) are left out of both: the
+# answered holds of these stubs stay open, so the board reminds the aggregator
+# of them (D8) whenever a test answers one; test_plain_reminder checks them.
 received() {  # <agg-dir> [jq arguments...] [jq filter]: what the filter makes of every action record received, as one array
   local agg=$1
   shift
   [ "$#" -gt 0 ] || set -- .
-  jq -r -c -s "$@" "$agg/received.jsonl"
+  jq -c -s 'map(select(.event != "stall.nudge"))' "$agg/received.jsonl" | jq -r -c "$@"
 }
 
 is() {  # <expected> <command...>: the command prints exactly <expected>
@@ -112,7 +115,7 @@ at_least() {  # <n> <command...>: the command prints a number of at least <n>
 }
 
 received_count() {  # <agg-dir>
-  grep -c '' "$1/received.jsonl" || true
+  jq -s 'map(select(.event != "stall.nudge")) | length' "$1/received.jsonl"
 }
 
 write_state() {  # <home> <write-id>
@@ -709,6 +712,80 @@ test_plain_changes_are_marked() {
   pass "every command-made change to the captain's topics is marked as the agent's (AT7.6)"
 }
 
+nudges_naming() {  # <agg-dir> <text>: the board's reminders received that name <text>
+  jq -c -s --arg text "$2" '[.[] | select(.event == "stall.nudge" and (.text | contains($text)))]' "$1/received.jsonl"
+}
+
+nudge_count() {  # <agg-dir> <text>: how many of the board's reminders received name <text>
+  nudges_naming "$1" "$2" | jq 'length'
+}
+
+# AT6.7: the optional queued fields with and without them, and the board's
+# reminder (stall.nudge) of what it cannot read, once.
+test_plain_lifecycle_fields() {
+  local nudge
+  cp "$AGG_PLAIN/plain/main.json" "$AGG_PLAIN/plain/main.before"
+  : > "$AGG_PLAIN/received.jsonl"
+  jq '.queued += [{"id": "q-date", "title": "日期", "hold": "等 CI", "hold_until": "2099-12-05", "topic_hint": "solo"},
+                  {"id": "q-turn", "title": "輪到", "hold": "等空位", "turn": true, "topic_hint": "solo"},
+                  {"id": "q-odd", "title": "讀不懂", "turn": "yes", "topic_hint": "solo"}]
+      | .holds += [{"id": "h-odd", "title": "怪", "question": "Q", "hold_bucket": "snoozed"}]
+      | .topics["h-odd"] = "solo 2026-11-18T10:00:00Z"' "$AGG_PLAIN/plain/main.before" > "$AGG_PLAIN/plain/main.json"
+  refresh "$PH"
+  wait_for "the new queued items" is 1 state_of "$PH" '[.queued[] | select(.task == "q-odd")] | length'
+  assert_equals "停著：等 CI（延到 2099-12-05）|2099-12-05|false|null" \
+    "$(state_of "$PH" '.queued[] | select(.task == "q-date") | "\(.waiting)|\(.hold_until)|\(.turn)|\(.unreadable)"')" \
+    "a dated wait must show its date"
+  assert_equals "true|null" "$(state_of "$PH" '.queued[] | select(.task == "q-turn") | "\(.turn)|\(.unreadable)"')" \
+    "a queued item the aggregator starts by itself must say so"
+  assert_equals 'turn: "yes"' "$(state_of "$PH" '.queued[] | select(.task == "q-odd") | .unreadable')" \
+    "a value the board cannot read must be kept as sent"
+  assert_equals "null|false|null" "$(state_of "$PH" '.queued[] | select(.task == "j9") | "\(.hold_until)|\(.turn)|\(.unreadable)"')" \
+    "an item without the fields must read as before"
+  wait_for "the reminder" is 1 nudge_count "$AGG_PLAIN" "main/h-odd"
+  nudge=$(nudges_naming "$AGG_PLAIN" "main/h-odd" | jq -c '.[0]')
+  assert_equals "notice|stall.nudge|null" "$(jq -r '"\(.kind)|\(.event)|\(.topic)"' <<< "$nudge")" \
+    "a reminder is a notice with no topic"
+  jq -e '.id | test("^w-n-[0-9a-f]{16}$")' <<< "$nudge" >/dev/null || fail "a reminder must have its fixed id"
+  assert_contains "$(jq -r .text <<< "$nudge")" "看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：" \
+    "a reminder must open with its fixed words"
+  assert_contains "$(jq -r .text <<< "$nudge")" "議題「建置」（id solo）的 main/h-odd（讀不懂的待決事項，滿 1 天交給使用者）" \
+    "a reminder must name the card, its topic and when it goes to the user"
+  assert_contains "$(nudges_naming "$AGG_PLAIN" "main/q-odd")" "議題「建置」（id solo）的 main/q-odd（讀不懂的排隊項目，滿 1 天交給使用者）" \
+    "an unreadable queued item must be reminded of too"
+  refresh "$PH"
+  sleep 1
+  assert_equals 1 "$(nudge_count "$AGG_PLAIN" "main/h-odd")" "the same stuck card must be reminded once"
+  mv "$AGG_PLAIN/plain/main.before" "$AGG_PLAIN/plain/main.json"
+  refresh "$PH"
+  wait_for "the extra items to leave" is 0 state_of "$PH" '[.queued[] | select(.task == "q-odd")] | length'
+  pass "the queued fields read with and without them, and the board reminds the aggregator once of what it cannot read (AT6.7)"
+}
+
+# AT6.8: with nobody looking the board still reads, at the slow interval
+# (contracts section 10), shortened here to 1.5 s; its status still says it
+# does not poll every home's interval.
+test_plain_reads_with_nobody_looking() {
+  local agg stub home before
+  agg=$TMP_ROOT/agg-slow
+  stub=$(sa_install_stub plain "$agg")
+  home=$(sa_home slow)
+  sa_bind "$home" "$stub"
+  printf '%s\n' '{"tasks": [{"id": "s1", "kind": "job", "state": "working"}]}' > "$agg/plain/main.json"
+  SA_ENV=("${BASE_ENV[@]}" MYSHAPE_IDLE_MS=1000 MYSHAPE_SLOW_MS=1500)
+  sa "$home" open >/dev/null || fail "the slow board did not start"
+  SA_ENV=("${BASE_ENV[@]}")
+  sa_confirm "$home"
+  # The confirmation was the last viewer: once the idle limit passes, only the slow reads go on.
+  sleep 2
+  before=$(feeds_of "$agg" main)
+  sleep 4
+  [ "$(feeds_of "$agg" main)" -gt "$before" ] || fail "with nobody looking the board must still read its homes"
+  assert_contains "$(sa "$home" status)" "輪詢：沒在跑" "with nobody looking the board must not poll every home's interval"
+  sa "$home" stop >/dev/null
+  pass "with nobody looking the board still reads every home, slowly (AT6.8)"
+}
+
 # AT6.6: no text the board emits names Firstmate.
 test_plain_texts_name_no_firstmate() {
   local texts
@@ -1068,7 +1145,8 @@ fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_every_home_is_re
   test_fm_a_crash_mid_write test_fm_whole_page_states test_fm_refresh test_fm_summaries \
   test_plain_setup test_plain_work test_plain_ledger test_plain_second_home test_plain_banners \
   test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel test_plain_hands_on \
-  test_plain_changes_are_marked test_plain_texts_name_no_firstmate \
+  test_plain_changes_are_marked test_plain_lifecycle_fields test_plain_reads_with_nobody_looking \
+  test_plain_texts_name_no_firstmate \
   test_bind_setup test_bind_a_tracked_program_needs_no_confirmation \
   test_bind_an_override_keeps_the_exemption_only_for_the_own_location test_bind_paths_only \
   test_bind_a_confirmation_is_bound_to_the_bytes test_bind_a_fixed_environment test_bind_only_the_page_confirms \

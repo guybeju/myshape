@@ -11,7 +11,9 @@
 #   $TB_AGG/received.jsonl   every action record, as received
 #   $TB_AGG/play             the next outcomes, one per line: an outcome line
 #                            ({"outcome":…}), or "sleep <seconds> <outcome line>";
-#                            an empty file answers {"outcome":"delivered"}
+#                            an empty file answers {"outcome":"delivered"}; the
+#                            board's own reminders (notice stall.nudge) are always
+#                            delivered and never take a step meant for another write
 #   $TB_AGG/control/<home>   how the feed (and stub-plain's topics call) for
 #                            <home> misbehaves until removed:
 #                            "sleep <seconds>", "exit4 <line>", "fail <line>",
@@ -64,7 +66,7 @@ stub_deliver() {
   printf '%s\n' "$record" >> "$TB_AGG/received.jsonl"
   stub_log deliver "$(jq -r .id <<< "$record")" "$(jq -r .kind <<< "$record")"
   step='{"outcome":"delivered"}'
-  if [ -s "$TB_AGG/play" ]; then
+  if [ -s "$TB_AGG/play" ] && [ "$(jq -r '.event // ""' <<< "$record")" != stall.nudge ]; then
     IFS= read -r step < "$TB_AGG/play"
     tail -n +2 "$TB_AGG/play" > "$TB_AGG/play.next"
     mv "$TB_AGG/play.next" "$TB_AGG/play"

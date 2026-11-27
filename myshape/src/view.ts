@@ -30,6 +30,19 @@ export interface HomeSnapshot {
   lastOkAt: number | null;
   error: string | null;
   version: HomeVersion;
+  /** How long a good read counts as current; the input's staleMs when not given. */
+  staleAfterMs?: number;
+}
+
+/** How old a home's last good read may be and still count as current. */
+function staleLimit(home: HomeSnapshot, staleMs: number): number {
+  return home.staleAfterMs === undefined ? staleMs : home.staleAfterMs;
+}
+
+/** Whether a home's last read was good and is still current. */
+export function isFresh(home: HomeSnapshot, nowMs: number, staleMs: number): boolean {
+  if (home.report === null || home.lastOkAt === null) return false;
+  return nowMs - home.lastOkAt <= staleLimit(home, staleMs);
 }
 
 export interface ViewInput {
@@ -93,6 +106,12 @@ export interface QueuedView {
   captain: boolean;
   held: boolean;
   blockers: string[];
+  /** When the aggregator says the item's wait ends, or null. */
+  hold_until: string | null;
+  /** True when the aggregator starts it by itself once its turn or a free place comes. */
+  turn: boolean;
+  /** What the board could not read in the item's optional fields, or null. */
+  unreadable: string | null;
 }
 
 /**
@@ -336,7 +355,10 @@ function deferredReason(hold: ReportHold): string | null {
 
 function waitingFor(item: ReportQueued): string | null {
   if (item.captain) return "等你決定";
-  if (item.hold !== null) return `停著：${item.hold}`;
+  if (item.hold !== null)
+    return item.hold_until === null
+      ? `停著：${item.hold}`
+      : `停著：${item.hold}（延到 ${item.hold_until}）`;
   if (item.blockers.length > 0) return `等 ${item.blockers.join("、")} 完成`;
   return null;
 }
@@ -420,7 +442,7 @@ function homeView(home: HomeSnapshot, input: ViewInput): HomeView {
     version: home.version,
     ledger_enabled: home.report?.ledger_enabled ?? null,
     ledger_hint: home.report?.ledger_hint ?? null,
-    stale: age === null || age > input.staleMs,
+    stale: age === null || age > staleLimit(home, input.staleMs),
     last_ok_seconds_ago: age === null ? null : Math.floor(age / 1000),
     error: home.error,
   };
@@ -886,12 +908,7 @@ function topicViews(topics: Frozen<TopicState>): Record<string, TopicView> {
 
 /** The lifecycle's inputs when the caller gives none: no clocks, every home with a report fresh. */
 function plainContext(input: ViewInput): LifecycleContext {
-  const reported = input.homes.filter(
-    (home) =>
-      home.report !== null &&
-      home.lastOkAt !== null &&
-      input.nowMs - home.lastOkAt <= input.staleMs,
-  );
+  const reported = input.homes.filter((home) => isFresh(home, input.nowMs, input.staleMs));
   return {
     store: emptyLifecycle(),
     schedules: [],
@@ -900,6 +917,7 @@ function plainContext(input: ViewInput): LifecycleContext {
     fresh: new Set(reported.map((home) => home.id)),
     present: new Set(input.homes.map((home) => home.id)),
     questions: new Map(),
+    readFrom: new Map(),
     label: input.label,
     nowMs: input.nowMs,
   };
@@ -963,6 +981,9 @@ function baseView(input: ViewInput): BoardView {
         captain: item.captain,
         held: item.hold !== null,
         blockers: [...item.blockers],
+        hold_until: item.hold_until,
+        turn: item.turn,
+        unreadable: item.unreadable === undefined ? null : item.unreadable,
       });
     }
     view.questions.push(...questionsOf(home.id, home.report, placer));

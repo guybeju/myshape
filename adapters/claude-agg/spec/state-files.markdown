@@ -101,14 +101,19 @@ name that does.
 ```json
 {"v": 1, "queued": [
   {"id": "billing-2", "kind": "ship", "title": "Second step", "hold": "等空位（2/2）",
-   "captain": false, "blockers": [], "topic_hint": "billing"}
+   "captain": false, "blockers": [], "topic_hint": "billing", "turn": true}
 ]}
 ```
 
 The array order is the dispatch order. Each entry goes to the board's
-`queued[]` with exactly these seven fields; `hold` (default `null`), `captain`
-(default `false`), `blockers` (default `[]`) and `topic_hint` (default
-`null`) may be left out. Other fields are the supervisor's.
+`queued[]` with exactly these nine fields; `hold` (default `null`), `captain`
+(default `false`), `blockers` (default `[]`), `topic_hint` (default `null`),
+`hold_until` (default `null`) and `turn` (default `false`) may be left out.
+`hold_until` is the date (or UTC time) a dated wait ends; `turn: true` says
+the supervisor starts the entry by itself once its turn or a free place
+comes, and the supervisor writes it for an entry that waits only for a free
+place (`等空位`), so the board times it as ready to run rather than stopped
+(the board's contracts C14). Other fields are the supervisor's.
 
 ## `ledger.jsonl`
 

@@ -92,6 +92,8 @@ describe("parseReport", () => {
         captain: false,
         blockers: [],
         topic_hint: "billing",
+        hold_until: null,
+        turn: false,
       },
       {
         id: "held",
@@ -101,6 +103,8 @@ describe("parseReport", () => {
         captain: false,
         blockers: [],
         topic_hint: null,
+        hold_until: null,
+        turn: false,
       },
       {
         id: "call",
@@ -110,6 +114,8 @@ describe("parseReport", () => {
         captain: true,
         blockers: [],
         topic_hint: null,
+        hold_until: null,
+        turn: false,
       },
       {
         id: "after",
@@ -119,9 +125,43 @@ describe("parseReport", () => {
         captain: false,
         blockers: ["plain"],
         topic_hint: null,
+        hold_until: null,
+        turn: false,
       },
     ]);
     expect(ok(FULL).queued).toEqual([]);
+  });
+
+  it("reads a queued item's optional date and turn, and keeps one it cannot read as unreadable", () => {
+    const queued = ok({
+      ...FULL,
+      queued: [
+        { id: "dated", hold: "等 CI", hold_until: "2026-12-05", turn: false },
+        { id: "timed", hold_until: "2026-12-05T08:30:00Z" },
+        { id: "turn", hold: "等空位（2/2）", turn: true },
+        { id: "nulls", hold_until: null, turn: null },
+        { id: "bad-date", hold_until: "next week" },
+        { id: "bad-day", hold_until: "2026-13-40" },
+        { id: "number-date", hold_until: 20261205 },
+        { id: "bad-turn", turn: "yes" },
+      ],
+    }).queued;
+    const fields = queued.map(({ id, hold_until, turn, unreadable }) => ({
+      id,
+      hold_until,
+      turn,
+      unreadable,
+    }));
+    expect(fields).toEqual([
+      { id: "dated", hold_until: "2026-12-05", turn: false, unreadable: undefined },
+      { id: "timed", hold_until: "2026-12-05T08:30:00Z", turn: false, unreadable: undefined },
+      { id: "turn", hold_until: null, turn: true, unreadable: undefined },
+      { id: "nulls", hold_until: null, turn: false, unreadable: undefined },
+      { id: "bad-date", hold_until: null, turn: false, unreadable: 'hold_until: "next week"' },
+      { id: "bad-day", hold_until: null, turn: false, unreadable: 'hold_until: "2026-13-40"' },
+      { id: "number-date", hold_until: null, turn: false, unreadable: "hold_until: 20261205" },
+      { id: "bad-turn", hold_until: null, turn: false, unreadable: 'turn: "yes"' },
+    ]);
   });
 
   it("takes a task as unstarted only when the report says so", () => {

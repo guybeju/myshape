@@ -527,7 +527,10 @@ C58、C59 合併時留下的三個後續（guybeju/firstmate#63、guybeju/firstm
 - 逾期的卡只放到使用者面前，按鈕都是看板既有的操作（封存、移動）或只改看板自己的檔（先不關、延到）；看板不派工、不答、不關、不提議關閉。
 - 要你動手的每個操作只能從表上的狀態出發；不在任何佇列的議題啟動時放回「一般」。
 - 防呆：`lifecycle.test.ts`（每種卡的規則、計時、交給使用者、一條佇列、轉移、設定，與固定種子的不變式性質測試）、`stalls.test.ts`、`ops.test.ts`、`storage.test.ts`、`view.test.ts`、`decisions.test.ts` 的 `hold.vanished`、`check-state-writers.sh` 認得 `lifecycle.json`、`stage-5-http.sh` 的新路由。
-- 不在這一條（下一個 PR）：給 aggregator 的提醒、「請 <aggregator> 處理」、排隊項目的「歸到…」、讀取契約的 `hold_until` 與 `turn`、沒人看時的慢讀取、兩個 aggregator 的轉接與規則範本。
+- 第二步：提醒期限一到看板提醒 aggregator 一次（`stall.nudge`，同一次判斷到期的合成一則、固定的 id、提醒過了記在計時上）；「沒人接」卡上的〔請 <aggregator> 處理〕（N3，一張卡一次，期限設定的 N3 之後退回，預設 1 天，沒有提醒）與沒有議題成員的歸併選單（送 `tag`）；讀取契約的 `queued[].hold_until` 與 `turn`（Q6 延到某天、Q1 排到就做、Q9 讀不懂，[contracts](contracts.markdown) C14），first mate 的 `turn` 是 hold kind `load`，claude-agg 的是「等空位」；沒有人看頁面時每 15 分鐘（遠端 60 分鐘）讀一次，過期門檻是間隔的兩倍；規則範本 v14 一句「收到看板的提醒時」。
+- D8 改成送達之後才開始的一次好讀取仍看到待決事項才算：送達時在途的讀取（或送達時併進的那一次）可能早於答案，提醒又是立刻的，第一步的寫法會誤報。
+- 防呆（第二步）：`report.test.ts` 的新欄位、`lifecycle.test.ts` 的 Q6／Q9／`turn` 與提醒、`stalls.test.ts` 的 N3 與兩種固定句子、`ops.test.ts` 的〔請 <aggregator> 處理〕、`poller.test.ts` 的慢讀（假時間）與過期門檻、`writes.test.ts` 的送達時間；`stage-7-aggregator.sh` 的 `test_plain_lifecycle_fields`、`stage-2-deliver.sh` 的 `test_lifecycle_notices_are_notes`、`stage-1-feed.sh` 的新欄位。
+- 不在這一條（下一個 PR）：同步進 `carry`。
 
 ### C28　使用者的 ub-mode 與全域規範裡沒有做到的
 

@@ -31,9 +31,9 @@ import { localLabel, machineTimeZone } from "./schedule-time.js";
 import { TICK_MS, endedNotices, tick } from "./schedule-clock.js";
 import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
-import { buildView, evaluateBoard, placeTask, turnNoticeText, turnsTaken } from "./view.js";
+import { buildView, evaluateBoard, isFresh, placeTask, turnNoticeText, turnsTaken, } from "./view.js";
 import { scheduleLines } from "./lifecycle.js";
-import { DEFAULT_DEADLINES, STATE_LABEL, TIMED_STATES } from "./lifecycle-settings.js";
+import { ASK_LABEL, DEFAULT_DEADLINES, STATE_LABEL, TIMED_STATES } from "./lifecycle-settings.js";
 import { findLines } from "./lineage.js";
 import { checkName, hashtagView, nameOfKey, topicsWith } from "./hashtags.js";
 import { openKeys, scheduleView } from "./schedule-view.js";
@@ -388,19 +388,33 @@ function boardView(service) {
         ...buildView(viewInput(service)),
     };
 }
-/** The deadline settings as the page's 期限設定 panel shows them, each with its default. */
+/**
+ * The deadline settings as the page's 期限設定 panel shows them, each with its
+ * default; N3's reminder is null: it does not apply.
+ */
 function lifecycleView(service) {
     const { settings } = service.board.lifecycle;
     return {
-        settings: TIMED_STATES.map((state) => ({
-            state,
-            label: STATE_LABEL[state],
-            unit: state === "S6" ? "連續第幾場" : "分鐘",
-            remind: settings[state].remind,
-            raise: settings[state].raise,
-            default_remind: DEFAULT_DEADLINES[state].remind,
-            default_raise: DEFAULT_DEADLINES[state].raise,
-        })),
+        settings: [
+            ...TIMED_STATES.map((state) => ({
+                state,
+                label: STATE_LABEL[state],
+                unit: state === "S6" ? "連續第幾場" : "分鐘",
+                remind: settings[state].remind,
+                raise: settings[state].raise,
+                default_remind: DEFAULT_DEADLINES[state].remind,
+                default_raise: DEFAULT_DEADLINES[state].raise,
+            })),
+            {
+                state: "N3",
+                label: ASK_LABEL,
+                unit: "分鐘",
+                remind: null,
+                raise: settings.N3.raise,
+                default_remind: null,
+                default_raise: DEFAULT_DEADLINES.N3.raise,
+            },
+        ],
     };
 }
 function viewInput(service) {
@@ -424,9 +438,7 @@ function sha256Hex(text) {
 function lifecycleContext(service) {
     const nowMs = Date.now();
     const homes = service.poller.snapshots();
-    const fresh = homes.filter((home) => home.report !== null &&
-        home.lastOkAt !== null &&
-        nowMs - home.lastOkAt <= service.timings.staleMs);
+    const fresh = homes.filter((home) => isFresh(home, nowMs, service.timings.staleMs));
     const resolve = (id) => topics.resolveTopicId(service.board.topics.doc, id);
     const writes = [...service.writes.records.values()].map((write) => ({
         kind: write.action.kind,
@@ -435,6 +447,7 @@ function lifecycleContext(service) {
         topic: write.topic === null ? null : resolve(write.topic),
         state: write.state,
         question_sha256: write.action.kind === "answer" ? write.action.question_sha256 : null,
+        settledAt: service.writes.settledAt(write.id),
     }));
     const questions = homes.flatMap((home) => (home.report?.holds ?? []).map((hold) => [
         `${home.id}\t${hold.id}`,
@@ -448,15 +461,18 @@ function lifecycleContext(service) {
         fresh: new Set(fresh.map((home) => home.id)),
         present: new Set(homes.map((home) => home.id)),
         questions: new Map(questions),
+        readFrom: service.poller.goodReadsFrom(),
         label: labelOf(service),
         nowMs,
     };
 }
 /**
  * One lifecycle look (lifecycle.ts evaluate): saves what the board saw and the
- * transitions it made, by the board, through commitChange, and tells the page
- * when what is in front of the captain changed. It waits for a good read of
- * the root home. A failure is logged; the next read or clock check looks again.
+ * transitions it made, by the board, through commitChange, then hands the
+ * aggregator the look's reminder (stall.nudge) under its fixed id, and tells
+ * the page when what is in front of the captain changed. It waits for a good
+ * read of the root home. A failure is logged; the next read or clock check
+ * looks again, and a reminder whose save failed is made again then.
  */
 function lifecycleTick(service) {
     try {
@@ -483,6 +499,11 @@ function lifecycleTick(service) {
             if (saved.appendError !== null)
                 log(`records wait in the outbox: ${saved.appendError}`);
         }
+        const { nudge } = evaluation;
+        if (nudge !== null)
+            submitNotice(service, { kind: "notice", event: "stall.nudge", text: nudge.text }, null, {
+                id: nudge.id,
+            });
         const shown = JSON.stringify([view.turns, view.stalls, view.idle]);
         if (shown !== service.lifecycleShown || evaluation.records.length > 0)
             service.version += 1;
@@ -677,6 +698,7 @@ function pollTimings() {
         readMs: override("READ", DEFAULT_TIMINGS.readMs),
         idleMs: override("IDLE", DEFAULT_TIMINGS.idleMs),
         staleMs: override("STALE", DEFAULT_TIMINGS.staleMs),
+        slowMs: override("SLOW", DEFAULT_TIMINGS.slowMs),
     };
 }
 /** Test runs may shorten the write timings through MYSHAPE_RETRY_MS and _RESUME_MS. */
@@ -990,6 +1012,7 @@ function loadService(boot) {
     announceConfirmed(service, loaded.confirmed);
     service.notifier.start(service.board.topics);
     startClock(service);
+    service.poller.start();
     return service;
 }
 /**
@@ -1035,6 +1058,7 @@ function topicOp(service, op, args, fromPage = false) {
         now: now(),
         records: boardRecords(service),
         zone: machineTimeZone(),
+        stalls: () => evaluateBoard(viewInput(service)).view.stalls,
     };
     const applied = applyOperation(commitTarget(service), before, { op, args, fromPage }, who);
     if (applied.committed !== null) {
@@ -1053,9 +1077,22 @@ function topicOp(service, op, args, fromPage = false) {
         submitTodoNotice(service, notice);
     for (const notice of applied.scheduleNotices)
         submitScheduleNotice(service, notice);
+    for (const ask of applied.messages)
+        submitAsk(service, ask);
     if (applied.committed !== null)
         voidEndedNotices(service);
     return applied.response;
+}
+/** Hands the aggregator the captain's 請 <aggregator> 處理 as a message under its topic, once by its fixed id. */
+function submitAsk(service, ask) {
+    service.writes.submit({
+        channel: "browser",
+        home: MAIN_HOME,
+        task: null,
+        topic: ask.topic,
+        text: ask.text,
+        action: { kind: "message", topic: topicRef(service, ask.topic), text: ask.text },
+    }, { id: ask.id });
 }
 /** Starts answering browser requests on the port this process already holds. */
 function serveBrowser(service) {

@@ -13,7 +13,7 @@ import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
 import { closedNotice } from "./schedule-notices.js";
 import { todoState, todoTransitionProblem, withKept, withSettings, withStall, } from "./lifecycle.js";
 import { KEEP_DEFAULT_DAYS, KEEP_MAX_DAYS, changeSettings } from "./lifecycle-settings.js";
-import { deferStall, localDay } from "./stalls.js";
+import { askStall, deferStall, localDay } from "./stalls.js";
 /** The schedule on `id`, if any. */
 function scheduled(ctx, id) {
     return schedules.scheduleOfTopic(ctx.schedules, ctx.topics, id) !== null;
@@ -294,9 +294,10 @@ function keptUntil(ctx, args, result) {
 }
 /**
  * The captain's answer on one of the board's own cards: 先不關，到某天 on a
- * 沒人處理的議題 card (`card: "idle"`, `key` its topic id), or 延到 <日期> on a
- * 沒人接 card (`card: "stall"`, `key` its topic id or "-"). The other buttons
- * of both are operations the board already has (archive, move).
+ * 沒人處理的議題 card (`card: "idle"`, `key` its topic id), or on a 沒人接 card
+ * (`card: "stall"`, `key` its topic id or "-") 延到 <日期>, or with `ask: true`
+ * 請 <aggregator> 處理. The other buttons of both are operations the board
+ * already has (archive, move).
  */
 function deferAnswer(ctx, args) {
     const key = stringField(args, "key");
@@ -306,16 +307,46 @@ function deferAnswer(ctx, args) {
         return keepIdle(ctx, key, daysOf(args));
     if (args["card"] !== "stall")
         return { ok: false, code: "usage", line: "card 要是 idle 或 stall。" };
+    if (args["ask"] === true)
+        return askAnswer(ctx, key);
     const nameOf = (id) => ctx.topics.doc.topics[id]?.name ?? id;
     const nowMs = Date.parse(ctx.now);
     const result = deferStall(ctx.lifecycle.stalls, key, args["days"] ?? KEEP_DEFAULT_DAYS, {
         nameOf,
         nowMs,
+        askMinutes: ctx.lifecycle.settings.N3.raise,
     });
     if (!result.ok)
         return result;
     const store = withStall(ctx.lifecycle, key, result.stall);
     return { ok: true, changed: true, store, line: result.line, records: result.records };
+}
+/** A topic's name, an archived one's too, or its id for one the board does not know. */
+function topicNameOf(state, id) {
+    const live = state.doc.topics[id];
+    if (live !== undefined)
+        return live.name;
+    const archived = state.archive.topics[id];
+    return archived === undefined ? id : archived.name;
+}
+/** 請 <aggregator> 處理 on a 沒人接 card, naming its members as the page lists them now. */
+function askAnswer(ctx, key) {
+    const nameOf = (id) => topicNameOf(ctx.topics, id);
+    const shown = ctx.stalls().find((stall) => stall.key === key);
+    const members = shown === undefined ? [] : shown.members;
+    const context = {
+        nameOf,
+        nowMs: Date.parse(ctx.now),
+        label: ctx.label,
+        members,
+        askMinutes: ctx.lifecycle.settings.N3.raise,
+    };
+    const asked = askStall(ctx.lifecycle.stalls, key, context);
+    if (!asked.ok)
+        return asked;
+    const store = withStall(ctx.lifecycle, key, asked.stall);
+    const { line, records, message } = asked;
+    return { ok: true, changed: true, store, line, records, message };
 }
 /** 先不關，到某天 on a 沒人處理的議題 card: the topic waits until then (T4), and the card goes. */
 function keepIdle(ctx, topic, days) {
@@ -688,6 +719,7 @@ function answer(board, response) {
         notices: [],
         decisions: [],
         scheduleNotices: [],
+        messages: [],
     };
 }
 function refused(line) {
@@ -855,7 +887,11 @@ function applyLifecycleOp(target, board, actor, result) {
         next: result.store,
         records: withSuffix(result.records, "你在頁面上"),
     };
-    return commit(target, board, change, actor, result.line);
+    const applied = commit(target, board, change, actor, result.line);
+    // Saved first: the message goes only for an ask the board has recorded.
+    if (applied.committed === null || result.message === undefined)
+        return applied;
+    return { ...applied, messages: [result.message] };
 }
 function applyScheduleOp(target, board, request, actor, result) {
     if (!result.ok)

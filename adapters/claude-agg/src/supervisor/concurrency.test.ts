@@ -62,9 +62,9 @@ describe("the semaphore", () => {
       model: "test-model",
       session_id: "s0",
     });
-    expect(world.queued().map((entry) => [entry.id, entry.hold])).toEqual([
-      ["c-1", WAIT.full],
-      ["d-1", WAIT.full],
+    expect(world.queued().map((entry) => [entry.id, entry.hold, entry.turn])).toEqual([
+      ["c-1", WAIT.full, true],
+      ["d-1", WAIT.full, true],
     ]);
     expect(WAIT.full).toBe("等空位（2/2）");
     gates[0]?.open();
@@ -96,6 +96,8 @@ describe("the semaphore", () => {
     await settle();
     expect(running(world)).toEqual(["a-1", "b-1"]);
     expect(holdOf(world, "a-2")).toBe(WAIT.topicBusy("a-1"));
+    // Only a wait for a free place says the supervisor starts it by itself.
+    expect(world.queued().find((entry) => entry.id === "a-2")?.turn).toBeUndefined();
     gates[1]?.open();
     await settle();
     expect(running(world)).toEqual(["a-1"]);

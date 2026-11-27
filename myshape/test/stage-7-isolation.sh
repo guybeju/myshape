@@ -222,7 +222,9 @@ test_remote_means_nothing_to_the_board() {
   sleep 2
   assert_equals "$(jq -c -s '[.[] | select(.home == "h1") | del(.id, .home)]' "$agg/received.jsonl")" \
     "$(jq -c -s '[.[] | select(.home == "h2") | del(.id, .home)]' "$agg/received.jsonl")" "(c) the records must be identical apart from home"
-  assert_equals 6 "$(grep -c '' "$agg/received.jsonl")" "(c) an answer, a filing and a direct message to each home"
+  # The answered holds stay open in this stub, so the board also reminds it of them (stall.nudge): not counted here.
+  assert_equals 6 "$(jq -s 'map(select(.event != "stall.nudge")) | length' "$agg/received.jsonl")" \
+    "(c) an answer, a filing and a direct message to each home"
   assert_equals 0 "$(grep -cE '"(remote|placement|machine|host)"' "$agg/received.jsonl" || true)" "(f) no action record may carry a placement"
 
   printf '%s\n' 'sleep 3 {"outcome":"delivered"}' 'sleep 3 {"outcome":"delivered"}' > "$agg/play"

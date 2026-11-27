@@ -29,7 +29,9 @@
       "hold": null,
       "captain": false,
       "blockers": [],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     },
     {
       "id": "q-decide",
@@ -38,7 +40,9 @@
       "hold": "要先決定嗎？",
       "captain": true,
       "blockers": [],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     },
     {
       "id": "q-parked",
@@ -47,7 +51,9 @@
       "hold": "等 CI 修好",
       "captain": false,
       "blockers": [],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     },
     {
       "id": "q-after",
@@ -58,7 +64,9 @@
       "blockers": [
         "t1"
       ],
-      "topic_hint": "solo"
+      "topic_hint": "solo",
+      "hold_until": null,
+      "turn": false
     }
   ],
   "holds": [

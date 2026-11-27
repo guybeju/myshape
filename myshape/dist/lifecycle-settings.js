@@ -8,7 +8,8 @@ import { isRecord } from "./files.js";
  * waiting on work the board cannot see; D8 an answer delivered but not closed;
  * D9 a decision the board cannot read; Q1 queued and ready; Q4 queued under an
  * archived topic; Q5 queued and stopped with no date or visible wait; Q8
- * queued waiting on work the board cannot see; NT queued work or an agent with
+ * queued waiting on work the board cannot see; Q9 a queued item the board
+ * cannot read; NT queued work or an agent with
  * no topic; A1 an agent working without any change; A2 parked or paused; A3 not
  * started; A4 blocked or failed; A5 done but not cleaned up; A6 an agent state
  * the board cannot read; W1 a worker question waiting for the aggregator; O3 a
@@ -24,6 +25,7 @@ export const TIMED_STATES = [
     "Q4",
     "Q5",
     "Q8",
+    "Q9",
     "NT",
     "A1",
     "A2",
@@ -56,6 +58,7 @@ export const DEFAULT_DEADLINES = {
     Q4: { remind: DAY, raise: 3 * DAY },
     Q5: { remind: DAY, raise: 3 * DAY },
     Q8: { remind: DAY, raise: 3 * DAY },
+    Q9: { remind: 0, raise: DAY },
     NT: { remind: DAY, raise: 3 * DAY },
     A1: { remind: 3 * DAY, raise: 7 * DAY },
     A2: { remind: DAY, raise: 3 * DAY },
@@ -67,7 +70,13 @@ export const DEFAULT_DEADLINES = {
     O3: { remind: DAY, raise: 3 * DAY },
     S3: { remind: 3 * DAY, raise: 7 * DAY },
     S6: { remind: 3, raise: 5 },
+    N3: { raise: DAY },
 };
+/**
+ * A queued item's dated wait (Q6) is the date's until one day past it; still
+ * there then, the date no longer explains the wait (Q5, or Q1 with nothing held).
+ */
+export const DATE_GRACE_MINUTES = DAY;
 /** Decision 3, option A: 先不關 keeps a topic this many days unless the captain picks another. */
 export const KEEP_DEFAULT_DAYS = 14;
 /** Decision 3: the longest 先不關 or 延到 the captain may pick. */
@@ -102,6 +111,7 @@ export const STATE_LABEL = {
     Q4: "封存議題底下的排隊項目",
     Q5: "停著、沒有日期也沒有等的項目",
     Q8: "等看板看不到的工作的排隊項目",
+    Q9: "讀不懂的排隊項目",
     NT: "沒有議題的排隊項目與 agent",
     A1: "進行中卻沒有任何變化的 agent",
     A2: "停著的 agent",
@@ -114,6 +124,15 @@ export const STATE_LABEL = {
     S3: "aggregator 暫停的排程",
     S6: "沒有人接的排程",
 };
+/** N3's name in 期限設定 and in its records. */
+export const ASK_LABEL = "請 aggregator 處理之後的「沒人接」卡";
+/** N3's value: whole minutes, 1 to 90 days, and no reminder, which does not apply to it. */
+function isAskDeadline(raw) {
+    if (!isRecord(raw) || Object.hasOwn(raw, "remind"))
+        return false;
+    const { raise } = raw;
+    return typeof raise === "number" && Number.isInteger(raise) && raise >= 1 && raise <= MAX_MINUTES;
+}
 function isDeadline(raw, state) {
     if (!isRecord(raw))
         return false;
@@ -130,6 +149,8 @@ export function parseSettings(raw) {
         const value = given[state];
         settings[state] = isDeadline(value, state) ? { ...value } : { ...DEFAULT_DEADLINES[state] };
     }
+    const ask = given["N3"];
+    settings.N3 = isAskDeadline(ask) ? { raise: ask.raise } : { ...DEFAULT_DEADLINES.N3 };
     return settings;
 }
 export function defaultSettings() {
@@ -152,16 +173,29 @@ export function deadlineWords(state, value) {
 function isTimedState(name) {
     return TIMED_STATES.includes(name);
 }
+/** Puts one change into `settings`; returns why it is refused, or null. */
+function applyChange(settings, name, raw) {
+    if (name === "N3") {
+        if (!isAskDeadline(raw))
+            return `「${ASK_LABEL}」只有交給你的期限（{raise}，分鐘，1 到 ${MAX_MINUTES}），沒有提醒`;
+        settings.N3 = { raise: raw.raise };
+        return null;
+    }
+    if (!isTimedState(name))
+        return `不認得的設定：${name}`;
+    const { words } = unitOf(name);
+    if (!isDeadline(raw, name))
+        return `「${STATE_LABEL[name]}」要是 {remind, raise}，兩個都是整數${words}，提醒不能晚於交給你，交給你至少要 1`;
+    settings[name] = { remind: raw.remind, raise: raw.raise };
+    return null;
+}
 /** The settings with `changes` applied, or why one of them is refused. */
 function nextSettings(current, changes) {
     const settings = parseSettings(current);
     for (const [name, raw] of Object.entries(changes)) {
-        if (!isTimedState(name))
-            return `不認得的設定：${name}`;
-        const { words } = unitOf(name);
-        if (!isDeadline(raw, name))
-            return `「${STATE_LABEL[name]}」要是 {remind, raise}，兩個都是整數${words}，提醒不能晚於交給你，交給你至少要 1`;
-        settings[name] = { remind: raw.remind, raise: raw.raise };
+        const problem = applyChange(settings, name, raw);
+        if (problem !== null)
+            return problem;
     }
     return settings;
 }
@@ -173,13 +207,13 @@ export function changeSettings(current, changes) {
     const settings = nextSettings(current, changes);
     if (typeof settings === "string")
         return { ok: false, code: "usage", line: settings };
-    const changed = TIMED_STATES.filter((state) => settings[state].remind !== current[state].remind ||
-        settings[state].raise !== current[state].raise);
-    if (changed.length === 0)
+    const lines = TIMED_STATES.filter((state) => settings[state].remind !== current[state].remind ||
+        settings[state].raise !== current[state].raise).map((state) => `${STATE_LABEL[state]} ${pairWords(state, current[state])} → ${pairWords(state, settings[state])}`);
+    if (settings.N3.raise !== current.N3.raise)
+        lines.push(`${ASK_LABEL} ${durationWords(current.N3.raise)} → ${durationWords(settings.N3.raise)}`);
+    if (lines.length === 0)
         return { ok: true, changed: false, line: "ok 期限設定沒有變" };
-    const said = changed
-        .map((state) => `${STATE_LABEL[state]} ${pairWords(state, current[state])} → ${pairWords(state, settings[state])}`)
-        .join("；");
+    const said = lines.join("；");
     return {
         ok: true,
         changed: true,

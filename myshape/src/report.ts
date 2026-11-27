@@ -31,6 +31,12 @@ export interface ReportQueued {
    * item until it dispatches it.
    */
   topic_hint: string | null;
+  /** When a dated wait ends, a date or a UTC time; null when the item has none. */
+  hold_until: string | null;
+  /** True when the aggregator starts the item by itself once its turn or a free place comes. */
+  turn: boolean;
+  /** The optional fields the board could not read, as sent: that item is unreadable (Q9). */
+  unreadable?: string;
 }
 
 /** What answering a hold does to its item, as the aggregator recorded it on the hold. */
@@ -178,6 +184,11 @@ function onAnswerOf(value: unknown): OnAnswer | null {
   return found === undefined ? null : found;
 }
 
+/** A value the board could not read, as it shows it: the JSON it got, cut to 64 characters. */
+function shownValue(value: unknown): string {
+  return String(JSON.stringify(value)).slice(0, 64);
+}
+
 /** A hold with no bucket is due now; any other word the board does not know is unreadable. */
 function bucketOf(value: unknown): HoldBucket {
   if (value === undefined || value === null) return "live";
@@ -191,7 +202,7 @@ function parseHold(raw: Record<string, unknown>): ReportHold | null {
   const bucket = bucketOf(word);
   const age = raw["hold_age_days"];
   return {
-    ...(bucket === "unknown" ? { unreadable: String(JSON.stringify(word)).slice(0, 64) } : {}),
+    ...(bucket === "unknown" ? { unreadable: shownValue(word) } : {}),
     id,
     title: textField(raw, "title"),
     question: textField(raw, "question"),
@@ -279,16 +290,47 @@ function parseTask(raw: Record<string, unknown>): ReportTask | null {
   }));
 }
 
+/** An optional field as read: its value, or what the board could not read in it. */
+type Optional<T> = { value: T } | { unreadable: string };
+
+/** A date (YYYY-MM-DD) or a time in ISO 8601 with its zone. */
+const UNTIL = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
+
+/** A queued item's `hold_until`: absent or null is none; anything but a real date or time is unreadable. */
+function queuedUntil(value: unknown): Optional<string | null> {
+  if (value === undefined || value === null) return { value: null };
+  if (typeof value === "string" && UNTIL.test(value) && !Number.isNaN(Date.parse(value)))
+    return { value };
+  return { unreadable: `hold_until: ${shownValue(value)}` };
+}
+
+/** A queued item's `turn`: absent or null is false; anything but a boolean is unreadable. */
+function queuedTurn(value: unknown): Optional<boolean> {
+  if (value === undefined || value === null) return { value: false };
+  if (typeof value === "boolean") return { value };
+  return { unreadable: `turn: ${shownValue(value)}` };
+}
+
 function parseQueued(raw: Record<string, unknown>): ReportQueued | null {
-  return withId(raw, (id) => ({
-    id,
-    kind: textField(raw, "kind"),
-    title: textField(raw, "title"),
-    hold: stringField(raw, "hold"),
-    captain: raw["captain"] === true,
-    blockers: strings(raw["blockers"]),
-    topic_hint: stringField(raw, "topic_hint"),
-  }));
+  return withId(raw, (id) => {
+    const until = queuedUntil(raw["hold_until"]);
+    const turn = queuedTurn(raw["turn"]);
+    const unreadable = [until, turn].flatMap((field) =>
+      "unreadable" in field ? [field.unreadable] : [],
+    );
+    return {
+      id,
+      kind: textField(raw, "kind"),
+      title: textField(raw, "title"),
+      hold: stringField(raw, "hold"),
+      captain: raw["captain"] === true,
+      blockers: strings(raw["blockers"]),
+      topic_hint: stringField(raw, "topic_hint"),
+      hold_until: "value" in until ? until.value : null,
+      turn: "value" in turn ? turn.value : false,
+      ...(unreadable.length === 0 ? {} : { unreadable: unreadable.join("；") }),
+    };
+  });
 }
 
 /** A number of seconds within `bounds`, or null when `value` is not a finite number. */

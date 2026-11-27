@@ -3,13 +3,27 @@
 // state of every card the board knows, derived from what it shows, and the
 // clocks that time the states the aggregator owns. Pure: board-server.ts
 // commits what evaluate returns.
-import { TIMED_STATES, defaultSettings, durationWords } from "./lifecycle-settings.js";
+import {
+  DATE_GRACE_MINUTES,
+  TIMED_STATES,
+  defaultSettings,
+  durationWords,
+} from "./lifecycle-settings.js";
 import type { LifecycleSettings, TimedState } from "./lifecycle-settings.js";
 import type { Draft, Frozen } from "./records.js";
 import { MAIN_HOME } from "./journal.js";
 import { isNew } from "./schedules.js";
 import type { ScheduleStore } from "./schedules.js";
-import { NO_TOPIC, idleStep, stallKeyOf, stallState, stallStep } from "./stalls.js";
+import {
+  NO_TOPIC,
+  cardName,
+  idleStep,
+  nudgeOf,
+  stallKeyOf,
+  stallState,
+  stallStep,
+} from "./stalls.js";
+import type { Nudge, NudgeLine } from "./stalls.js";
 import type { AgentView, BoardView, HoldView, QueuedView, TodoView, TopicView } from "./view.js";
 
 /** Who makes a state's next move (spec/lifecycle.markdown section 1). */
@@ -17,11 +31,12 @@ export type Owner = "captain" | "aggregator" | "board" | "time" | "none";
 
 /**
  * One state's rule: its owner and, for a state the aggregator owns, the
- * setting that times it ("members" for a 沒人接 card, timed by its members).
+ * setting that times it ("members" for a 沒人接 card, timed by its members;
+ * "N3" for one the captain asked the aggregator to handle, timed by N3's setting).
  */
 export interface Rule {
   owner: Owner;
-  deadline: TimedState | "members" | null;
+  deadline: TimedState | "members" | "N3" | null;
 }
 
 const captain: Rule = { owner: "captain", deadline: null };
@@ -59,8 +74,10 @@ export const LIFECYCLE = {
   Q3: captain,
   Q4: timed("Q4"),
   Q5: timed("Q5"),
+  Q6: time,
   Q7: time,
   Q8: timed("Q8"),
+  Q9: timed("Q9"),
   Q10: board,
   NT: timed("NT"),
   // agents (read)
@@ -91,6 +108,7 @@ export const LIFECYCLE = {
   // 沒人接 cards (stored)
   N1: { owner: "aggregator", deadline: "members" },
   N2: captain,
+  N3: { owner: "aggregator", deadline: "N3" },
   N4: time,
 } as const satisfies Record<string, Rule>;
 
@@ -116,18 +134,24 @@ export interface Card {
   sig: string;
 }
 
-/** When the board first saw a card in the timed state it is in. */
+/** When the board first saw a card in the timed state it is in, and whether it reminded the aggregator of it since. */
 export interface Clock {
   state: TimedState;
   since: string;
   sig: string;
+  reminded?: true;
 }
 
-/** A 沒人接 card in front of the captain, and the members the captain put off, if any. */
+/**
+ * A 沒人接 card in front of the captain, the members the captain put off, if
+ * any, and when the captain asked the aggregator to handle the members listed
+ * then (N3), which stays with the card so it is asked once only.
+ */
 export interface Stall {
   since: string;
   members: string[];
   deferred?: { until: string; members: string[] };
+  asked?: { at: string; members: string[] };
 }
 
 /** What the board saw: first-seen times, where topics had work, and its 沒人接 cards. */
@@ -169,6 +193,8 @@ export interface WriteLine {
   topic: string | null;
   state: string;
   question_sha256: string | null;
+  /** When the write reached its state, epoch ms, or null when the board does not know. */
+  settledAt: number | null;
 }
 
 /** A schedule as the lifecycle reads it. */
@@ -197,6 +223,8 @@ export interface LifecycleContext {
   present: ReadonlySet<string>;
   /** SHA-256 of each hold's question, by "home\ttask". */
   questions: ReadonlyMap<string, string>;
+  /** When the last good read of each home began, epoch ms. */
+  readFrom: ReadonlyMap<string, number>;
   /** What the board's sentences call the aggregator. */
   label: string;
   nowMs: number;
@@ -230,8 +258,8 @@ function noTopic(found: Card): Card[] {
 const ANSWER_SENDING = new Set(["waiting", "sending", "retrying"]);
 const ANSWER_FAILED = new Set(["failed", "undelivered", "unknown"]);
 
-/** The state of the board's latest answer to a decision, if it sent one for this question. */
-function answerState(context: LifecycleContext, hold: HoldView): string | null {
+/** The board's latest answer to a decision, if it sent one for this question. */
+function answerOf(context: LifecycleContext, hold: HoldView): WriteLine | undefined {
   const sha = context.questions.get(`${hold.home}\t${hold.task}`);
   const own = context.writes.filter(
     (write) =>
@@ -240,8 +268,18 @@ function answerState(context: LifecycleContext, hold: HoldView): string | null {
       write.task === hold.task &&
       write.question_sha256 === sha,
   );
-  const last = own.at(-1);
-  return last === undefined ? null : last.state;
+  return own.at(-1);
+}
+
+/**
+ * Whether a good read of the answer's home began after the answer reached
+ * its state: only such a read can say the decision is still open once
+ * answered. A read in flight when the answer arrived may predate it.
+ */
+function readSince(context: LifecycleContext, write: WriteLine): boolean {
+  if (write.settledAt === null) return true;
+  const from = context.readFrom.get(write.home);
+  return from !== undefined && from > write.settledAt;
 }
 
 /**
@@ -299,12 +337,20 @@ interface HoldFacts {
   hold: HoldView;
   /** The state of the board's own answer to it, if it sent one. */
   sent: string | null;
+  /** Whether a good read began after that answer reached its state. */
+  readSince: boolean;
   visible: () => boolean;
+}
+
+/** An answer still going, or one delivered that no read since could check: the board's to finish. */
+function answerGoing(facts: HoldFacts): boolean {
+  if (facts.sent === null) return false;
+  return ANSWER_SENDING.has(facts.sent) || (facts.sent === "delivered" && !facts.readSince);
 }
 
 const HOLD_RULES: Rules<HoldFacts> = [
   ["D10", ({ hold }) => hold.stale],
-  ["D6", ({ sent }) => sent !== null && ANSWER_SENDING.has(sent)],
+  ["D6", answerGoing],
   ["D7", ({ sent }) => sent !== null && ANSWER_FAILED.has(sent)],
   ["D8", ({ sent }) => sent === "delivered"],
   ["D9", ({ hold }) => hold.bucket === "unknown"],
@@ -317,7 +363,10 @@ const HOLD_RULES: Rules<HoldFacts> = [
 /** A decision's state, first match wins (spec/lifecycle.markdown, 待決事項). */
 function holdState(view: BoardView, context: LifecycleContext, hold: HoldView): CardState {
   const visible = (): boolean => visibleWait(view, hold.home, hold.blockers, new Set([hold.task]));
-  return firstState(HOLD_RULES, { hold, sent: answerState(context, hold), visible }, "D1");
+  const answer = answerOf(context, hold);
+  const sent = answer === undefined ? null : answer.state;
+  const since = answer !== undefined && readSince(context, answer);
+  return firstState(HOLD_RULES, { hold, sent, readSince: since, visible }, "D1");
 }
 
 function holdCards(view: BoardView, context: LifecycleContext): Card[] {
@@ -338,22 +387,32 @@ interface QueuedFacts {
   topic: TopicView | undefined;
   stale: boolean;
   visible: () => boolean;
+  nowMs: number;
+}
+
+/** Whether a dated wait still explains the item: until one day past its date. */
+function datedWait(item: QueuedView, nowMs: number): boolean {
+  if (item.hold_until === null) return false;
+  return nowMs < Date.parse(item.hold_until) + DATE_GRACE_MINUTES * 60_000;
 }
 
 const QUEUED_RULES: Rules<QueuedFacts> = [
   ["Q10", ({ stale }) => stale],
+  ["Q9", ({ item }) => item.unreadable !== null],
   ["Q2", ({ item }) => item.captain],
   ["Q4", ({ topic }) => topic?.status === "archived"],
   ["Q3", ({ topic }) => topic?.queue === "later"],
   ["Q7", ({ item, visible }) => item.blockers.length > 0 && visible()],
   ["Q8", ({ item }) => item.blockers.length > 0],
+  ["Q6", ({ item, nowMs }) => datedWait(item, nowMs)],
+  ["Q1", ({ item }) => item.turn],
   ["Q5", ({ item }) => item.held],
 ];
 
-function queuedState(view: BoardView, item: QueuedView, stale: boolean): CardState {
+function queuedState(view: BoardView, item: QueuedView, stale: boolean, nowMs: number): CardState {
   const topic = item.topic === null ? undefined : view.topics[item.topic];
   const visible = (): boolean => visibleWait(view, item.home, item.blockers, new Set([item.task]));
-  return firstState(QUEUED_RULES, { item, topic, stale, visible }, "Q1");
+  return firstState(QUEUED_RULES, { item, topic, stale, visible, nowMs }, "Q1");
 }
 
 function queuedCards(view: BoardView, context: LifecycleContext): Card[] {
@@ -365,7 +424,7 @@ function queuedCards(view: BoardView, context: LifecycleContext): Card[] {
       topic: item.topic,
       label: `${item.home}/${item.task}`,
     };
-    const found = card("queued", parts, queuedState(view, item, stale));
+    const found = card("queued", parts, queuedState(view, item, stale, context.nowMs));
     return [found, ...(stale ? [] : noTopic(found))];
   });
 }
@@ -621,19 +680,28 @@ export function homeOfKey(key: string): string | null {
 }
 
 /**
- * Whether a timed card is past its escalation deadline, by the captain's
- * settings: time since its clock started, or for S6 the run of occurrences
- * nobody took (its sig). The reminder deadline has no use until the board
- * sends reminders (spec/lifecycle.markdown section 7).
+ * Whether a timed card is past its reminder (`remind`) or its escalation
+ * (`raise`) deadline, by the captain's settings: time since its clock
+ * started, or for S6 the run of occurrences nobody took (its sig).
  */
+export function pastDeadline(
+  clock: Frozen<Clock>,
+  settings: Frozen<LifecycleSettings>,
+  nowMs: number,
+  which: "remind" | "raise",
+): boolean {
+  const limit = settings[clock.state][which];
+  if (clock.state === "S6") return Number(clock.sig) >= limit;
+  return nowMs - Date.parse(clock.since) >= limit * 60_000;
+}
+
+/** Whether a timed card is past its escalation deadline. */
 export function overdue(
   clock: Frozen<Clock>,
   settings: Frozen<LifecycleSettings>,
   nowMs: number,
 ): boolean {
-  const { raise } = settings[clock.state];
-  if (clock.state === "S6") return Number(clock.sig) >= raise;
-  return nowMs - Date.parse(clock.since) >= raise * 60_000;
+  return pastDeadline(clock, settings, nowMs, "raise");
 }
 
 /**
@@ -673,9 +741,11 @@ export interface IdleView {
 export interface StallView {
   key: string;
   topic: string | null;
-  state: "N2" | "N4";
+  state: "N2" | "N3" | "N4";
   since: string;
   deferred_until: string | null;
+  /** When the captain asked the aggregator to handle it, or null: then it may still ask, once. */
+  asked_at: string | null;
   members: StallMember[];
 }
 
@@ -690,6 +760,8 @@ export interface Evaluation {
   /** Keys of decisions waiting on work the board cannot see, now in the queue (D5). */
   queued: Set<string>;
   stalls: StallView[];
+  /** The reminder to hand the aggregator once this look is saved, or null. */
+  nudge: Nudge | null;
 }
 
 /** The topics each good read showed work under; a home not read well keeps what it had. */
@@ -782,6 +854,9 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
   };
   const step = stallStep(store.stalls, raised.members, nameOf, nowMs);
   const idle = idleStep(store.idle, raised.idle, nameOf, nowMs);
+  const reminded = remindedNow(cards, clocks, context);
+  for (const found of reminded)
+    clocks[found.key] = { ...(clocks[found.key] as Clock), reminded: true };
   const text = idleText(store.settings, context.label);
   const byKey = new Map(cards.map((found) => [found.key, found]));
   return {
@@ -798,12 +873,50 @@ export function evaluate(view: BoardView, context: LifecycleContext): Evaluation
     stalls: Object.entries(step.stalls).map(([key, stall]) => ({
       key,
       topic: key === NO_TOPIC ? null : key,
-      state: stallState(stall, nowMs),
+      state: stallState(stall, nowMs, store.settings.N3.raise),
       since: stall.since,
       deferred_until: stall.deferred === undefined ? null : stall.deferred.until,
+      asked_at: stall.asked === undefined ? null : stall.asked.at,
       members: memberLines(stall.members, byKey, clocks),
     })),
+    nudge: nudgeOf(nudgeLines(reminded, clocks), store.settings, nameOf),
   };
+}
+
+/**
+ * The cards this look reminds the aggregator of: past the reminder deadline,
+ * not yet past the escalation one (those go to the captain instead), not
+ * reminded since their clock started, and, for a read card, of a home read well.
+ */
+function remindedNow(
+  cards: readonly Card[],
+  clocks: Frozen<Record<string, Clock>>,
+  context: LifecycleContext,
+): Card[] {
+  const { settings } = context.store;
+  return cards.filter((found) => {
+    const clock = isTimed(found.state) ? clocks[found.key] : undefined;
+    if (clock === undefined || clock.reminded === true) return false;
+    const due = pastDeadline(clock, settings, context.nowMs, "remind");
+    if (!due || overdue(clock, settings, context.nowMs)) return false;
+    return found.home === null || context.fresh.has(found.home);
+  });
+}
+
+/** The reminded cards as the reminder names them: one line a card, its late states together (X6). */
+function nudgeLines(cards: readonly Card[], clocks: Frozen<Record<string, Clock>>): NudgeLine[] {
+  return [...groupBy(cards, (found) => baseKey(found.key))].map(([key, list]) => {
+    const [first] = list as [Card];
+    return {
+      key,
+      topic: first.topic,
+      label: cardName({ kind: first.kind, id: idOfKey(first), label: first.label }),
+      reasons: list.map((found) => ({
+        state: found.state as TimedState,
+        since: (clocks[found.key] as Clock).since,
+      })),
+    };
+  });
 }
 
 /** Where this look sends the overdue cards: 沒人接 members by stall key, topics with no work, decisions. */

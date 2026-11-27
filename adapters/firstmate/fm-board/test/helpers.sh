@@ -47,8 +47,10 @@ SH
 #
 # Each stand-in appends "cmd=<key>\targv=<a|b|...>\thome=<FM_HOME>\tstdin=<text>"
 # to $TB_LOG, then follows the next step in $TB_PLAY/<key> when there is one. A
-# step is "<exit code or sleepN>\t<stdout>". "Remote" home <id> is the local
-# directory $TB_REMOTES/<id>.
+# step is "<exit code or sleepN>\t<stdout>". The board's own reminders (the note
+# of a stall.nudge, request id tb-w-n-…) are logged but never take a step meant
+# for the write under test. "Remote" home <id> is the local directory
+# $TB_REMOTES/<id>.
 tb_make_fake_root() {
   local fake=$1 name
   fm_git_init_commit "$fake"
@@ -58,7 +60,7 @@ tb_make_fake_root() {
   rm "$fake/bin/fm-on.sh" "$fake/bin/fm-inbox.sh" "$fake/bin/fm-send.sh" "$fake/bin/fm-captain-hold.sh"
   cat > "$fake/bin/tb-fake-lib.sh" <<'SH'
 tb_fake() {  # <play key> <stdin> <argv...>
-  local key=$1 input=$2 step code out play
+  local key=$1 input=$2 step code out play arg
   shift 2
   {
     printf 'cmd=%s\targv=' "$key"
@@ -67,6 +69,9 @@ tb_fake() {  # <play key> <stdin> <argv...>
   } >> "$TB_LOG"
   play="$TB_PLAY/$key"
   [ -s "$play" ] || return 0
+  for arg in "$@"; do
+    case "$arg" in tb-w-n-*) return 0 ;; esac
+  done
   IFS= read -r step < "$play"
   tail -n +2 "$play" > "$play.next"
   mv "$play.next" "$play"

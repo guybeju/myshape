@@ -30,7 +30,7 @@ test_creates_both_files() {
   home=$(tb_make_home fresh)
   assert_equals "規則：captain.md 未裝；captain-shared.md 未裝" "$(rules_line "$home")" "status must report missing rules"
   out=$(install "$home") || fail "install-rules failed on an empty home: $out"
-  assert_contains "$out" "captain.md：新增（v13）" "install-rules must report the new main block"
+  assert_contains "$out" "captain.md：新增（v14）" "install-rules must report the new main block"
   assert_contains "$out" "captain-shared.md：新增（v5）" "install-rules must report the new shared block"
   assert_contains "$out" "生效時間" "install-rules must say when the rules take effect"
   assert_contains "$(cat "$home/data/captain.md")" "myshape.sh retract" "the main rules must say how to take back a wrong summary"
@@ -42,7 +42,7 @@ test_creates_both_files() {
     "a new captain-shared.md must be the header followed by the template"
   gap=$(shared_captain_header_valid "$home/data/captain-shared.md") || fail "upstream rejects the new shared file's header (missing: $gap)"
   assert_equals "drwx------" "$(tb_mode "$home/state/fm-board/rules-backup")" "the backup directory must be 0700"
-  assert_equals "規則：captain.md 和範本相同（v13）；captain-shared.md 和範本相同（v5）" "$(rules_line "$home")" \
+  assert_equals "規則：captain.md 和範本相同（v14）；captain-shared.md 和範本相同（v5）" "$(rules_line "$home")" \
     "status must report installed rules that match the templates"
   pass "install-rules creates both files, and upstream accepts the shared file's header"
 }
@@ -54,7 +54,7 @@ test_keeps_everything_outside_the_block() {
   { cat "$RULES/captain-shared.header.md.tmpl"; printf '\n- 共用的偏好\n'; } > "$home/data/captain-shared.md"
   before=$(cat "$home/data/captain.md")
   out=$(install "$home") || fail "install-rules failed on existing files: $out"
-  assert_contains "$out" "captain.md：新增（v13），原檔備份在" "appending to an existing file must be reported with its backup"
+  assert_contains "$out" "captain.md：新增（v14），原檔備份在" "appending to an existing file must be reported with its backup"
   assert_equals "$before" "$(head -n 3 "$home/data/captain.md")" "the captain's own lines must be unchanged"
   assert_equals "" "$(sed -n 4p "$home/data/captain.md")" "one blank line must separate the block from what was there"
   assert_equals "$(cat "$RULES/captain.block.md.tmpl")" "$(tail -n +5 "$home/data/captain.md")" "the block must be appended whole"
@@ -73,7 +73,7 @@ test_replaces_an_old_block_in_place() {
   } > "$home/data/captain.md"
   assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v0）" "status must notice an outdated block"
   out=$(install "$home") || fail "install-rules failed to update: $out"
-  assert_contains "$out" "captain.md：已更新（和範本不同（v0） → v13）" "an update must report the old and new versions"
+  assert_contains "$out" "captain.md：已更新（和範本不同（v0） → v14）" "an update must report the old and new versions"
   assert_equals "# 前面" "$(head -n 1 "$home/data/captain.md")" "text before the block must be kept"
   assert_equals "- 不能動" "$(tail -n 1 "$home/data/captain.md")" "text after the block must be kept"
   grep -q '舊的規則' "$home/data/captain.md" && fail "the old block must be gone"
@@ -113,17 +113,17 @@ test_second_run_changes_nothing() {
     stat -f '%m %i' "$home/data/captain.md" "$home/data/captain-shared.md")
   sleep 1.1
   out=$(install "$home") || fail "a second install-rules failed"
-  assert_contains "$out" "captain.md：已是最新（v13）" "an unchanged file must be reported as current"
+  assert_contains "$out" "captain.md：已是最新（v14）" "an unchanged file must be reported as current"
   assert_contains "$out" "captain-shared.md：已是最新（v5）" "an unchanged shared file must be reported as current"
   assert_equals "$stamp" "$(stat -c '%Y %i' "$home/data/captain.md" "$home/data/captain-shared.md" 2>/dev/null ||
     stat -f '%m %i' "$home/data/captain.md" "$home/data/captain-shared.md")" "an unchanged file must not be rewritten"
   assert_equals 0 "$(find "$home/state/fm-board/rules-backup" -type f | wc -l | tr -d ' ')" "nothing may be backed up when nothing changes"
   printf '多一行\n' >> "$home/data/captain.md"
-  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v13）" "text outside the block does not make the rules differ"
+  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v14）" "text outside the block does not make the rules differ"
   sed -i.bak 's/停著的項目不派/停著的項目照派/' "$home/data/captain.md"
-  assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v13）" "an edit inside the block must show as differing"
+  assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v14）" "an edit inside the block must show as differing"
   install "$home" >/dev/null
-  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v13）" "install-rules must restore an edited block"
+  assert_contains "$(rules_line "$home")" "captain.md 和範本相同（v14）" "install-rules must restore an edited block"
   grep -q '^多一行$' "$home/data/captain.md" || fail "restoring the block must keep the text outside it"
   pass "install-rules is idempotent and status compares the block's content"
 }
@@ -143,7 +143,7 @@ test_finds_reshaped_markers() {
       esac
       printf '\n# 後面\n'
     } > "$home/data/captain.md"
-    assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v13）" "status must still find the $variant block"
+    assert_contains "$(rules_line "$home")" "captain.md 和範本不同（v14）" "status must still find the $variant block"
     out=$(install "$home") || fail "install-rules failed on $variant markers: $out"
     assert_contains "$out" "captain.md：已更新" "the $variant block must be replaced in place"
     assert_equals "$(printf '# 前面\n\n'; cat "$RULES/captain.block.md.tmpl"; printf '\n# 後面\n')" "$(cat "$home/data/captain.md")" \

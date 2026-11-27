@@ -57,9 +57,10 @@ export type View = BoardView & {
       state: string;
       label: string;
       unit: string;
-      remind: number;
+      /** Null where a reminder does not apply (N3). */
+      remind: number | null;
       raise: number;
-      default_remind: number;
+      default_remind: number | null;
       default_raise: number;
     }[];
   };

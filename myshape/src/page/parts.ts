@@ -12,7 +12,7 @@ import type {
 import type { RecentChange } from "#board/oversight.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
-import { BAD_WRITES, LIGHT_LABEL, WRITE_LABEL, agentName } from "./state.js";
+import { BAD_WRITES, LIGHT_LABEL, QUEUES, WRITE_LABEL, agentName } from "./state.js";
 import type { Actions, Page, View, WriteView } from "./state.js";
 
 const SUMMARY_LABEL: Record<string, string> = {
@@ -177,6 +177,27 @@ function holdMeta(view: View, actions: Actions, hold: HoldView, showTopic: boole
 /** True for a live decision shown now, with its answer buttons; not one waiting its turn. */
 export function inFront(hold: HoldView): boolean {
   return hold.live && !hold.waits_turn;
+}
+
+/** A menu that files one task of one home under the chosen topic, by a tag write. */
+export function fileMenu(
+  view: View,
+  actions: Actions,
+  target: { home: string; task: string },
+  words: string,
+): Child {
+  const choose = (event: Event): void => {
+    const topic = (event.target as HTMLSelectElement).value;
+    if (topic !== "") actions.tag(target.home, target.task, topic);
+  };
+  return h(
+    "select",
+    { class: "auto", onchange: choose },
+    h("option", { value: "" }, words),
+    QUEUES.flatMap((queue) => view.queues[queue]).map((id) =>
+      h("option", { value: id }, topicName(view, id)),
+    ),
+  );
 }
 
 /** One backlog item that no worker has been dispatched for. */

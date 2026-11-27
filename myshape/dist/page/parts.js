@@ -1,5 +1,5 @@
 import { h } from "./dom.js";
-import { BAD_WRITES, LIGHT_LABEL, WRITE_LABEL, agentName } from "./state.js";
+import { BAD_WRITES, LIGHT_LABEL, QUEUES, WRITE_LABEL, agentName } from "./state.js";
 const SUMMARY_LABEL = {
     ready: "就緒",
     report: "報告",
@@ -92,6 +92,15 @@ function holdMeta(view, actions, hold, showTopic) {
 /** True for a live decision shown now, with its answer buttons; not one waiting its turn. */
 export function inFront(hold) {
     return hold.live && !hold.waits_turn;
+}
+/** A menu that files one task of one home under the chosen topic, by a tag write. */
+export function fileMenu(view, actions, target, words) {
+    const choose = (event) => {
+        const topic = event.target.value;
+        if (topic !== "")
+            actions.tag(target.home, target.task, topic);
+    };
+    return h("select", { class: "auto", onchange: choose }, h("option", { value: "" }, words), QUEUES.flatMap((queue) => view.queues[queue]).map((id) => h("option", { value: id }, topicName(view, id))));
 }
 /** One backlog item that no worker has been dispatched for. */
 export function queuedRow(item) {

@@ -102,6 +102,8 @@ function queued(id: string, extra: Partial<ReportQueued> = {}): ReportQueued {
     captain: false,
     blockers: [],
     topic_hint: "hi",
+    hold_until: null,
+    turn: false,
     ...extra,
   };
 }
@@ -140,6 +142,7 @@ function context(store: LifecycleStore, extra: Partial<LifecycleContext> = {}): 
     fresh: new Set(["main"]),
     present: new Set(["main"]),
     questions: new Map(),
+    readFrom: new Map([["main", NOW - 1000]]),
     label: "plain",
     nowMs: NOW,
     ...extra,
@@ -196,6 +199,9 @@ describe("the rule table", () => {
     }
     expect(isTimed("T1")).toBe(false);
     expect(isTimed("N2")).toBe(false);
+    // N3, the 沒人接 card the captain gave the aggregator, is timed by its own setting too.
+    expect(LIFECYCLE.N3).toEqual({ owner: "aggregator", deadline: "N3" });
+    expect(isTimed("N3")).toBe(false);
   });
 
   it("sends a topic with no work to 沒人處理的議題, D5 to the queue, every other card to 沒人接", () => {
@@ -230,16 +236,18 @@ describe("the state of every card", () => {
   });
 
   it("puts a decision whose answer is being sent, failed, or delivered but still open in D6, D7, D8", () => {
-    const write = (taskId: string, state: string) => ({
+    const write = (taskId: string, state: string, settledAt: number | null = NOW - 5000) => ({
       kind: "answer",
       home: "main",
       task: taskId,
       topic: null,
       state,
       question_sha256: "sha",
+      settledAt,
     });
+    const ids = ["a", "b", "c", "d", "e", "f"];
     const { evaluation } = look(
-      [home("main", { report: report({ holds: [hold("a"), hold("b"), hold("c"), hold("d")] }) })],
+      [home("main", { report: report({ holds: ids.map((id) => hold(id)) }) })],
       emptyLifecycle(),
       {
         context: {
@@ -251,14 +259,34 @@ describe("the state of every card", () => {
               ...write("d", "delivered"),
               question_sha256: "an older question",
             },
+            // Delivered after the last good read began: that read may predate the answer.
+            write("e", "delivered", NOW - 1000),
+            write("f", "delivered", null),
           ],
-          questions: new Map(["a", "b", "c", "d"].map((id) => [`main\t${id}`, "sha"])),
+          questions: new Map(ids.map((id) => [`main\t${id}`, "sha"])),
         },
       },
     );
-    expect(
-      ["a", "b", "c", "d"].map((id) => stateOf(evaluation.cards, `hold\tmain\t${id}`)),
-    ).toEqual(["D6", "D7", "D8", "D1"]);
+    expect(ids.map((id) => stateOf(evaluation.cards, `hold\tmain\t${id}`))).toEqual([
+      "D6",
+      "D7",
+      "D8",
+      "D1",
+      "D6",
+      "D8",
+    ]);
+    const unread = look(
+      [home("main", { report: report({ holds: [hold("c")] }) })],
+      emptyLifecycle(),
+      {
+        context: {
+          writes: [write("c", "delivered")],
+          questions: new Map([["main\tc", "sha"]]),
+          readFrom: new Map(),
+        },
+      },
+    );
+    expect(stateOf(unread.evaluation.cards, "hold\tmain\tc")).toBe("D6");
   });
 
   it("classifies queued items, and flags one with no topic", () => {
@@ -294,6 +322,52 @@ describe("the state of every card", () => {
     ]);
     expect(stateOf(evaluation.cards, "queued\tmain\tloose\tNT")).toBe("NT");
     expect(stateOf(evaluation.cards, "queued\tmain\tready\tNT")).toBeUndefined();
+  });
+
+  it("reads a queued item's date and turn: Q6 until a day past its date, Q1 when it starts by itself, Q9 when unreadable", () => {
+    const { evaluation } = look([
+      home("main", {
+        report: report({
+          queued: [
+            queued("dated", { hold: "waiting for CI", hold_until: "2026-12-05" }),
+            queued("just-past", { hold: "waiting for CI", hold_until: "2026-11-26T01:00:00Z" }),
+            queued("long-past", { hold: "waiting for CI", hold_until: "2026-11-25" }),
+            queued("past-free", { hold_until: "2026-11-25" }),
+            queued("turn", { hold: "a free place", turn: true }),
+            queued("bad", { hold: "x", unreadable: 'turn: "yes"' }),
+            queued("bad-ask", { captain: true, hold: "pick", unreadable: 'hold_until: "soon"' }),
+            queued("dated-later", { topic_hint: "lt", hold_until: "2026-12-05" }),
+          ],
+        }),
+      }),
+    ]);
+    const ids = ["dated", "just-past", "long-past", "past-free", "turn", "bad", "bad-ask"];
+    expect(ids.map((id) => stateOf(evaluation.cards, `queued\tmain\t${id}`))).toEqual([
+      "Q6",
+      "Q6",
+      "Q5",
+      "Q1",
+      "Q1",
+      "Q9",
+      "Q9",
+    ]);
+    expect(stateOf(evaluation.cards, "queued\tmain\tdated-later")).toBe("Q3");
+    // A day past the date to the millisecond, the date no longer explains the wait.
+    const edge = look([
+      home("main", {
+        report: report({
+          queued: [
+            queued("a-day-on", { hold: "x", hold_until: ago(DAY) }),
+            queued("just-before", { hold: "x", hold_until: ago(DAY - 1) }),
+          ],
+        }),
+      }),
+    ]);
+    expect(stateOf(edge.evaluation.cards, "queued\tmain\ta-day-on")).toBe("Q5");
+    expect(stateOf(edge.evaluation.cards, "queued\tmain\tjust-before")).toBe("Q6");
+    expect(isTimed("Q6")).toBe(false);
+    expect(isTimed("Q9")).toBe(true);
+    expect(evaluation.memory.clocks["queued\tmain\tdated"]).toBeUndefined();
   });
 
   it("classifies agents, and a stale home's as waiting for a read", () => {
@@ -438,6 +512,7 @@ describe("escalation", () => {
     expect(first.evaluation.memory.clocks["topic\tidle"]?.since).toBe(ago(0));
     expect(first.view.stalls).toEqual([]);
     expect(first.view.idle).toEqual([]);
+    expect(first.evaluation.nudge).toBeNull();
   });
 
   it("puts overdue work under its topic's 沒人接 card, once, with every overdue reason on one line", () => {
@@ -564,6 +639,121 @@ describe("escalation", () => {
   });
 });
 
+describe("reminders", () => {
+  const homes = [
+    home("main", {
+      report: report({
+        queued: [
+          queued("parked", { hold: "x" }),
+          queued("young", { hold: "x" }),
+          queued("loose", { topic_hint: null }),
+        ],
+      }),
+    }),
+  ];
+  const store = (): LifecycleStore =>
+    seen([
+      ["topic\tidle", "T2", DAY],
+      ["queued\tmain\tparked", "Q5", DAY],
+      ["queued\tmain\tyoung", "Q5", DAY / 2],
+      ["queued\tmain\tloose", "Q1", DAY],
+      ["queued\tmain\tloose\tNT", "NT", DAY],
+    ]);
+
+  it("reminds the aggregator once of every card past its reminder deadline, in one notice", () => {
+    const { evaluation } = look(homes, store());
+    expect(evaluation.nudge?.text).toBe(
+      "看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：" +
+        "議題「Idle」（id idle）沒有任何開著的工作，滿 3 天成為「沒人處理的議題」交給使用者；" +
+        "議題「High」（id hi）的 main/parked（停著、沒有日期也沒有等的項目，滿 3 天交給使用者）；" +
+        "沒有議題的 main/loose（沒有議題的排隊項目與 agent，滿 3 天交給使用者）。",
+    );
+    expect(evaluation.nudge?.id).toMatch(/^w-n-[0-9a-f]{16}$/);
+    const reminded = Object.entries(evaluation.memory.clocks)
+      .filter(([, clock]) => clock.reminded === true)
+      .map(([key]) => key);
+    expect(reminded.toSorted()).toEqual([
+      "queued\tmain\tloose\tNT",
+      "queued\tmain\tparked",
+      "topic\tidle",
+    ]);
+    expect(evaluation.records).toEqual([]);
+    const again = look(homes, { ...store(), ...evaluation.memory });
+    expect(again.evaluation.nudge).toBeNull();
+    expect(again.evaluation.memory).toEqual(evaluation.memory);
+  });
+
+  it("gives the same reminder the same id, and another run of a card another", () => {
+    const first = look(homes, store()).evaluation.nudge;
+    expect(look(homes, store()).evaluation.nudge?.id).toBe(first?.id);
+    const later = store();
+    later.clocks["queued\tmain\tparked"] = { state: "Q5", since: ago(DAY + MINUTE), sig: "" };
+    expect(look(homes, later).evaluation.nudge?.id).not.toBe(first?.id);
+  });
+
+  it("reminds again once a card leaves its state and comes back to one past the reminder", () => {
+    const reminded = store();
+    reminded.clocks["queued\tmain\tparked"] = {
+      state: "Q8",
+      since: ago(2 * DAY),
+      sig: "",
+      reminded: true,
+    };
+    const { evaluation } = look(homes, reminded);
+    expect(evaluation.memory.clocks["queued\tmain\tparked"]).toEqual({
+      state: "Q5",
+      since: ago(0),
+      sig: "",
+    });
+  });
+
+  it("does not remind of a card whose home was not read well, nor of one already overdue", () => {
+    const quiet = look(homes, store(), { context: { fresh: new Set() } });
+    expect(quiet.evaluation.nudge).toBeNull();
+    const late = seen([["queued\tmain\tparked", "Q5", 3 * DAY]]);
+    const { evaluation, view } = look(homes, late);
+    expect(view.stalls.map((stall) => stall.key)).toEqual(["hi"]);
+    expect(evaluation.nudge?.text ?? "").not.toContain("main/parked");
+    expect(evaluation.memory.clocks["queued\tmain\tparked"]?.reminded).toBeUndefined();
+  });
+
+  it("reminds at once of what the board cannot read, and of a schedule nobody takes by occurrences", () => {
+    const { evaluation } = look([
+      home("main", {
+        report: report({
+          holds: [hold("weird", { hold_bucket: "unknown", unreadable: '"snoozed"' })],
+          tasks: [task("odd", "napping")],
+          topics: { odd: "hi 2026-01-01T00:00:00Z", weird: "hi 2026-01-01T00:00:00Z" },
+        }),
+      }),
+    ]);
+    expect(evaluation.nudge?.text).toBe(
+      "看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：" +
+        "議題「High」（id hi）的 main/weird（讀不懂的待決事項，滿 1 天交給使用者）；" +
+        "議題「High」（id hi）的 main/odd（狀態讀不懂的 agent，滿 1 天交給使用者）。",
+    );
+    const schedule = look([home("main")], emptyLifecycle(), {
+      context: {
+        schedules: [
+          {
+            id: "sync",
+            topic: "hi",
+            title: "Sync",
+            state: "on",
+            pausedByAggregator: false,
+            waitsEnable: false,
+            unanswered: 3,
+            open: false,
+          },
+        ],
+      },
+    });
+    expect(schedule.evaluation.nudge?.text).toContain(
+      "議題「High」（id hi）的 排程 sync（沒有人接的排程，連續第 5 場沒有人接就交給使用者）",
+    );
+  });
+});
+
 describe("the one queue", () => {
   const store = (): LifecycleStore => {
     const base = seen([
@@ -641,6 +831,35 @@ describe("the deadline settings", () => {
     expect(settings.A3).toEqual(DEFAULT_DEADLINES.A3);
     expect(settings.S6).toEqual(DEFAULT_DEADLINES.S6);
     expect(parseSettings("junk")).toEqual(defaultSettings());
+  });
+
+  it("keeps N3 (after 請 <aggregator> 處理) as a time to the captain only: a reminder does not apply", () => {
+    expect(DEFAULT_DEADLINES.N3).toEqual({ raise: 1440 });
+    expect(parseSettings({ N3: { raise: 120 } }).N3).toEqual({ raise: 120 });
+    for (const raw of [
+      { raise: 0 },
+      { raise: 1.5 },
+      { raise: 130_000 },
+      { remind: 0, raise: 60 },
+      5,
+    ])
+      expect(parseSettings({ N3: raw }).N3, JSON.stringify(raw)).toEqual({ raise: 1440 });
+    expect(parseSettings({ N3: { raise: 129_600 } }).N3).toEqual({ raise: 129_600 });
+    expect(parseSettings({ N3: { raise: 1 } }).N3).toEqual({ raise: 1 });
+    const current = defaultSettings();
+    const changed = changeSettings(current, { N3: { raise: 2880 } });
+    if (!changed.ok || !changed.changed) throw new Error("expected a change");
+    expect(changed.settings.N3).toEqual({ raise: 2880 });
+    expect(changed.records[0].text).toBe(
+      "期限設定（提醒 aggregator／交給你）：請 aggregator 處理之後的「沒人接」卡 1 天 → 2 天",
+    );
+    expect(changeSettings(current, { N3: { raise: 1440 } })).toMatchObject({ changed: false });
+    expect(changeSettings(current, { N3: { remind: 0, raise: 60 } })).toEqual({
+      ok: false,
+      code: "usage",
+      line: "「請 aggregator 處理之後的「沒人接」卡」只有交給你的期限（{raise}，分鐘，1 到 129600），沒有提醒",
+    });
+    expect(changeSettings(current, { N3: { raise: 0 } }).ok).toBe(false);
   });
 
   it("refuses a reminder after the escalation, an unbounded or broken value, or an unknown name", () => {
@@ -786,6 +1005,7 @@ describe("the edges of each rule", () => {
       topic: null,
       state,
       question_sha256: "sha",
+      settledAt: NOW - 5000,
     });
     const { evaluation } = look(
       [home("main", { report: report({ holds: [hold("a")] }) })],

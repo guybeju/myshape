@@ -147,12 +147,19 @@ export class WriteEngine {
     timers = new Set();
     /** The writes whose deliverer is running now; they can no longer expire. */
     running = new Set();
+    /** When each write reached the state it is in, epoch ms, from its last audit line. */
+    settled = new Map();
     constructor(auditFile, host, timings) {
         this.auditFile = auditFile;
         this.host = host;
         this.timings = timings;
         for (const line of readCompleteLines(this.auditFile))
             this.replay(line);
+    }
+    /** When the write reached the state it is in, epoch ms, or null when the board does not know. */
+    settledAt(id) {
+        const at = this.settled.get(id);
+        return at === undefined ? null : at;
     }
     /** True when writes go to the deliverer now; false when they wait. */
     get connected() {
@@ -306,8 +313,10 @@ export class WriteEngine {
         this.timers.clear();
     }
     audit(record, extra) {
+        const at = Date.now();
+        this.settled.set(record.id, at);
         const line = {
-            ts: new Date().toISOString(),
+            ts: new Date(at).toISOString(),
             write_id: record.id,
             state: record.state,
             attempt: record.attempt,
@@ -438,6 +447,12 @@ export class WriteEngine {
         record.attempt = typeof attempt === "number" ? attempt : record.attempt;
         record.error = stringField(entry.fields, "error");
         record.nextAt = null;
+        const ts = stringField(entry.fields, "ts");
+        const at = ts === null ? Number.NaN : Date.parse(ts);
+        if (Number.isNaN(at))
+            this.settled.delete(entry.id);
+        else
+            this.settled.set(entry.id, at);
     }
     /** A waiting write never ran: it starts from attempt 0 whatever its age. */
     release(record) {

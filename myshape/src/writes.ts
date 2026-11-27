@@ -47,7 +47,8 @@ export type NoticeEvent =
   | "schedule.due"
   | "schedule.missed"
   | "schedule.closed"
-  | "decision.front";
+  | "decision.front"
+  | "stall.nudge";
 
 export interface NoticeItem {
   id: string;
@@ -299,6 +300,8 @@ export class WriteEngine {
   private readonly timers = new Set<NodeJS.Timeout>();
   /** The writes whose deliverer is running now; they can no longer expire. */
   private readonly running = new Set<string>();
+  /** When each write reached the state it is in, epoch ms, from its last audit line. */
+  private readonly settled = new Map<string, number>();
 
   constructor(
     private readonly auditFile: string,
@@ -306,6 +309,12 @@ export class WriteEngine {
     private readonly timings: WriteTimings,
   ) {
     for (const line of readCompleteLines(this.auditFile)) this.replay(line);
+  }
+
+  /** When the write reached the state it is in, epoch ms, or null when the board does not know. */
+  settledAt(id: string): number | null {
+    const at = this.settled.get(id);
+    return at === undefined ? null : at;
   }
 
   /** True when writes go to the deliverer now; false when they wait. */
@@ -460,8 +469,10 @@ export class WriteEngine {
   }
 
   private audit(record: WriteRecord, extra: Record<string, unknown>): void {
+    const at = Date.now();
+    this.settled.set(record.id, at);
     const line = {
-      ts: new Date().toISOString(),
+      ts: new Date(at).toISOString(),
       write_id: record.id,
       state: record.state,
       attempt: record.attempt,
@@ -604,6 +615,10 @@ export class WriteEngine {
     record.attempt = typeof attempt === "number" ? attempt : record.attempt;
     record.error = stringField(entry.fields, "error");
     record.nextAt = null;
+    const ts = stringField(entry.fields, "ts");
+    const at = ts === null ? Number.NaN : Date.parse(ts);
+    if (Number.isNaN(at)) this.settled.delete(entry.id);
+    else this.settled.set(entry.id, at);
   }
 
   /** A waiting write never ran: it starts from attempt 0 whatever its age. */

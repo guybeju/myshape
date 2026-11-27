@@ -8,6 +8,7 @@ import type { TodoItem, TodoStore } from "./todos.js";
 import {
   LEDGER_PER_TOPIC,
   buildView,
+  isFresh,
   parseOptions,
   parseTags,
   placeTask,
@@ -202,6 +203,24 @@ describe("homes", () => {
   });
 });
 
+describe("isFresh", () => {
+  it("takes a home's last good read as current up to its limit, the input's when it gives none", () => {
+    const at = (ms: number, extra: Partial<HomeSnapshot> = {}): boolean =>
+      isFresh(home("a", { lastOkAt: NOW - ms, ...extra }), NOW, 180_000);
+    expect([at(180_000), at(180_001)]).toEqual([true, false]);
+    expect([
+      at(1_800_000, { staleAfterMs: 1_800_000 }),
+      at(1_800_001, { staleAfterMs: 1_800_000 }),
+    ]).toEqual([true, false]);
+    expect(isFresh(home("a", { lastOkAt: null }), NOW, 180_000)).toBe(false);
+    expect(isFresh(home("a", { report: null }), NOW, 180_000)).toBe(false);
+    const quiet = buildView(
+      input({ homes: [home("main", { lastOkAt: NOW - 600_000, staleAfterMs: 1_800_000 })] }),
+    );
+    expect(quiet.homes[0]?.stale).toBe(false);
+  });
+});
+
 describe("queued", () => {
   const item = (id: string, extra: Partial<ReportQueued> = {}): ReportQueued => ({
     id,
@@ -211,6 +230,8 @@ describe("queued", () => {
     captain: false,
     blockers: [],
     topic_hint: null,
+    hold_until: null,
+    turn: false,
     ...extra,
   });
 
@@ -241,6 +262,49 @@ describe("queued", () => {
       "unknown-hint": null,
       bare: null,
     });
+  });
+
+  it("carries a queued item's date, turn and what it could not read, and says the date it waits for", () => {
+    const view = buildView(
+      input({
+        homes: [
+          home("main", {
+            report: report({
+              queued: [
+                item("dated", { hold: "等 CI", hold_until: "2026-12-05" }),
+                item("turn", { hold: "等空位（2/2）", turn: true }),
+                item("odd", { unreadable: 'turn: "yes"' }),
+              ],
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(
+      view.queued.map(({ task, waiting, hold_until, turn, unreadable }) => ({
+        task,
+        waiting,
+        hold_until,
+        turn,
+        unreadable,
+      })),
+    ).toEqual([
+      {
+        task: "dated",
+        waiting: "停著：等 CI（延到 2026-12-05）",
+        hold_until: "2026-12-05",
+        turn: false,
+        unreadable: null,
+      },
+      {
+        task: "turn",
+        waiting: "停著：等空位（2/2）",
+        hold_until: null,
+        turn: true,
+        unreadable: null,
+      },
+      { task: "odd", waiting: null, hold_until: null, turn: false, unreadable: 'turn: "yes"' },
+    ]);
   });
 
   it("lists every home's queued items under their topics with what each waits for", () => {
@@ -285,7 +349,18 @@ describe("queued", () => {
       "merged-away:false:false:",
       "far:false:false:",
     ]);
-    expect(view.queued.map(({ captain: _c, held: _h, blockers: _b, ...rest }) => rest)).toEqual([
+    const shown = view.queued.map(
+      ({
+        captain: _c,
+        held: _h,
+        blockers: _b,
+        hold_until: _u,
+        turn: _t,
+        unreadable: _r,
+        ...rest
+      }) => rest,
+    );
+    expect(shown).toEqual([
       {
         home: "main",
         task: "ready",
@@ -755,6 +830,8 @@ describe("decisions at once", () => {
           captain: true,
           blockers: [],
           topic_hint: null,
+          hold_until: null,
+          turn: false,
         })),
       }),
     }),
@@ -944,6 +1021,8 @@ describe("hands-on items", () => {
       captain: true,
       blockers: [],
       topic_hint: null,
+      hold_until: null,
+      turn: false,
     };
     const view = buildView(
       input({ homes: [home("main", { report: report({ queued: [queued] }) })] }),

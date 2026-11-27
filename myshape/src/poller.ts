@@ -1,7 +1,8 @@
-// Reads every home through the aggregator's feed on a schedule while someone
-// is looking at the board, and on demand otherwise. It is the only caller of
-// the feed. Every home is read the same way; only the root report's hints
-// change how often and how patiently.
+// Reads every home through the aggregator's feed: on every home's interval
+// while someone is looking at the board, slowly with nobody looking, and on
+// demand. It is the only caller of the feed. Every home is read the same way,
+// with the same arguments; only the root report's hints change how often and
+// how patiently.
 import type { CommandRunner } from "./commands.js";
 import type { Journal, Offsets } from "./journal.js";
 import { MAIN_HOME } from "./journal.js";
@@ -14,9 +15,13 @@ export interface PollTimings {
   readMs: number;
   /** How long a read of a home with no read_timeout_s hint may take. */
   timeoutMs: number;
-  /** Polling stops this long after the last viewer asked for the board. */
+  /** Polling on every home's interval stops this long after the last viewer asked for the board. */
   idleMs: number;
   staleMs: number;
+  /** With nobody looking, a home is read this long after its last read... */
+  slowMs: number;
+  /** ...and a home the root report hints to read less often than the default, this long. */
+  slowFarMs: number;
 }
 
 export const DEFAULT_TIMINGS: PollTimings = {
@@ -24,6 +29,8 @@ export const DEFAULT_TIMINGS: PollTimings = {
   timeoutMs: 60_000,
   idleMs: 120_000,
   staleMs: 180_000,
+  slowMs: 900_000,
+  slowFarMs: 3_600_000,
 };
 
 /** The feed's exit code for "this home's code cannot produce a report". */
@@ -38,6 +45,8 @@ const UNREAD = Symbol("unread");
 export const MAX_TOPICS_CALLS = 2;
 
 const TICK_MS = 250;
+/** How often the poller looks for a home due a slow read, at most. */
+const SLOW_TICK_MS = 15_000;
 const MAX_CATCH_UP_READS = 50;
 const ERROR_MAX = 400;
 
@@ -46,6 +55,10 @@ interface HomeState extends HomeSnapshot {
   timeoutMs: number | null;
   reading: Promise<boolean> | null;
   dueAt: number;
+  /** When the last read of the home ended, or when the poller first knew the home. */
+  readAt: number;
+  /** When the last good read of the home began, or null before one. */
+  goodFrom: number | null;
   /**
    * The code_commit of the home whose feed refused the topics call (exit 2):
    * its last report's, or the next report's when it had none yet. Null while
@@ -67,6 +80,8 @@ function newHome(id: string): HomeState {
     version: "unknown",
     reading: null,
     dueAt: Number.NEGATIVE_INFINITY,
+    readAt: Date.now(),
+    goodFrom: null,
     topicsRefusedAt: null,
     topicsCalls: new Set(),
   };
@@ -89,6 +104,8 @@ export class Poller {
   private readonly homes = new Map<string, HomeState>([[MAIN_HOME, newHome(MAIN_HOME)]]);
   private lastViewerAt = 0;
   private timer: NodeJS.Timeout | null = null;
+  /** The interval `timer` ticks at: TICK_MS while someone looks, the slow tick otherwise. */
+  private timerMs = 0;
   private topicsRunning = 0;
   private topicsWaiting: (() => void)[] = [];
 
@@ -107,24 +124,66 @@ export class Poller {
     return Date.now() - this.lastViewerAt < this.timings.idleMs;
   }
 
-  /** Records that someone is looking, which starts or continues scheduled polling. */
+  /** Starts reading on its own: slowly with nobody looking, on every home's interval once someone looks. */
+  start(): void {
+    this.arm();
+  }
+
+  /** Records that someone is looking, which starts or continues polling on every home's interval. */
   touch(): void {
     this.lastViewerAt = Date.now();
-    this.timer ??= setInterval(() => this.tick(), TICK_MS);
+    this.arm();
   }
 
   stop(): void {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
+    this.timerMs = 0;
+  }
+
+  /** Makes the timer tick at the pace of now: often while someone looks, slowly otherwise. */
+  private arm(): void {
+    const every = this.active ? TICK_MS : Math.min(SLOW_TICK_MS, this.timings.slowMs);
+    if (this.timerMs === every) return;
+    this.stop();
+    this.timerMs = every;
+    this.timer = setInterval(() => this.tick(), every);
+  }
+
+  /** How long after its last read a home is read while someone looks: its hint, else the default. */
+  private everyMs(home: HomeState): number {
+    return home.everyMs === null ? this.timings.readMs : home.everyMs;
+  }
+
+  /** How long one read of a home may take: its hint, else the default. */
+  private timeoutMs(home: HomeState): number {
+    return home.timeoutMs === null ? this.timings.timeoutMs : home.timeoutMs;
+  }
+
+  /** How long after its last read a home is read with nobody looking. */
+  private slowEveryMs(home: HomeState): number {
+    const far = home.everyMs !== null && home.everyMs > this.timings.readMs;
+    return far ? this.timings.slowFarMs : this.timings.slowMs;
+  }
+
+  /**
+   * How long a good read of a home counts as current: the stale limit while
+   * someone looks, twice the home's slow interval with nobody looking, so
+   * the board's own reads keep it current.
+   */
+  private staleAfterMs(home: HomeState): number {
+    if (this.active) return this.timings.staleMs;
+    return Math.max(this.timings.staleMs, 2 * this.slowEveryMs(home));
   }
 
   snapshots(): HomeSnapshot[] {
-    return [...this.homes.values()].map(({ id, report, lastOkAt, error, version }) => ({
-      id,
-      report,
-      lastOkAt,
-      error,
-      version,
+    return [...this.homes.values()].map((home) => ({
+      id: home.id,
+      report: home.report,
+      lastOkAt: home.lastOkAt,
+      error: home.error,
+      version: home.version,
+      staleAfterMs: this.staleAfterMs(home),
     }));
   }
 
@@ -136,13 +195,22 @@ export class Poller {
     return this.homes.has(home);
   }
 
+  /** When the last good read of each home began, epoch ms, for every home read well since the start. */
+  goodReadsFrom(): Map<string, number> {
+    const found = new Map<string, number>();
+    for (const home of this.homes.values())
+      if (home.goodFrom !== null) found.set(home.id, home.goodFrom);
+    return found;
+  }
+
   /** Reads one home now (joining a read already in flight); resolves to whether it succeeded. */
   readNow(id: string): Promise<boolean> {
     const home = this.homes.get(id);
     if (home === undefined || this.blocked() !== null) return Promise.resolve(false);
     home.reading ??= this.readHome(home).finally(() => {
       home.reading = null;
-      home.dueAt = Date.now() + (home.everyMs ?? this.timings.readMs);
+      home.readAt = Date.now();
+      home.dueAt = home.readAt + this.everyMs(home);
     });
     return home.reading;
   }
@@ -182,10 +250,7 @@ export class Poller {
     try {
       if (this.homes.get(id) !== home || !this.mayAskTopics(home) || Date.now() >= deadline)
         return null;
-      const result = await this.run(
-        { kind: "topics", home: id, tasks },
-        home.timeoutMs ?? this.timings.timeoutMs,
-      );
+      const result = await this.run({ kind: "topics", home: id, tasks }, this.timeoutMs(home));
       if (result.code === FEED_USAGE) home.topicsRefusedAt = home.report?.code_commit ?? UNREAD;
       return result.code === 0 ? parseTopicsAnswer(result.stdout, tasks) : null;
     } finally {
@@ -233,13 +298,12 @@ export class Poller {
   }
 
   private tick(): void {
-    if (!this.active) {
-      this.stop();
-      return;
-    }
+    const { active } = this;
+    if (!active) this.arm();
     const now = Date.now();
     for (const home of this.homes.values()) {
-      if (home.reading === null && home.dueAt <= now) void this.readNow(home.id);
+      const due = active ? home.dueAt : home.readAt + this.slowEveryMs(home);
+      if (home.reading === null && due <= now) void this.readNow(home.id);
     }
   }
 
@@ -248,26 +312,33 @@ export class Poller {
     const before = fingerprint(home);
     const eventsBefore = this.journal.events.length;
     for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
-      const { offset, sha } = this.offsets.get(home.id);
-      const closed = this.host.closedCursor(home.id);
-      const startedAt = Math.floor(Date.now() / 1000);
-      const result = await this.run(
-        { kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) },
-        home.timeoutMs ?? this.timings.timeoutMs,
-      );
-      // The feed may not run now: nothing was read, and the page says why.
-      if (result.blocked !== undefined) return false;
-      const more =
-        result.code === 0
-          ? this.accept(home, result.stdout, startedAt)
-          : this.reject(home, result.code, result.stderr, closed !== null);
-      if (!more) break;
+      const step = await this.readOnce(home);
+      if (step === "blocked") return false;
+      if (step === "done") break;
     }
     // A read that found nothing new must not look like a change, or every
     // viewer would redraw the whole page on every poll.
     if (fingerprint(home) !== before || this.journal.events.length !== eventsBefore)
       this.host.onChange();
     return home.error === null;
+  }
+
+  /** One feed call: the feed may not run now, the home has more to read at once, or this read is done. */
+  private async readOnce(home: HomeState): Promise<"blocked" | "more" | "done"> {
+    const { offset, sha } = this.offsets.get(home.id);
+    const closed = this.host.closedCursor(home.id);
+    const startedMs = Date.now();
+    const result = await this.run(
+      { kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) },
+      this.timeoutMs(home),
+    );
+    // The feed may not run now: nothing was read, and the page says why.
+    if (result.blocked !== undefined) return "blocked";
+    const more =
+      result.code === 0
+        ? this.accept(home, result.stdout, startedMs)
+        : this.reject(home, result.code, result.stderr, closed !== null);
+    return more ? "more" : "done";
   }
 
   /**
@@ -295,8 +366,8 @@ export class Poller {
     return false;
   }
 
-  /** Applies one successful read; returns whether the home has more ledger to read right away. */
-  private accept(home: HomeState, stdout: string, startedAt: number): boolean {
+  /** Applies one successful read, begun at `startedMs`; returns whether the home has more ledger to read right away. */
+  private accept(home: HomeState, stdout: string, startedMs: number): boolean {
     const parsed = parseReport(stdout);
     if (parsed.kind === "incompatible") {
       home.version = "incompatible";
@@ -314,13 +385,14 @@ export class Poller {
     const rewind = this.storeLedger(home.id, report);
     home.report = report;
     home.lastOkAt = Date.now();
+    home.goodFrom = startedMs;
     home.error = null;
     if (home.id === MAIN_HOME) {
       this.syncHomes(report.secondmates);
       this.host.onAggregator(report.aggregator);
     }
     this.refreshVersions();
-    this.host.onReport(home.id, report, startedAt);
+    this.host.onReport(home.id, report, Math.floor(startedMs / 1000));
     return rewind || report.ledger.more || report.closed_cursor?.more === true;
   }
 

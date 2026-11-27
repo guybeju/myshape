@@ -3,6 +3,16 @@ import { QUEUES, resolveTopicId } from "./topics.js";
 import { itemTopic } from "./todos.js";
 import { emptyLifecycle, evaluate } from "./lifecycle.js";
 import { BOARD_CAP, TURN_ORDER } from "./lifecycle-settings.js";
+/** How old a home's last good read may be and still count as current. */
+function staleLimit(home, staleMs) {
+    return home.staleAfterMs === undefined ? staleMs : home.staleAfterMs;
+}
+/** Whether a home's last read was good and is still current. */
+export function isFresh(home, nowMs, staleMs) {
+    if (home.report === null || home.lastOkAt === null)
+        return false;
+    return nowMs - home.lastOkAt <= staleLimit(home, staleMs);
+}
 /**
  * How many ledger lines the view keeps per topic, and for lines with no topic.
  * Board records and lines derived from tags are never cut: they are the
@@ -86,7 +96,9 @@ function waitingFor(item) {
     if (item.captain)
         return "等你決定";
     if (item.hold !== null)
-        return `停著：${item.hold}`;
+        return item.hold_until === null
+            ? `停著：${item.hold}`
+            : `停著：${item.hold}（延到 ${item.hold_until}）`;
     if (item.blockers.length > 0)
         return `等 ${item.blockers.join("、")} 完成`;
     return null;
@@ -158,7 +170,7 @@ function homeView(home, input) {
         version: home.version,
         ledger_enabled: home.report?.ledger_enabled ?? null,
         ledger_hint: home.report?.ledger_hint ?? null,
-        stale: age === null || age > input.staleMs,
+        stale: age === null || age > staleLimit(home, input.staleMs),
         last_ok_seconds_ago: age === null ? null : Math.floor(age / 1000),
         error: home.error,
     };
@@ -555,9 +567,7 @@ function topicViews(topics) {
 }
 /** The lifecycle's inputs when the caller gives none: no clocks, every home with a report fresh. */
 function plainContext(input) {
-    const reported = input.homes.filter((home) => home.report !== null &&
-        home.lastOkAt !== null &&
-        input.nowMs - home.lastOkAt <= input.staleMs);
+    const reported = input.homes.filter((home) => isFresh(home, input.nowMs, input.staleMs));
     return {
         store: emptyLifecycle(),
         schedules: [],
@@ -566,6 +576,7 @@ function plainContext(input) {
         fresh: new Set(reported.map((home) => home.id)),
         present: new Set(input.homes.map((home) => home.id)),
         questions: new Map(),
+        readFrom: new Map(),
         label: input.label,
         nowMs: input.nowMs,
     };
@@ -627,6 +638,9 @@ function baseView(input) {
                 captain: item.captain,
                 held: item.hold !== null,
                 blockers: [...item.blockers],
+                hold_until: item.hold_until,
+                turn: item.turn,
+                unreadable: item.unreadable === undefined ? null : item.unreadable,
             });
         }
         view.questions.push(...questionsOf(home.id, home.report, placer));
