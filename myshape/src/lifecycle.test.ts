@@ -356,7 +356,10 @@ describe("the state of every card", () => {
         odd: { ...item("unknown"), unknown_state: "parked" },
       },
     };
-    const { evaluation } = look([home("main")], emptyLifecycle(), { todos });
+    const { evaluation, view } = look([home("main")], emptyLifecycle(), { todos });
+    // Only an item in a state the board does not know carries the word it was read with.
+    expect(view.todos.find((todo) => todo.task === "odd")?.unknown_state).toBe("parked");
+    expect(view.todos.find((todo) => todo.task === "open")).not.toHaveProperty("unknown_state");
     expect(
       ["open", "rejected", "claimed", "obsolete", "odd"].map((id) =>
         stateOf(evaluation.cards, `todo\t${id}`),

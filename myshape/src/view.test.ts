@@ -903,7 +903,6 @@ describe("hands-on items", () => {
       what: "登入",
       guidance: "",
       commands: [],
-      unknown_state: null,
       state: "rejected",
       reason: "沒起來",
     });

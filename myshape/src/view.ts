@@ -110,8 +110,8 @@ export interface TodoView {
   commands: string[];
   state: ItemState;
   reason: string | null;
-  /** The state word todos.json holds for an item in the "unknown" state (O6), else null. */
-  unknown_state: string | null;
+  /** The state word todos.json holds for an item in the "unknown" state (O6); only such an item has it. */
+  unknown_state?: string;
 }
 
 export interface HoldView {
@@ -1139,7 +1139,7 @@ function todoViews(input: ViewInput, view: BoardView): TodoView[] {
       commands: [...item.commands],
       state: item.state,
       reason: item.reason,
-      unknown_state: item.unknown_state ?? null,
+      ...(item.unknown_state === undefined ? {} : { unknown_state: item.unknown_state }),
     },
   }));
   return entries

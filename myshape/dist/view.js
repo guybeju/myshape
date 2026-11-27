@@ -787,7 +787,7 @@ function todoViews(input, view) {
             commands: [...item.commands],
             state: item.state,
             reason: item.reason,
-            unknown_state: item.unknown_state ?? null,
+            ...(item.unknown_state === undefined ? {} : { unknown_state: item.unknown_state }),
         },
     }));
     return entries
