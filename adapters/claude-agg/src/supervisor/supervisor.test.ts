@@ -11,6 +11,7 @@ import { runProgram } from "#agg/test-home.js";
 import { Git, type RunCommand } from "./commands.js";
 import { endingOf } from "./ending.js";
 import { Forge, FORGE_TEXT } from "./forge.js";
+import { BASH_RULE } from "./prompts.js";
 import {
   CANARY,
   ENV,
@@ -165,6 +166,14 @@ describe("one worker end to end", () => {
     expect(worker?.prompts[0]).toContain("呼叫 push_branch 工具推送");
     expect(worker?.prompts[0]).toContain("open_pr 工具開 PR");
     expect(worker?.prompts[0]).not.toContain("git push origin");
+    expect(worker?.prompts[0]).toContain(BASH_RULE);
+    for (const call of [planner, worker]) {
+      const tmpdir = call?.options.env["TMPDIR"] ?? "";
+      expect(tmpdir.startsWith(join(world.root, "cagg-"))).toBe(true);
+      expect(call?.options.env["CLAUDE_CODE_TMPDIR"]).toBe(tmpdir);
+      expect(existsSync(tmpdir), "removed once the session ended").toBe(false);
+    }
+    expect(planner?.options.env["TMPDIR"]).not.toBe(worker?.options.env["TMPDIR"]);
     expect(worker?.prompts[0]).toContain('"prompt": "照目標做"');
     supervisor.close();
   });

@@ -32,6 +32,8 @@ const CTX: SessionContext = {
   credential: { mode: "subscription-token", secret: CANARY },
   credentialFile: "/secrets/credential",
   readPaths: ["/opt/toolchain"],
+  tmpdir: "/tmp/cagg-test",
+  platform: "linux",
   guard,
   abortController: abort,
 };
@@ -55,7 +57,8 @@ const ENV_ALL = {
   PATH: ENV.PATH,
   HOME: ENV.HOME,
   LANG: ENV.LANG,
-  TMPDIR: ENV.TMPDIR,
+  TMPDIR: "/tmp/cagg-test",
+  CLAUDE_CODE_TMPDIR: "/tmp/cagg-test",
   CLAUDE_CODE_OAUTH_TOKEN: CANARY,
   CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
   CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: "1",
@@ -83,7 +86,6 @@ const RULES = [
 
 const SANDBOX_SETTINGS = {
   permissions: {
-    blockReadsOutsideWorkingDirectories: true,
     blockWritesOutsideWorkingDirectories: true,
     workingDirectoriesExclude: ["/repos/app"],
   },
@@ -112,8 +114,20 @@ const SANDBOX_SETTINGS = {
         "~/.claude/.credentials.json",
         "/secrets/credential",
         "/srv/home",
+        "/home",
+        "/Users",
+        "/root",
+        "/Volumes",
+        "/mnt",
+        "/media",
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/run/user",
+        "/var/log",
       ],
-      allowRead: ["/work/t-1", "/repos/app/.git", "/opt/toolchain"],
+      allowRead: ["/work/t-1", "/repos/app/.git", "/tmp/cagg-test", "/opt/toolchain"],
+      allowWrite: ["/tmp/cagg-test"],
     },
   },
 };
@@ -280,6 +294,31 @@ describe("workerOptions", () => {
     expect(SANDBOX_SETTINGS.sandbox.autoAllowBashIfSandboxed).toBe(true);
   });
 
+  it("denies macOS's shared temporary and log directories there too", () => {
+    const settings = workerOptions(SESSION, { ...CTX, platform: "darwin" }).settings;
+    if (typeof settings !== "object") throw new Error("no inline settings");
+    expect(settings.sandbox?.filesystem?.denyRead).toEqual([
+      ...SANDBOX_SETTINGS.sandbox.filesystem.denyRead,
+      "/private/tmp",
+      "/private/var/folders",
+      "/private/var/log",
+    ]);
+  });
+
+  it("has no file-read allow rule and no settings hook, the guard callback being the only hook", () => {
+    for (const forge of [FORGE, null]) {
+      const options = workerOptions({ ...SESSION, forge }, CTX);
+      const allowed = options.allowedTools ?? [];
+      expect(allowed.filter((rule) => /^(Read|Grep|Glob)\b/.test(rule))).toEqual([]);
+      expect(options.settings).not.toHaveProperty("hooks");
+      expect(Object.keys(options.hooks)).toEqual(["PreToolUse"]);
+      expect(options.hooks.PreToolUse.flatMap((matcher) => matcher.hooks)).toHaveLength(1);
+    }
+    const planner = plannerOptions("/w/p", ["/repos/app"], CTX);
+    expect(planner).not.toHaveProperty("settings");
+    expect(Object.keys(planner.hooks)).toEqual(["PreToolUse"]);
+  });
+
   it("names no model when the user set none", () => {
     expect(workerOptions(SESSION, CTX)).not.toHaveProperty("model");
     expect(workerOptions(SESSION, CTX)).not.toHaveProperty("resume");
@@ -337,7 +376,7 @@ describe("sessionEnv", () => {
     ["subscription-token", "CLAUDE_CODE_OAUTH_TOKEN"],
     ["api-key", "ANTHROPIC_API_KEY"],
   ] as const)("in %s mode holds exactly one credential, %s", (mode, name) => {
-    const env = sessionEnv({ ...ENV }, { mode, secret: CANARY });
+    const env = sessionEnv({ ...ENV }, { mode, secret: CANARY }, "/tmp/cagg-test");
     expect(AUTH_NAMES.filter((each) => each in env)).toEqual([name]);
     expect(env[name]).toBe(CANARY);
     for (const other of OUTRANKING) expect(env).not.toHaveProperty(other);
@@ -353,7 +392,11 @@ describe("sessionEnv", () => {
       MYSHAPE_HOME: "/srv/home",
       GIT_TERMINAL_PROMPT: "0",
     } as typeof ENV;
-    const env = sessionEnv(supervisorEnv, { mode: "subscription-token", secret: CANARY });
+    const env = sessionEnv(
+      supervisorEnv,
+      { mode: "subscription-token", secret: CANARY },
+      "/tmp/cagg-test",
+    );
     expect(Object.keys(env).toSorted()).toEqual(Object.keys(ENV_ALL).toSorted());
     expect(Object.values(env)).not.toContain("sk-ant-supervisor-not-real");
   });

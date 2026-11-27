@@ -89,6 +89,7 @@ export class World {
       realPath: existingRealPath,
       pid: this.pid,
       isAlive: (pid) => this.alive.has(pid),
+      tmpRoot: this.root,
     };
   }
 

@@ -28,6 +28,13 @@ export interface WorkerBrief {
   prompt: string;
 }
 
+/**
+ * The command forms the sandbox never approves by itself (Claude Code sends
+ * them to an approval nobody here can give), and what to write instead.
+ */
+export const BASH_RULE =
+  '- Bash 指令在 sandbox 裡不用核准就會跑，但這幾種寫法一定被拒：在指令前面設變數（FOO=bar npm test；要設定就用指令自己的參數或專案的設定檔）、用 here-document 寫 commit 訊息（改成 git commit -m "一行訊息"）、以 env、time、nohup、timeout 或 eval 開頭的指令。被拒時換成簡單的寫法再跑一次。';
+
 const SCOUT_RULE = "- 這個 task 只交報告：不推任何分支、不開 PR。";
 
 /** How a ship task hands its work over: through the supervisor's two forge tools. */
@@ -47,6 +54,7 @@ export function workerPrompt(brief: WorkerBrief): string {
     "- 只在這個 worktree 裡改檔案。",
     ...(brief.scout ? [SCOUT_RULE] : shipRules(brief.branch)),
     "- 不跑 myshape.sh，不碰看板的 home，不連看板的埠：看板只有 supervisor 會寫。",
+    BASH_RULE,
     "- 要 captain 親手做的事（sudo、登入）寫進 todos，要 captain 決定的事寫進 question，不要自己繞過。",
     "- 要等 captain 決定才能接著做時：question 寫問題與選項，outcome 寫 report，summary 寫做到哪裡；supervisor 會把答案交回給你接著做。",
     "- 要等 captain 動手才能接著做時：todos 列出要做的事，outcome 寫 report；captain 做完以後 supervisor 會叫你回來確認。確認還沒好的，再列進 todos；好了的就不要再列。",

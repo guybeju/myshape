@@ -13,7 +13,7 @@
 // write the board.
 
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
@@ -91,6 +91,8 @@ export interface Deps {
   realPath: (path: string) => string;
   pid: number;
   isAlive: (pid: number) => boolean;
+  /** Where each session's own temporary directory is made: SESSION_TMP_ROOT in production. */
+  tmpRoot: string;
 }
 
 /** The planner's own empty working directory, in the worktree root. */
@@ -905,13 +907,19 @@ export class Supervisor {
     return AUTH_SOURCE[this.deps.credential.mode];
   }
 
-  private sessionContext(defaultBranch: string | null, abort: AbortController): SessionContext {
+  private sessionContext(
+    defaultBranch: string | null,
+    abort: AbortController,
+    tmpdir: string,
+  ): SessionContext {
     return {
       model: this.settings.model,
       env: this.deps.env,
       credential: this.deps.credential,
       credentialFile: this.settings.credentialFile,
       readPaths: this.settings.readPaths,
+      tmpdir,
+      platform: process.platform,
       abortController: abort,
       guard: {
         home: this.settings.home,
@@ -956,13 +964,15 @@ export class Supervisor {
     const prompt = new PromptStream(plannerPrompt(this.plannerBrief(entry, messages, purpose)));
     const repos = Object.values(this.settings.repos).map((repo) => repo.path);
     const cwd = join(this.settings.worktreeRoot, PLANNER_DIR);
-    const options = plannerOptions(cwd, repos, this.sessionContext(null, abort));
+    const tmpdir = sessionTmpdir(this.deps.tmpRoot);
+    const options = plannerOptions(cwd, repos, this.sessionContext(null, abort, tmpdir));
     const run = this.deps.query({ prompt, options });
     const report = await followSession(run, prompt, abort, {
       mode: SESSION_MODE,
       apiKeySource: this.apiKeySource(),
       onStart: () => {},
     });
+    rmSync(tmpdir, { recursive: true, force: true });
     this.aborts.delete(abort);
     if (this.stopping) {
       for (const item of messages) this.offered.delete(item.file);
@@ -1172,9 +1182,10 @@ export class Supervisor {
     }
     const abort = this.sessionAbort();
     const prompt = new PromptStream(text);
+    const tmpdir = sessionTmpdir(this.deps.tmpRoot);
     const options = workerOptions(
       { worktree: task.worktree ?? "", mainCheckout: repo.path, resume, forge },
-      this.sessionContext(repo.defaultBranch, abort),
+      this.sessionContext(repo.defaultBranch, abort, tmpdir),
     );
     const run = this.deps.query({ prompt, options });
     this.streams.set(id, prompt);
@@ -1188,6 +1199,7 @@ export class Supervisor {
         this.setState(id, "working", `${DETAIL.started}（模型：${init.model ?? "沒寫"}）`);
       },
     });
+    rmSync(tmpdir, { recursive: true, force: true });
     this.aborts.delete(abort);
     this.streams.delete(id);
     this.releasePushed(id);
@@ -1428,6 +1440,16 @@ function resumeDetail(input: ResumeInput): string | undefined {
   if (input.directs.length > 0) return DETAIL.directed;
   if (input.todos !== undefined) return DETAIL.verifying;
   return input.quota ? DETAIL.resumed : undefined;
+}
+
+/**
+ * A new temporary directory for one session alone (mode 0700, a fresh name
+ * under `root`, SESSION_TMP_ROOT in production, with its links resolved), removed when the session
+ * ends. Its sandboxed commands may read and write there and nowhere else
+ * temporary.
+ */
+export function sessionTmpdir(root: string): string {
+  return mkdtempSync(join(realpathSync(root), "cagg-"));
 }
 
 /**

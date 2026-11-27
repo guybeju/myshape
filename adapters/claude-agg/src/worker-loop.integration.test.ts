@@ -334,6 +334,7 @@ function startSupervisor(query: ScriptedQuery, fake: FakeCommands): Promise<Supe
       realPath: existingRealPath,
       pid: process.pid,
       isAlive: () => false,
+      tmpRoot: scratch.dir,
     },
   );
 }

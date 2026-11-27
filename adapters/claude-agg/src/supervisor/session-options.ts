@@ -101,19 +101,26 @@ export const PLANNER_OUTPUT_SCHEMA: Record<string, unknown> = {
 
 /**
  * A session's whole environment. The SDK's `env` replaces the child's
- * environment, so this is everything it gets: four plain names picked one by
- * one from `base` (nothing else of the supervisor's environment), exactly one
+ * environment, so this is everything it gets: three plain names picked one by
+ * one from `base` (nothing else of the supervisor's environment), the
+ * session's own temporary directory as TMPDIR and CLAUDE_CODE_TMPDIR (where
+ * Claude Code keeps its temporary files and points sandboxed commands), exactly one
  * credential under its mode's name, never `ANTHROPIC_AUTH_TOKEN` or a cloud
  * provider name, and the subprocess scrub always on, so the credential is
  * taken out of every Bash command, hook and stdio MCP server the session
  * starts.
  */
-export function sessionEnv(base: PlainEnv, credential: Credential): Record<string, string> {
+export function sessionEnv(
+  base: PlainEnv,
+  credential: Credential,
+  tmpdir: string,
+): Record<string, string> {
   return {
     PATH: base.PATH,
     HOME: base.HOME,
     LANG: base.LANG,
-    TMPDIR: base.TMPDIR,
+    TMPDIR: tmpdir,
+    CLAUDE_CODE_TMPDIR: tmpdir,
     [AUTH_VARIABLE[credential.mode]]: credential.secret,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: MAX_SUBAGENT_DEPTH,
@@ -169,6 +176,37 @@ export const PACKAGE_REGISTRIES = [
 /** Hosts a worker's commands never reach, whatever else allows them. */
 export const DENIED_DOMAINS = ["github.com", "api.github.com"];
 
+/**
+ * Directories a worker's sandboxed commands never read (narrower allowRead
+ * entries still open the worktree, its main checkout's .git, its own
+ * temporary directory and readPaths): other users' and mounted files, and
+ * the shared temporary and log directories other programs write to.
+ */
+export const DENIED_ROOTS = [
+  "/home",
+  "/Users",
+  "/root",
+  "/Volumes",
+  "/mnt",
+  "/media",
+  "/tmp",
+  "/var/tmp",
+  "/dev/shm",
+  "/run/user",
+  "/var/log",
+];
+
+/** The same on macOS, where /tmp is /private/tmp and each user's TMPDIR is under /private/var/folders. */
+export const DENIED_ROOTS_MACOS = ["/private/tmp", "/private/var/folders", "/private/var/log"];
+
+/**
+ * Where each session's temporary directory is made. It is short on purpose:
+ * Claude Code hands sandboxed commands its own temporary directory
+ * (`<CLAUDE_CODE_TMPDIR>/claude-<uid>`) only while that path is at most 44
+ * bytes, and otherwise a shared one under the system default.
+ */
+export const SESSION_TMP_ROOT = "/tmp";
+
 /** The forge server's name in `mcpServers`, and the two tool names it gives the worker. */
 export const FORGE_SERVER = "forge";
 export const FORGE_TOOLS = [
@@ -202,6 +240,13 @@ export interface SessionContext {
   credentialFile: string;
   /** Absolute paths a worker's sandboxed commands may read besides its worktree. */
   readPaths: readonly string[];
+  /**
+   * The session's own temporary directory, made for it alone: absolute, links
+   * resolved, short (see SESSION_TMP_ROOT).
+   */
+  tmpdir: string;
+  /** The platform the sessions run on, which decides the system paths denied to them. */
+  platform: NodeJS.Platform;
   guard: GuardContext;
   abortController: AbortController;
 }
@@ -226,7 +271,6 @@ export function credentialReadRules(credentialFile: string): string[] {
 export function workerSettings(session: WorkerSession, ctx: SessionContext): Settings {
   return {
     permissions: {
-      blockReadsOutsideWorkingDirectories: true,
       blockWritesOutsideWorkingDirectories: true,
       workingDirectoriesExclude: [session.mainCheckout],
     },
@@ -241,8 +285,16 @@ export function workerSettings(session: WorkerSession, ctx: SessionContext): Set
         strictAllowlist: true,
       },
       filesystem: {
-        denyRead: ["~/", ...CREDENTIAL_PATHS, ctx.credentialFile, ctx.guard.home],
-        allowRead: [session.worktree, `${session.mainCheckout}/.git`, ...ctx.readPaths],
+        denyRead: [
+          "~/",
+          ...CREDENTIAL_PATHS,
+          ctx.credentialFile,
+          ctx.guard.home,
+          ...DENIED_ROOTS,
+          ...(ctx.platform === "darwin" ? DENIED_ROOTS_MACOS : []),
+        ],
+        allowRead: [session.worktree, `${session.mainCheckout}/.git`, ctx.tmpdir, ...ctx.readPaths],
+        allowWrite: [ctx.tmpdir],
       },
     },
   } satisfies Settings;
@@ -325,7 +377,7 @@ export function workerOptions(session: WorkerSession, ctx: SessionContext): Quer
     settings: workerSettings(session, ctx),
     sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
     verbatimPrompts: true,
-    env: sessionEnv(ctx.env, ctx.credential),
+    env: sessionEnv(ctx.env, ctx.credential, ctx.tmpdir),
     maxTurns: WORKER_MAX_TURNS,
     outputFormat: { type: "json_schema", schema: WORKER_OUTPUT_SCHEMA },
     persistSession: true,
@@ -367,7 +419,7 @@ export function plannerOptions(
     settingSources: [],
     strictMcpConfig: true,
     verbatimPrompts: true,
-    env: sessionEnv(ctx.env, ctx.credential),
+    env: sessionEnv(ctx.env, ctx.credential, ctx.tmpdir),
     maxTurns: PLANNER_MAX_TURNS,
     outputFormat: { type: "json_schema", schema: PLANNER_OUTPUT_SCHEMA },
     persistSession: false,
