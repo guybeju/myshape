@@ -278,6 +278,11 @@ export class Supervisor {
     return supervisor;
   }
 
+  /** The board home, as checkSettings resolved it. */
+  get home(): string {
+    return this.settings.home;
+  }
+
   log(line: string): void {
     this.deps.log(this.redact(line));
   }

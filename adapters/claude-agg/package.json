@@ -6,6 +6,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "supervisor": "tsc -p tsconfig.build.json && node bin/claude-agg-supervisor.mjs",
     "typecheck": "tsc -p . --noEmit",
     "lint": "oxlint src bin",
     "format": "oxfmt src bin",
@@ -26,6 +28,10 @@
     "vitest": "5.1.0"
   },
   "imports": {
-    "#agg/*": "./src/*"
+    "#agg/*": "./src/*",
+    "#agg-built/*": {
+      "types": "./src/*",
+      "default": "./dist/*"
+    }
   }
 }
