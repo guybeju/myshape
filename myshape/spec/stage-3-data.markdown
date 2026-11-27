@@ -68,6 +68,7 @@
 - **燈號**：照 [contracts](contracts.markdown) 第 5 節。
   什麼算 agent 照 contracts 第 1 節：secondmate 自己不列為 agent，只列它派出的 worker，並標明所在的 home；home 已經沒有的 task 標成已結束（`finished`）。
 - **待決事項**：每個 hold 屬於哪個議題：先看被 hold 的 task 自己的標記，沒有就看 `origin` 那個 task 的標記，都沒有就是未分類。排序：`live` 在前，`aged`、`dated`、`blocked`（合稱暫緩）在後；同一組裡依議題的佇列順序（高、一般、待辦，同佇列照陣列順序），同一議題內最舊的在前，未分類排最後。暫緩的寫出原因：「已放超過 14 天」「延到 YYYY-MM-DD」「等 <id> 完成」。
+  根 home 回報的 `aggregator.decisions_at_once`（[contracts](contracts.markdown) C10）設了時，照這個順序的前那麼多個 live 待決事項在前面，其他 live 的標成在排隊（`waits_turn`），暫緩的不算；跨所有 home 一起算。有一個在排隊的待決事項、而 backlog 項目在等它時，那個項目寫「決定排隊」，不寫「等你決定」。
 - **選項**：問題最後一行裡最後一個 `選項：`（全形冒號）之後的文字，以 ` | ` 分隔，至少兩個、每個都不是空的，才解析成按鈕；否則沒有按鈕。文字框一律有。不要求 `選項：` 在行首：上游把 hold reason 存在 backlog 項目的標題行，寫成多行的 reason 到看板時可能已經是一行。
 - **worker 提問**：`status_decisions[]`（彙整腳本只收 `needs-decision`，不收 `blocked`）依 task 的議題歸位，標「first mate 處理中」，不能作答。
   `kind` 是 secondmate 的 task 的那一行是 secondmate 給 first mate 的回報，不算 worker 提問（C53）。

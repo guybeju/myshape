@@ -212,7 +212,7 @@ test_aggregator_block_and_read_hints() {
   local out
   with_ledger_on "$MAIN"
   out=$(feed "$FAKE" main 0 -) || fail "feed main failed"
-  assert_equals '{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。"}' \
+  assert_equals '{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。","decisions_at_once":1}' \
     "$(jq -c '.aggregator' <<< "$out")" "the main report must carry the aggregator block"
   assert_equals "sm1|false|$SM|null|null far1|true|/srv/fm-home|60|400" \
     "$(jq -r '[.secondmates[] | "\(.id)|\(.remote)|\(.home)|\(.read_every_s)|\(.read_timeout_s)"] | join(" ")' <<< "$out")" \

@@ -30,6 +30,7 @@ MYSHAPE_HOME="$MAIN" MYSHAPE_ROOT_OVERRIDE="$CODE_ROOT" exec "$CODE_ROOT/bin/mys
 EOF
 chmod +x "$TMP_ROOT/topic"
 export TB_TOPIC="$TMP_ROOT/topic"
+export TB_MAIN="$MAIN"
 
 # A hands-on item with no topic, as an older board adopted it before it kept
 # items; the page walk closes it and finds it under 沒有議題.
@@ -126,6 +127,8 @@ test_the_captains_path() {
   out=$(node "$ROOT/myshape/test/kit/browser.mjs" "$url" "$ROOT/fm-board/test/stage-5-page.mjs" 2>&1) ||
     fail "the browser walk-through failed: $out"
   grep -q 'stdin=call-1	合併	合併	release' "$TB_LOG" || fail "the answer chosen in the page did not reach the hold"
+  grep -q 'stdin=看板上輪到 main/loose-call 的決定了（沒有議題）$' "$TB_LOG" ||
+    fail "the loose call's turn did not reach firstmate as one notice"
   grep -q 'stdin=［議題：Billing X（billing）］\\n先做這個' "$TB_LOG" || fail "the message typed in the page did not reach firstmate"
   grep -q 'argv=ship-a|看一下 CI|' "$TB_LOG" || fail "the direct message typed in the page did not reach the agent"
   grep -q 'argv=ship-a|/compact|' "$TB_LOG" && fail "a command-like direct message reached the agent"

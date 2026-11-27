@@ -178,6 +178,19 @@ test_holds_are_placed_and_ordered() {
   pass "pending decisions follow their task's or origin's topic and the queue order"
 }
 
+# The adapter declares decisions_at_once 1: the first live decision in that
+# order is in front, every other live one waits its turn, deferred ones are
+# outside the cap, and a queued item whose decision waits says so.
+test_one_decision_at_a_time() {
+  assert_equals "call-login:false ship-a:true call-origin:true call-loose:true call-dated:false" \
+    "$(view '.holds | map("\(.task):\(.waits_turn)") | join(" ")')" \
+    "only the first live decision may be in front; the rest wait their turn, deferred ones never"
+  assert_equals "call-login:等你決定 call-origin:決定排隊 call-loose:決定排隊 call-dated:等你決定" \
+    "$(view '[.queued[] | select(.task | startswith("call-")) | "\(.task):\(.waiting)"] | join(" ")')" \
+    "a queued item whose decision waits its turn must say 決定排隊"
+  pass "the board shows one decision at a time, in its order, with the rest queued"
+}
+
 test_updates_and_topics() {
   local out
   out=$(view '.updates | map(select(.source == "ledger" and .topic == "billing")) | map("\(.task):\(.event)") | join(" ")')
@@ -523,7 +536,8 @@ test_find_says_who_and_why() {
   pass "find says where a change was made and why, and --all prints everything"
 }
 
-fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered test_updates_and_topics \
+fm_test_run test_agents_lights_and_placement test_holds_are_placed_and_ordered test_one_decision_at_a_time \
+  test_updates_and_topics \
   test_event_follows_the_tag_in_effect test_ledger_is_stored_once_and_survives_rewrites test_home_status \
   test_polling_follows_viewers test_summary_and_which test_summary_on_a_cold_board_reads_the_main_home_first \
   test_dump_is_test_only test_which_follows_a_retag_nobody_is_watching \

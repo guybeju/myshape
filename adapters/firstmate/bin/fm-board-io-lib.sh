@@ -53,7 +53,7 @@ FMB_NOT_ON_FORK=(
   "command is not a genuine executable in the configured remote root"
 )
 FMB_NOT_ON_FORK_LINE="還沒換到 fork：在那台的 code root 加上 fork remote、寫 config/self-update-source 為「fork carry」，再回主 home 跑 /updatefirstmate。它的 agent 不會顯示。"
-FMB_AGGREGATOR='{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。"}'
+FMB_AGGREGATOR='{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。","decisions_at_once":1}'
 FMB_ERROR_MAX=600
 
 # fmb_registry_remote <id>: prints 1 for a remote registered secondmate, 0 for

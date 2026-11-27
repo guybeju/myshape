@@ -60,7 +60,15 @@ export default async function run(page) {
   await page.waitFor("the untagged item", `${untagged}.innerText.includes("loose-1") && ${untagged}.innerText.includes("Loose work") && ${untagged}.innerText.includes("可以派")`);
   if (await page.evaluate(`${untagged}.innerText.includes("loose-call") || ${untagged}.innerText.includes("next-1")`))
     throw new Error("a hold with its own card and tagged work must not be listed as untagged");
-  await page.waitFor("the loose call as a decision card", has("這個要不要做？"));
+  // The adapter shows one decision at a time: call-1 (Billing) is in front, the loose call
+  // waits its turn as one line, with no question and no buttons.
+  await page.waitFor("the loose call waiting its turn", has("還有 1 個決定排隊，輪到時才顯示"));
+  if (await page.evaluate(has("這個要不要做？"))) throw new Error("a decision waiting its turn must not show its question");
+  // A filter that hides both counts the one in front and the one waiting apart; the line clears it.
+  await page.type('[data-key="filter-text"]', "Login");
+  await page.waitFor("the owed line under a filter", has("這個篩選之外還有：等你決定 1、決定排隊 1"));
+  await page.click("p.owed button", "這個篩選之外還有");
+  await page.waitFor("the filter cleared", `!${has("這個篩選之外還有")} && ${has("還有 1 個決定排隊，輪到時才顯示")}`);
 
   // 未分類 lists what still needs a topic; finished work without one is folded below it,
   // still taggable. A mate's own record is not work and appears nowhere.
@@ -182,6 +190,12 @@ export default async function run(page) {
   const released = () => fs.readFileSync(process.env.TB_LOG, "utf8").includes("stdin=call-1\t合併\t合併\trelease");
   for (let tries = 0; tries < 60 && !released(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 150));
   if (!released()) throw new Error("the answer must release the decision as it recorded");
+  // first mate puts the answered call off until December, so the loose call's turn comes.
+  const backlog = `${process.env.TB_MAIN}/data/backlog.md`;
+  const held = "(hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)";
+  fs.writeFileSync(backlog, fs.readFileSync(backlog, "utf8").replace(held, `${held} (hold-until: 2026-12-01)`));
+  await page.waitFor("the loose call's turn", has("這個要不要做？"), 15000);
+  if (await page.evaluate(has("個決定排隊，輪到時才顯示"))) throw new Error("no decision waits once the loose call is in front");
   // A decision that records no outcome: a typed answer says it will be released by default.
   const looseCard = `[...document.querySelectorAll(".card")].find((card) => card.innerText.includes("這個要不要做？"))`;
   await page.evaluate(`(() => { const input = ${looseCard}.querySelector("input"); input.value = "先給我更多資訊"; input.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
