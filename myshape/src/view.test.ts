@@ -14,7 +14,7 @@ import {
   turnNoticeText,
   turnsTaken,
 } from "./view.js";
-import type { HoldView, HomeSnapshot, ViewInput } from "./view.js";
+import type { HomeSnapshot, TurnView, ViewInput } from "./view.js";
 
 const NOW = Date.parse("2026-07-10T00:00:00Z");
 const T0 = Date.parse("2026-07-01T00:00:00Z") / 1000;
@@ -273,7 +273,19 @@ describe("queued", () => {
         ],
       }),
     );
-    expect(view.queued).toEqual([
+    // What the home said of each, which the lifecycle classifies them by.
+    expect(
+      view.queued.map((entry) => `${entry.task}:${entry.captain}:${entry.held}:${entry.blockers}`),
+    ).toEqual([
+      "ready:false:false:",
+      "held:false:true:",
+      "call:true:true:",
+      "after:false:false:ready,held",
+      "loose:false:false:",
+      "merged-away:false:false:",
+      "far:false:false:",
+    ]);
+    expect(view.queued.map(({ captain: _c, held: _h, blockers: _b, ...rest }) => rest)).toEqual([
       {
         home: "main",
         task: "ready",
@@ -634,11 +646,12 @@ describe("holds and questions", () => {
       "later-old",
       "later-new",
       "loose-old",
+      // An aged decision stays in the queue (spec/lifecycle.markdown), placed like any live one.
+      "aged",
       "archived",
       "loose",
       "origin-unknown",
       "high-deferred",
-      "aged",
       "blocked",
       "undated",
     ]);
@@ -654,6 +667,9 @@ describe("holds and questions", () => {
       live: true,
       waits_turn: false,
       deferred_reason: null,
+      note: null,
+      bucket: "live",
+      blockers: [],
       topic: "hi",
       stale: false,
     });
@@ -667,7 +683,11 @@ describe("holds and questions", () => {
       deferred_reason: "延到 2026-12-01",
       topic: "hi",
     });
-    expect(byTask["aged"]?.deferred_reason).toBe("已放超過 14 天");
+    expect(byTask["aged"]).toMatchObject({
+      live: true,
+      deferred_reason: null,
+      note: "已放超過 14 天",
+    });
     expect(byTask["blocked"]?.deferred_reason).toBe("等 x、y 完成");
     expect(byTask["undated"]?.deferred_reason).toBe("延到 之後");
     expect(view.questions).toEqual([
@@ -760,9 +780,10 @@ describe("decisions at once", () => {
 
   it("finds the decisions whose turn came: queued before, at the front now", () => {
     const first = buildView(input({ homes: homes(), decisionsAtOnce: 1 }));
-    const seen = turnsTaken(new Set(), first.holds);
+    const seen = turnsTaken(new Set(), first.turns);
     expect(seen.taken).toEqual([]);
-    expect([...seen.waiting]).toEqual(["main\tnormal", "main\tloose"]);
+    // The aggregator's close proposal of n1 is in the same queue, after every decision.
+    expect([...seen.waiting]).toEqual(["hold\tmain\tnormal", "hold\tmain\tloose", "close\tn1"]);
     // sm1's decision was answered: main/normal comes to the front, main/loose still waits.
     const [, ...rest] = homes();
     const next = buildView(
@@ -774,25 +795,41 @@ describe("decisions at once", () => {
         decisionsAtOnce: 1,
       }),
     );
-    const step = turnsTaken(seen.waiting, next.holds);
-    expect(step.taken.map((entry) => entry.task)).toEqual(["normal"]);
-    expect([...step.waiting]).toEqual(["main\tloose"]);
+    const step = turnsTaken(seen.waiting, next.turns);
+    expect(step.taken.map((entry) => entry.key)).toEqual(["main\tnormal"]);
+    expect([...step.waiting]).toEqual(["hold\tmain\tloose", "close\tn1"]);
     // A decision that was never queued is not announced, and one gone from every home is forgotten.
-    expect(turnsTaken(new Set(["main\tgone"]), first.holds).taken).toEqual([]);
-    expect([...turnsTaken(new Set(["main\tgone"]), []).waiting]).toEqual([]);
+    expect(turnsTaken(new Set(["hold\tmain\tgone"]), first.turns).taken).toEqual([]);
+    expect([...turnsTaken(new Set(["hold\tmain\tgone"]), []).waiting]).toEqual([]);
   });
 
   it("writes the notice of a decision's turn as one fixed sentence", () => {
     const view = buildView(input({ homes: homes(), decisionsAtOnce: 1 }));
-    const [high, normal, loose] = view.holds;
-    expect(turnNoticeText(view, high as HoldView, 2)).toBe(
+    const [high, normal, loose] = view.turns;
+    expect(turnNoticeText(view, high as TurnView, 2)).toBe(
       "看板上輪到 sm1/high 的決定了（議題「High」，id hi）；還有 2 個決定排隊",
     );
-    expect(turnNoticeText(view, normal as HoldView, 0)).toBe(
+    expect(turnNoticeText(view, normal as TurnView, 0)).toBe(
       "看板上輪到 main/normal 的決定了（議題「Normal two」，id n2）",
     );
-    expect(turnNoticeText(view, loose as HoldView, 1)).toBe(
+    expect(turnNoticeText(view, loose as TurnView, 1)).toBe(
       "看板上輪到 main/loose 的決定了（沒有議題）；還有 1 個決定排隊",
+    );
+    // The board's own cards and close proposals say whose card it is and where, nothing more.
+    const at = (kind: TurnView["kind"]): TurnView => ({
+      kind,
+      key: "hi",
+      topic: "hi",
+      waits_turn: false,
+    });
+    expect(turnNoticeText(view, at("close"), 0)).toBe(
+      "看板上輪到關閉議題的提議了（議題「High」，id hi）",
+    );
+    expect(turnNoticeText(view, at("idle"), 1)).toBe(
+      "看板上輪到「沒人處理的議題」了（議題「High」，id hi）；還有 1 個決定排隊",
+    );
+    expect(turnNoticeText(view, { ...at("stall"), key: "-", topic: null }, 0)).toBe(
+      "看板上輪到「沒人接」卡了（沒有議題）",
     );
   });
 });
@@ -843,6 +880,8 @@ describe("hands-on items", () => {
       what: "登入",
       guidance: "",
       commands: [],
+      unknown_state: null,
+      unverified: false,
       state: "rejected",
       reason: "沒起來",
     });
@@ -1123,6 +1162,8 @@ describe("topics", () => {
       status: "confirmed",
       queue: "normal",
       close_reason: "all done",
+      close_at: "x",
+      kept_until: null,
       archived_at: null,
     });
     expect(view.topics["hi"]).toMatchObject({ queue: "high", close_reason: null });
@@ -1133,6 +1174,8 @@ describe("topics", () => {
       status: "archived",
       queue: null,
       close_reason: null,
+      close_at: null,
+      kept_until: null,
       archived_at: "2026-06-01T00:00:00Z",
     });
   });

@@ -1,0 +1,884 @@
+// Every card's lifecycle (spec/lifecycle.markdown): the closed set of states
+// of each kind of card, who owns each state and its deadline (LIFECYCLE), the
+// state of every card the board knows, derived from what it shows, and the
+// clocks that time the states the aggregator owns. Pure: board-server.ts
+// commits what evaluate returns.
+import { TIMED_STATES, defaultSettings, durationWords } from "./lifecycle-settings.js";
+import type { LifecycleSettings, TimedState } from "./lifecycle-settings.js";
+import type { Draft, Frozen } from "./records.js";
+import { isNew } from "./schedules.js";
+import type { ScheduleStore } from "./schedules.js";
+import { NO_TOPIC, idleStep, stallKeyOf, stallState, stallStep } from "./stalls.js";
+import type { AgentView, BoardView, HoldView, QueuedView, TodoView } from "./view.js";
+
+/** Who makes a state's next move (spec/lifecycle.markdown section 1). */
+export type Owner = "captain" | "aggregator" | "board" | "time" | "none";
+
+/**
+ * One state's rule: its owner and, for a state the aggregator owns, the
+ * setting that times it ("members" for a 沒人接 card, timed by its members).
+ */
+export interface Rule {
+  owner: Owner;
+  deadline: TimedState | "members" | null;
+}
+
+const captain: Rule = { owner: "captain", deadline: null };
+const board: Rule = { owner: "board", deadline: null };
+const time: Rule = { owner: "time", deadline: null };
+const end: Rule = { owner: "none", deadline: null };
+const timed = (state: TimedState): Rule => ({ owner: "aggregator", deadline: state });
+
+/** Every state of every kind of card. A state without a rule here does not compile. */
+export const LIFECYCLE = {
+  // topics (stored)
+  T1: time,
+  T2: timed("T2"),
+  T3: captain,
+  T4: time,
+  T5: board,
+  T6: captain,
+  T7: time,
+  T8: end,
+  T10: board,
+  // decisions (read)
+  D1: captain,
+  D2: board,
+  D3: time,
+  D4: time,
+  D5: timed("D5"),
+  D6: board,
+  D7: captain,
+  D8: timed("D8"),
+  D9: timed("D9"),
+  D10: board,
+  // queued items (read)
+  Q1: timed("Q1"),
+  Q2: captain,
+  Q3: captain,
+  Q4: timed("Q4"),
+  Q5: timed("Q5"),
+  Q7: time,
+  Q8: timed("Q8"),
+  Q10: board,
+  NT: timed("NT"),
+  // agents (read)
+  A1: timed("A1"),
+  A2: timed("A2"),
+  A3: timed("A3"),
+  A4: timed("A4"),
+  A5: timed("A5"),
+  A6: timed("A6"),
+  A7: captain,
+  A8: board,
+  A9: end,
+  // worker questions (read)
+  W1: timed("W1"),
+  // hands-on items (stored)
+  O1: captain,
+  O2: captain,
+  O3: timed("O3"),
+  O4: captain,
+  O5: captain,
+  O6: captain,
+  // schedules (stored)
+  S1: time,
+  S2: captain,
+  S3: timed("S3"),
+  S4: captain,
+  S5: captain,
+  S6: timed("S6"),
+  // 沒人接 cards (stored)
+  N1: { owner: "aggregator", deadline: "members" },
+  N2: captain,
+  N4: time,
+} as const satisfies Record<string, Rule>;
+
+export type CardState = keyof typeof LIFECYCLE;
+
+export type CardKind = "topic" | "hold" | "queued" | "agent" | "question" | "todo" | "schedule";
+
+/** One card and the state it is in now. */
+export interface Card {
+  /** Kind, home and id, tab-separated; a no-topic flag adds "\tNT". */
+  key: string;
+  kind: CardKind;
+  state: CardState;
+  topic: string | null;
+  /** The home a read card comes from; null for a card the board stores. */
+  home: string | null;
+  /** How the card is named on the page: home/task, or the topic or item. */
+  label: string;
+  /** What restarts the state's clock when it changes (an agent's state, detail and last event). */
+  sig: string;
+  /** S6 only: how many occurrences in a row nobody took or finished. */
+  count: number;
+}
+
+/** When the board first saw a card in the timed state it is in. */
+export interface Clock {
+  state: TimedState;
+  since: string;
+  sig: string;
+  /** Set once the board acted on its escalation (O3 to O5), so it acts once. */
+  raised?: true;
+}
+
+/** A 沒人接 card in front of the captain, and the members the captain put off, if any. */
+export interface Stall {
+  since: string;
+  members: string[];
+  deferred?: { until: string; members: string[] };
+}
+
+/** What the board saw: first-seen times, where topics had work, and its 沒人接 cards. */
+export interface LifecycleMemory {
+  clocks: Record<string, Clock>;
+  /** Topic id to the homes whose last good read had work under it. */
+  homes: Record<string, string[]>;
+  /** Topic id, or "-" for work with no topic, to its 沒人接 card. */
+  stalls: Record<string, Stall>;
+  /** Topic id to its 沒人處理的議題 card: when the board raised it. */
+  idle: Record<string, string>;
+}
+
+/** data/myshape/lifecycle.json. */
+export interface LifecycleStore extends LifecycleMemory {
+  v: 1;
+  settings: LifecycleSettings;
+  /** Topic id to when 先不關 ends. */
+  kept: Record<string, string>;
+}
+
+export function emptyLifecycle(): LifecycleStore {
+  return {
+    v: 1,
+    settings: defaultSettings(),
+    kept: {},
+    clocks: {},
+    homes: {},
+    stalls: {},
+    idle: {},
+  };
+}
+
+/** A write as the lifecycle reads it: whose answer, and how sending it went. */
+export interface WriteLine {
+  kind: string;
+  home: string;
+  task: string | null;
+  topic: string | null;
+  state: string;
+  question_sha256: string | null;
+}
+
+/** A schedule as the lifecycle reads it. */
+export interface ScheduleLine {
+  id: string;
+  topic: string;
+  title: string;
+  state: "on" | "paused";
+  /** Who paused it last, from its records; null when no record says. */
+  pausedBy: string | null;
+  waitsEnable: boolean;
+  /** Occurrences in a row, newest first, that nobody took or that timed out. */
+  unanswered: number;
+  open: boolean;
+}
+
+/** Everything a card's state is read from besides the board's view. */
+export interface LifecycleContext {
+  store: Frozen<LifecycleStore>;
+  schedules: readonly ScheduleLine[];
+  allPaused: boolean;
+  writes: readonly WriteLine[];
+  /** Homes whose last read was good and is not stale. */
+  fresh: ReadonlySet<string>;
+  /** Every home the board reads. */
+  present: ReadonlySet<string>;
+  /** SHA-256 of each hold's question, by "home\ttask". */
+  questions: ReadonlyMap<string, string>;
+  /** What the board's sentences call the aggregator. */
+  label: string;
+  nowMs: number;
+}
+
+function card(
+  kind: CardKind,
+  parts: { home: string | null; id: string; topic: string | null; label: string },
+  state: CardState,
+  sig = "",
+): Card {
+  const key = [kind, ...(parts.home === null ? [] : [parts.home]), parts.id].join("\t");
+  return {
+    key,
+    kind,
+    state,
+    topic: parts.topic,
+    home: parts.home,
+    label: parts.label,
+    sig,
+    count: 0,
+  };
+}
+
+/** The no-topic flag of a read card: the aggregator owes it a topic (NT). */
+function noTopic(found: Card): Card[] {
+  return found.topic === null ? [{ ...found, key: `${found.key}\tNT`, state: "NT", sig: "" }] : [];
+}
+
+// ---------------------------------------------------------------- decisions
+
+const ANSWER_SENDING = new Set(["waiting", "sending", "retrying"]);
+const ANSWER_FAILED = new Set(["failed", "undelivered", "unknown"]);
+
+/** The state of the board's latest answer to a decision, if it sent one for this question. */
+function answerState(context: LifecycleContext, hold: HoldView): string | null {
+  const sha = context.questions.get(`${hold.home}\t${hold.task}`) ?? null;
+  const own = context.writes.filter(
+    (write) =>
+      write.kind === "answer" &&
+      write.home === hold.home &&
+      write.task === hold.task &&
+      write.question_sha256 === sha,
+  );
+  return own.at(-1)?.state ?? null;
+}
+
+/**
+ * A blocker the board can see: an open card of the same home that does not,
+ * by following its own blockers, come back to where it started.
+ */
+export function visibleWait(
+  view: BoardView,
+  home: string,
+  ids: readonly string[],
+  seen: ReadonlySet<string> = new Set(),
+): boolean {
+  return ids.every((id) => {
+    if (seen.has(id)) return false;
+    const queued = view.queued.find((item) => item.home === home && item.task === id);
+    if (queued !== undefined)
+      return visibleWait(view, home, queued.blockers, new Set([...seen, id]));
+    const hold = view.holds.find((entry) => entry.home === home && entry.task === id);
+    if (hold !== undefined) return visibleWait(view, home, hold.blockers, new Set([...seen, id]));
+    return view.agents.some((agent) => agent.home === home && agent.task === id && !agent.finished);
+  });
+}
+
+/** A decision's state, first match wins (spec/lifecycle.markdown, 待決事項). */
+function holdState(view: BoardView, context: LifecycleContext, hold: HoldView): CardState {
+  const sent = answerState(context, hold);
+  if (hold.stale) return "D10";
+  if (sent !== null && ANSWER_SENDING.has(sent)) return "D6";
+  if (sent !== null && ANSWER_FAILED.has(sent)) return "D7";
+  if (sent === "delivered") return "D8";
+  if (hold.bucket === "unknown") return "D9";
+  if (hold.bucket === "blocked")
+    return visibleWait(view, hold.home, hold.blockers, new Set([hold.task])) ? "D4" : "D5";
+  if (!hold.live) return "D3";
+  return hold.waits_turn ? "D2" : "D1";
+}
+
+function holdCards(view: BoardView, context: LifecycleContext): Card[] {
+  return view.holds.map((hold) =>
+    card(
+      "hold",
+      { home: hold.home, id: hold.task, topic: hold.topic, label: `${hold.home}/${hold.task}` },
+      holdState(view, context, hold),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------- queued items
+
+/** A queued item's state, first match wins (spec/lifecycle.markdown, 排隊中的項目). */
+function queuedState(view: BoardView, item: QueuedView, stale: boolean): CardState {
+  const topic = item.topic === null ? undefined : view.topics[item.topic];
+  if (stale) return "Q10";
+  if (item.captain) return "Q2";
+  if (topic?.status === "archived") return "Q4";
+  if (topic?.queue === "later") return "Q3";
+  if (item.blockers.length > 0)
+    return visibleWait(view, item.home, item.blockers, new Set([item.task])) ? "Q7" : "Q8";
+  return item.held ? "Q5" : "Q1";
+}
+
+function queuedCards(view: BoardView, context: LifecycleContext): Card[] {
+  return view.queued.flatMap((item) => {
+    const stale = !context.fresh.has(item.home);
+    const parts = {
+      home: item.home,
+      id: item.task,
+      topic: item.topic,
+      label: `${item.home}/${item.task}`,
+    };
+    const found = card("queued", parts, queuedState(view, item, stale));
+    return [found, ...(stale ? [] : noTopic(found))];
+  });
+}
+
+// ---------------------------------------------------------------- agents
+
+const AGENT_STATES: Record<string, CardState> = {
+  working: "A1",
+  parked: "A2",
+  paused: "A2",
+  blocked: "A4",
+  failed: "A4",
+  done: "A5",
+};
+
+/** An agent's state, first match wins (spec/lifecycle.markdown, agent). */
+function agentState(agent: AgentView, deciding: boolean): CardState {
+  if (agent.finished) return "A9";
+  if (agent.stale) return "A8";
+  if (deciding) return "A7";
+  if (agent.unstarted) return "A3";
+  return AGENT_STATES[agent.state] ?? "A6";
+}
+
+function agentCards(view: BoardView): Card[] {
+  const deciding = new Set(
+    view.holds.filter((hold) => hold.live).map((hold) => `${hold.home}\t${hold.task}`),
+  );
+  return view.agents.flatMap((agent) => {
+    const state = agentState(agent, deciding.has(`${agent.home}\t${agent.task}`));
+    const sig = `${agent.state}\n${agent.detail}\n${agent.updated_at ?? ""}`;
+    const parts = {
+      home: agent.home,
+      id: agent.task,
+      topic: agent.topic,
+      label: `${agent.home}/${agent.task}`,
+    };
+    const found = card("agent", parts, state, sig);
+    const open = state !== "A9" && state !== "A8";
+    return [found, ...(open ? noTopic(found) : [])];
+  });
+}
+
+function questionCards(view: BoardView, context: LifecycleContext): Card[] {
+  return view.questions.flatMap((question) =>
+    context.fresh.has(question.home)
+      ? [
+          card(
+            "question",
+            {
+              home: question.home,
+              id: `${question.task}\t${question.key}`,
+              topic: question.topic,
+              label: `${question.home}/${question.task}`,
+            },
+            "W1",
+          ),
+        ]
+      : [],
+  );
+}
+
+// ---------------------------------------------------------------- stored cards
+
+const TODO_STATES: Record<string, CardState> = {
+  open: "O1",
+  rejected: "O2",
+  claimed: "O3",
+  obsolete: "O4",
+};
+
+function todoCards(view: BoardView): Card[] {
+  return view.todos.map((todo: TodoView) =>
+    card(
+      "todo",
+      { home: null, id: todo.task, topic: todo.topic, label: todo.title },
+      TODO_STATES[todo.state] ?? "O6",
+    ),
+  );
+}
+
+/** A schedule's state, first match wins (spec/lifecycle.markdown, 排程). */
+function scheduleState(context: LifecycleContext, line: ScheduleLine): CardState {
+  if (context.allPaused) return "S5";
+  if (line.waitsEnable) return "S4";
+  if (line.state === "paused") return line.pausedBy === "aggregator" ? "S3" : "S2";
+  return line.unanswered >= context.store.settings.S6.remind ? "S6" : "S1";
+}
+
+function scheduleCards(view: BoardView, context: LifecycleContext): Card[] {
+  return context.schedules.flatMap((line) => {
+    if (view.topics[line.topic]?.status === "archived") return [];
+    const state = scheduleState(context, line);
+    const found = card(
+      "schedule",
+      { home: null, id: line.id, topic: line.topic, label: line.title },
+      state,
+    );
+    return [{ ...found, count: line.unanswered }];
+  });
+}
+
+const UNSENT = new Set(["waiting", "sending", "retrying", "failed", "undelivered", "unknown"]);
+
+/** Every topic with an open card under it (spec/lifecycle.markdown, 開著的工作). */
+function busyTopics(view: BoardView, context: LifecycleContext): Set<string> {
+  const under = [
+    ...view.agents.filter((agent) => !agent.finished),
+    ...view.queued,
+    ...view.holds,
+    ...view.questions,
+    ...view.todos,
+    ...context.schedules,
+    ...context.writes.filter((write) => UNSENT.has(write.state)),
+  ];
+  return new Set(under.flatMap((entry) => (entry.topic === null ? [] : [entry.topic])));
+}
+
+/** Whether a topic with nothing open had work, at its last good read, in a home not read well since. */
+function unclear(context: LifecycleContext, id: string): boolean {
+  return (context.store.homes[id] ?? []).some((home) => !context.fresh.has(home));
+}
+
+/** A topic's state, first match wins (spec/lifecycle.markdown, 議題). */
+function topicState(
+  view: BoardView,
+  context: LifecycleContext,
+  id: string,
+  busy: boolean,
+): CardState {
+  const topic = view.topics[id];
+  if (topic === undefined || topic.status === "archived") return "T8";
+  if (topic.queue === null) return "T10";
+  if (topic.close_reason !== null) return "T3";
+  if (topic.queue === "later")
+    return context.schedules.some((line) => line.topic === id) ? "T7" : "T6";
+  if (Date.parse(context.store.kept[id] ?? "") > context.nowMs) return "T4";
+  if (busy) return "T1";
+  return unclear(context, id) ? "T5" : "T2";
+}
+
+function topicCards(view: BoardView, context: LifecycleContext): Card[] {
+  const busy = busyTopics(view, context);
+  return Object.entries(view.topics).flatMap(([id, topic]) =>
+    topic.status === "archived"
+      ? []
+      : [
+          card(
+            "topic",
+            { home: null, id, topic: id, label: topic.name },
+            topicState(view, context, id, busy.has(id)),
+          ),
+        ],
+  );
+}
+
+/** The state of every card the board knows. */
+export function cardsOf(view: BoardView, context: LifecycleContext): Card[] {
+  return [
+    ...topicCards(view, context),
+    ...holdCards(view, context),
+    ...queuedCards(view, context),
+    ...agentCards(view),
+    ...questionCards(view, context),
+    ...todoCards(view),
+    ...scheduleCards(view, context),
+  ];
+}
+
+// ---------------------------------------------------------------- clocks
+
+export function isTimed(state: CardState): state is TimedState {
+  return (TIMED_STATES as readonly string[]).includes(state);
+}
+
+/**
+ * The clocks after this look: a card in a timed state keeps its clock while
+ * its state and sig stay the same, and gets a new one from now otherwise. A
+ * clock whose card is gone stops only when a good read of the card's home
+ * says it is gone (or the home is gone); a stored card's stops at once.
+ */
+export function nextClocks(
+  previous: Frozen<Record<string, Clock>>,
+  cards: readonly Card[],
+  context: Pick<LifecycleContext, "fresh" | "present" | "nowMs">,
+): Record<string, Clock> {
+  const now = new Date(context.nowMs).toISOString();
+  const clocks: Record<string, Clock> = {};
+  for (const found of cards) {
+    if (!isTimed(found.state)) continue;
+    const old = previous[found.key];
+    const same = old !== undefined && old.state === found.state && old.sig === found.sig;
+    clocks[found.key] = same ? { ...old } : { state: found.state, since: now, sig: found.sig };
+  }
+  for (const [key, clock] of Object.entries(previous)) {
+    if (clocks[key] !== undefined) continue;
+    const home = homeOfKey(key);
+    if (home !== null && context.present.has(home) && !context.fresh.has(home))
+      clocks[key] = { ...clock };
+  }
+  return clocks;
+}
+
+const READ_KINDS = new Set<string>(["hold", "queued", "agent", "question"]);
+
+/** The home a card key names, or null for a card the board stores. */
+export function homeOfKey(key: string): string | null {
+  const [kind, home] = key.split("\t");
+  return kind !== undefined && READ_KINDS.has(kind) ? (home ?? null) : null;
+}
+
+/** How far past its deadlines a timed card is, by the captain's settings. */
+export function lateness(
+  found: Card,
+  clock: Frozen<Clock> | undefined,
+  settings: Frozen<LifecycleSettings>,
+  nowMs: number,
+): { reminded: boolean; overdue: boolean } {
+  if (!isTimed(found.state)) return { reminded: false, overdue: false };
+  const deadline = settings[found.state];
+  if (found.state === "S6")
+    return { reminded: found.count >= deadline.remind, overdue: found.count >= deadline.raise };
+  if (clock === undefined) return { reminded: false, overdue: false };
+  const minutes = (nowMs - Date.parse(clock.since)) / 60_000;
+  return { reminded: minutes >= deadline.remind, overdue: minutes >= deadline.raise };
+}
+
+/**
+ * Where an overdue card goes (spec/lifecycle.markdown section 2.13): a topic
+ * with no work becomes the board's 沒人處理的議題 card, a decision waiting on
+ * work the board cannot see goes into the queue itself, a hands-on item that
+ * was never checked goes back to 要你動手, every other card joins its topic's
+ * 沒人接 card. The board never proposes closing anything.
+ */
+export function destinationOf(state: TimedState): "idle" | "queue" | "unverified" | "stall" {
+  if (state === "T2") return "idle";
+  if (state === "D5") return "queue";
+  return state === "O3" ? "unverified" : "stall";
+}
+
+// ---------------------------------------------------------------- one look at the board
+
+/** One member line of a 沒人接 card: a card, with every overdue state it is in (X6). */
+export interface StallMember {
+  key: string;
+  kind: CardKind;
+  home: string | null;
+  /** The task, item or schedule id. */
+  id: string;
+  label: string;
+  states: TimedState[];
+  since: string;
+}
+
+/** A 沒人處理的議題 card as the page shows it: the board's fact, with its one fixed sentence. */
+export interface IdleView {
+  topic: string;
+  since: string;
+  text: string;
+}
+
+/** A 沒人接 card as the page shows it. */
+export interface StallView {
+  key: string;
+  topic: string | null;
+  state: "N2" | "N4";
+  since: string;
+  deferred_until: string | null;
+  members: StallMember[];
+}
+
+/** What one look at the board found, and what the board should save and do. */
+export interface Evaluation {
+  cards: Card[];
+  memory: LifecycleMemory;
+  /** The board's own transitions this look made: stall.raised, stall.settled, todo.unverified. */
+  records: Draft[];
+  /** The 沒人處理的議題 cards: topics with no work past their deadline. */
+  idle: IdleView[];
+  /** Keys of decisions waiting on work the board cannot see, now in the queue (D5). */
+  queued: Set<string>;
+  /** Hands-on items whose check never came (O5). */
+  unverified: Set<string>;
+  stalls: StallView[];
+}
+
+/** The topics each good read showed work under; a home not read well keeps what it had. */
+export function nextHomes(
+  previous: Frozen<Record<string, string[]>>,
+  cards: readonly Card[],
+  context: Pick<LifecycleContext, "fresh" | "present">,
+): Record<string, string[]> {
+  const seen = new Map<string, Set<string>>();
+  for (const [topic, homes] of Object.entries(previous))
+    seen.set(
+      topic,
+      new Set(homes.filter((home) => context.present.has(home) && !context.fresh.has(home))),
+    );
+  for (const found of cards) {
+    if (found.home === null || found.topic === null || !context.fresh.has(found.home)) continue;
+    if (found.state === "A9") continue;
+    seen.set(found.topic, (seen.get(found.topic) ?? new Set()).add(found.home));
+  }
+  const homes: Record<string, string[]> = {};
+  for (const [topic, set] of seen) if (set.size > 0) homes[topic] = [...set].toSorted();
+  return homes;
+}
+
+/** The 沒人處理的議題 card's sentence (spec/lifecycle.markdown): a fact, not a proposal. */
+export function idleText(settings: Frozen<LifecycleSettings>, label: string): string {
+  return `這個議題 ${durationWords(settings.T2.raise)}沒有任何工作，${label} 也沒處理`;
+}
+
+function baseKey(key: string): string {
+  return key.endsWith("\tNT") ? key.slice(0, -3) : key;
+}
+
+function idOfKey(found: Card): string {
+  const parts = baseKey(found.key).split("\t");
+  return parts.slice(found.home === null ? 1 : 2).join("\t");
+}
+
+/** The member lines of a 沒人接 card: one per card, its overdue states together (X6). */
+function memberLines(
+  keys: readonly string[],
+  cards: ReadonlyMap<string, Card>,
+  clocks: Frozen<Record<string, Clock>>,
+): StallMember[] {
+  const lines = new Map<string, StallMember>();
+  for (const key of keys) {
+    const found = cards.get(key);
+    const clock = clocks[key];
+    if (found === undefined || clock === undefined) continue;
+    const base = baseKey(key);
+    const line = lines.get(base) ?? {
+      key: base,
+      kind: found.kind,
+      home: found.home,
+      id: idOfKey(found),
+      label: found.label,
+      states: [],
+      since: clock.since,
+    };
+    line.states.push(clock.state);
+    if (clock.since < line.since) line.since = clock.since;
+    lines.set(base, line);
+  }
+  return [...lines.values()];
+}
+
+/** The record that a hands-on item's check never came: it is back with the captain (O5). */
+function unverifiedRecord(found: Card, settings: Frozen<LifecycleSettings>): Draft {
+  return {
+    kind: "todo.unverified",
+    topic: found.topic,
+    item: idOfKey(found),
+    text: `要你動手「${found.label}」：你按了做完了，${durationWords(settings.O3.raise)}都沒有驗證，回到要你動手`,
+  };
+}
+
+/**
+ * One look at the board: every card's state, the clocks of the timed ones,
+ * and what is overdue. A read card escalates only while its home's last read
+ * is good, or once it already did; a stored card escalates on time alone.
+ */
+export function evaluate(view: BoardView, context: LifecycleContext): Evaluation {
+  const { store, nowMs } = context;
+  const cards = cardsOf(view, context);
+  const clocks = nextClocks(store.clocks, cards, context);
+  const already = new Set(Object.values(store.stalls).flatMap((stall) => stall.members));
+  const result: Evaluation = {
+    cards,
+    memory: { clocks, homes: nextHomes(store.homes, cards, context), stalls: {}, idle: {} },
+    records: [],
+    idle: [],
+    queued: new Set(),
+    unverified: new Set(),
+    stalls: [],
+  };
+  const members = new Map<string, string[]>();
+  const idleTopics: string[] = [];
+  for (const found of cards) {
+    if (!isTimed(found.state) || !lateness(found, clocks[found.key], store.settings, nowMs).overdue)
+      continue;
+    const home = found.home;
+    if (home !== null && !context.fresh.has(home) && !already.has(found.key)) continue;
+    escalate(result, { members, idle: idleTopics }, found, store.settings);
+  }
+  const nameOf = (key: string): string => view.topics[key]?.name ?? key;
+  const step = stallStep(store.stalls, members, nameOf, nowMs);
+  const idle = idleStep(store.idle, idleTopics, nameOf, nowMs);
+  result.memory.stalls = step.stalls;
+  result.memory.idle = idle.idle;
+  result.records.push(...step.records, ...idle.records);
+  const text = idleText(store.settings, context.label);
+  result.idle = Object.entries(idle.idle).map(([topic, since]) => ({ topic, since, text }));
+  const byKey = new Map(cards.map((found) => [found.key, found]));
+  result.stalls = Object.entries(step.stalls).map(([key, stall]) => ({
+    key,
+    topic: key === NO_TOPIC ? null : key,
+    state: stallState(stall, nowMs),
+    since: stall.since,
+    deferred_until: stall.deferred?.until ?? null,
+    members: memberLines(stall.members, byKey, clocks),
+  }));
+  return result;
+}
+
+/** Sends one overdue card where its state goes (destinationOf). */
+function escalate(
+  result: Evaluation,
+  raised: { members: Map<string, string[]>; idle: string[] },
+  found: Card,
+  settings: Frozen<LifecycleSettings>,
+): void {
+  const state = found.state as TimedState;
+  const clock = result.memory.clocks[found.key] as Clock;
+  const { members } = raised;
+  switch (destinationOf(state)) {
+    case "idle":
+      raised.idle.push(idOfKey(found));
+      return;
+    case "queue":
+      result.queued.add(found.key);
+      return;
+    case "unverified":
+      result.unverified.add(idOfKey(found));
+      if (clock.raised === true) return;
+      clock.raised = true;
+      result.records.push(unverifiedRecord(found, settings));
+      return;
+    case "stall": {
+      const key = stallKeyOf(found.topic);
+      members.set(key, [...(members.get(key) ?? []), found.key]);
+    }
+  }
+}
+
+/** A board record as the lifecycle reads it: which schedule's pause, and who made it. */
+export interface PauseRecord {
+  kind: string;
+  topic?: string | null;
+  by?: string;
+}
+
+/** Occurrences in a row, from the newest, that nobody took or that timed out; a missed one does not break the run. */
+function unansweredRun(entries: readonly { outcome: string }[]): number {
+  let count = 0;
+  for (const entry of entries.toReversed()) {
+    if (entry.outcome === "missed") continue;
+    if (entry.outcome !== "untaken" && entry.outcome !== "timed_out") break;
+    count += 1;
+  }
+  return count;
+}
+
+/** Every schedule as the lifecycle reads it, with who paused it last from its records. */
+export function scheduleLines(
+  store: Frozen<ScheduleStore>,
+  topicOf: (id: string) => string,
+  records: readonly PauseRecord[],
+): ScheduleLine[] {
+  const pausedBy = new Map<string, string | null>();
+  for (const record of records) {
+    if (record.topic === null || record.topic === undefined) continue;
+    if (record.kind === "schedule.paused") pausedBy.set(topicOf(record.topic), record.by ?? null);
+    if (record.kind === "schedule.resumed") pausedBy.set(topicOf(record.topic), null);
+  }
+  const open = new Set(Object.values(store.occurrences).map((occurrence) => occurrence.series));
+  return Object.entries(store.series).map(([id, series]) => {
+    const topic = topicOf(series.topic);
+    return {
+      id,
+      topic,
+      title: series.title,
+      state: series.state,
+      pausedBy: pausedBy.get(topic) ?? null,
+      waitsEnable: store.settings.aggregator_needs_enable && isNew(series),
+      unanswered: unansweredRun(store.recent[id] ?? []),
+      open: open.has(id),
+    };
+  });
+}
+
+// ---------------------------------------------------------------- the stored cards' transitions
+
+/** A hands-on item's state now: O5 is a claim whose check is past its deadline. */
+export function todoState(
+  item: { state: string },
+  clock: Frozen<Clock> | undefined,
+  settings: Frozen<LifecycleSettings>,
+  nowMs: number,
+): CardState {
+  const state = TODO_STATES[item.state] ?? "O6";
+  if (state !== "O3" || clock === undefined) return state;
+  return nowMs - Date.parse(clock.since) >= settings.O3.raise * 60_000 ? "O5" : "O3";
+}
+
+const TODO_ANY: readonly CardState[] = ["O1", "O2", "O3", "O4", "O5", "O6"];
+
+/**
+ * The states each operation on a hands-on item may start from
+ * (spec/lifecycle.markdown, 要你動手); from any other it is refused and
+ * changes nothing. 做完了 again on a claim changes nothing.
+ */
+export const TODO_TRANSITIONS: Readonly<Record<string, readonly CardState[]>> = {
+  "todo-add": TODO_ANY,
+  "todo-claim": ["O1", "O2", "O3", "O5"],
+  "todo-failed": ["O1", "O3", "O5"],
+  "todo-done": TODO_ANY,
+  "todo-obsolete": TODO_ANY,
+  "todo-drop": ["O1", "O2", "O6"],
+  "todo-takedown": ["O4"],
+  "todo-accept": ["O5"],
+  "todo-unclaim": ["O5"],
+};
+
+const TODO_WORDS: Record<string, string> = {
+  O1: "還沒做",
+  O2: "驗證沒過",
+  O3: "等驗證",
+  O4: "不再需要，等你撤下",
+  O5: "按了做完了、一直沒有驗證",
+  O6: "狀態不明",
+};
+
+/** Why `op` may not run on an item in `state`, naming what may; null when it may. */
+export function todoTransitionProblem(op: string, id: string, state: CardState): string | null {
+  const from = TODO_TRANSITIONS[op];
+  if (from === undefined || from.includes(state)) return null;
+  const may = Object.entries(TODO_TRANSITIONS)
+    .filter(([name, starts]) => name !== "todo-add" && starts.includes(state))
+    .map(([name]) => name);
+  return `${id} 現在是「${TODO_WORDS[state] ?? state}」，不能 ${op}；現在能做的：${may.join("、")}。`;
+}
+
+// ---------------------------------------------------------------- the captain's changes
+
+/** The store with the captain's new deadline settings. */
+export function withSettings(
+  store: Frozen<LifecycleStore>,
+  settings: LifecycleSettings,
+): LifecycleStore {
+  return { ...(structuredClone(store) as LifecycleStore), settings };
+}
+
+/** The store with one 沒人接 card replaced (the captain's 延到). */
+export function withStall(
+  store: Frozen<LifecycleStore>,
+  key: string,
+  stall: Stall,
+): LifecycleStore {
+  const next = structuredClone(store) as LifecycleStore;
+  next.stalls[key] = stall;
+  return next;
+}
+
+/** The store with a topic kept until `until` (先不關), and its 沒人處理的議題 card gone. */
+export function withKept(
+  store: Frozen<LifecycleStore>,
+  topic: string,
+  until: string,
+): LifecycleStore {
+  const next = structuredClone(store) as LifecycleStore;
+  next.kept[topic] = until;
+  delete next.idle[topic];
+  return next;
+}

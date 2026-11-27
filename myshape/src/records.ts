@@ -25,9 +25,11 @@ export const RECORD_KINDS = [
   "todo.dropped",
   "todo.taken_down",
   "todo.marks_carried",
+  "todo.unverified",
   "hold.opened",
   "hold.answered",
   "hold.closed",
+  "hold.vanished",
   "agent.tagged",
   "program.confirmed",
   "writes.released",
@@ -63,6 +65,10 @@ export const RECORD_KINDS = [
   "occurrence.taken",
   "occurrence.closed",
   "occurrence.missed",
+  "stall.raised",
+  "stall.settled",
+  "lifecycle.answered",
+  "lifecycle.settings_changed",
 ] as const;
 export type RecordKind = (typeof RECORD_KINDS)[number];
 

@@ -21,6 +21,16 @@ import type { ScheduleResult, ScheduleStore } from "./schedules.js";
 import { scheduleEnv, scheduleOperations } from "./schedule-ops.js";
 import { closedNotice } from "./schedule-notices.js";
 import type { ScheduleNotice } from "./schedule-notices.js";
+import {
+  todoState,
+  todoTransitionProblem,
+  withKept,
+  withSettings,
+  withStall,
+} from "./lifecycle.js";
+import type { LifecycleStore } from "./lifecycle.js";
+import { KEEP_DEFAULT_DAYS, KEEP_MAX_DAYS, changeSettings } from "./lifecycle-settings.js";
+import { deferStall } from "./stalls.js";
 
 /** What an operation reads: the board as it is, who the agent side is, and the time. */
 export interface OpContext {
@@ -29,6 +39,7 @@ export interface OpContext {
   confirmations: Frozen<ConfirmationStore>;
   hashtags: Frozen<HashtagStore>;
   schedules: Frozen<ScheduleStore>;
+  lifecycle: Frozen<LifecycleStore>;
   /** The board's saved records, oldest first, which the hashtag and schedule rails read. */
   records: readonly HashtagRecord[];
   /** This machine's time zone, for a schedule made without one. */
@@ -59,6 +70,12 @@ interface TopicOperation {
   hashtags?: (ctx: OpContext, args: Record<string, unknown>, result: TopicOk) => Follow;
   /** The change's part in schedules.json (archiving pauses the topic's schedule), or null. */
   schedules?: (ctx: OpContext, result: TopicOk) => SchedulePart | null;
+  /** The change's part in lifecycle.json (先不關's date), or null. */
+  lifecycle?: (
+    ctx: OpContext,
+    args: Record<string, unknown>,
+    result: TopicOk,
+  ) => Frozen<LifecycleStore> | null;
 }
 
 type TopicOk = Extract<TopicResult, { ok: true }>;
@@ -88,12 +105,25 @@ export interface ScheduleOperation {
   run: (ctx: OpContext, args: Record<string, unknown>) => ScheduleResult;
 }
 
+/** What a captain's lifecycle change did: the deadlines, or a 延到 on a 沒人接 card. */
+type LifecycleResult =
+  | { ok: true; changed: true; store: LifecycleStore; line: string; records: Records }
+  | { ok: true; changed: false; line: string }
+  | { ok: false; code: "refused" | "usage"; line: string };
+
+interface LifecycleOperation {
+  channel: "page";
+  commitFile: "lifecycle";
+  run: (ctx: OpContext, args: Record<string, unknown>) => LifecycleResult;
+}
+
 export type Operation =
   | TopicOperation
   | TodoOperation
   | ConfirmOperation
   | HashtagOperation
-  | ScheduleOperation;
+  | ScheduleOperation
+  | LifecycleOperation;
 
 /** The schedule on `id`, if any. */
 function scheduled(ctx: OpContext, id: string): boolean {
@@ -128,6 +158,20 @@ function afterPosition(args: Record<string, unknown>): MovePosition | null {
 function positionOf(ctx: OpContext, args: Record<string, unknown>): MovePosition | null {
   const fromPage = ctx.by === "captain";
   return fromPage && args["after"] !== undefined ? afterPosition(args) : movePosition(args);
+}
+
+/** Why a hands-on operation may not start from its item's state now (lifecycle.ts TODO_TRANSITIONS). */
+function transitionProblem(
+  op: string,
+  ctx: OpContext,
+  args: Record<string, unknown>,
+): string | null {
+  const id = stringField(args, "task");
+  const item = id === null || !Object.hasOwn(ctx.todos.items, id) ? undefined : ctx.todos.items[id];
+  if (id === null || item === undefined) return null;
+  const clock = ctx.lifecycle.clocks[`todo\t${id}`];
+  const state = todoState(item, clock, ctx.lifecycle.settings, Date.parse(ctx.now));
+  return todoTransitionProblem(op, id, state);
 }
 
 /** The `reason` argument: absent, a string, or null when it is something else. */
@@ -326,6 +370,97 @@ function textOp(
     const value = stringField(args, "value");
     if (id === null || value === null) return { usage: problem };
     return apply(ctx.topics, id, value, ctx.now);
+  };
+}
+
+/** How many days 先不關 or 延到 asks for: the default when absent, null when it is not 1 to KEEP_MAX_DAYS. */
+function daysOf(args: Record<string, unknown>): number | null {
+  const days = args["days"] ?? KEEP_DEFAULT_DAYS;
+  return typeof days === "number" && Number.isInteger(days) && days >= 1 && days <= KEEP_MAX_DAYS
+    ? days
+    : null;
+}
+
+/**
+ * The captain's 先不關 on a close proposal: until a date (`days`, 14 by
+ * default, at most 90), or moved to 待辦 (`later: true`); never with no choice.
+ */
+function keep(ctx: OpContext, args: Record<string, unknown>): TopicResult | Usage {
+  const id = stringField(args, "id");
+  if (id === null) return { usage: "keep 需要議題 id。" };
+  if (args["later"] !== true && daysOf(args) === null)
+    return { usage: `先不關要選幾天（1 到 ${KEEP_MAX_DAYS}），或移到待辦。` };
+  const kept = topics.keepOpen(ctx.topics, id);
+  if (!kept.ok || !kept.changed || args["later"] !== true) return kept;
+  const target = topics.resolveTopicId(ctx.topics.doc, id);
+  const moved = topics.move(kept.state, target, "later", { last: true }, ctx.now);
+  if (!moved.ok || !moved.changed) return kept;
+  return {
+    ...moved,
+    line: `${kept.line}，移到「待辦」`,
+    records: [...kept.records, ...moved.records],
+  };
+}
+
+/** 先不關 until a date keeps that date in lifecycle.json; moving to 待辦 needs none. */
+function keptUntil(
+  ctx: OpContext,
+  args: Record<string, unknown>,
+  result: TopicOk,
+): Frozen<LifecycleStore> | null {
+  const days = daysOf(args);
+  if (!result.changed || args["later"] === true || days === null) return null;
+  const id = topics.resolveTopicId(ctx.topics.doc, stringField(args, "id") ?? "");
+  const until = new Date(Date.parse(ctx.now) + days * 86_400_000).toISOString();
+  return withKept(ctx.lifecycle, id, until);
+}
+
+/**
+ * The captain's answer on one of the board's own cards: 先不關，到某天 on a
+ * 沒人處理的議題 card (`card: "idle"`, `key` its topic id), or 延到 <日期> on a
+ * 沒人接 card (`card: "stall"`, `key` its topic id or "-"). The other buttons
+ * of both are operations the board already has (archive, move).
+ */
+function deferAnswer(ctx: OpContext, args: Record<string, unknown>): LifecycleResult {
+  const key = stringField(args, "key");
+  if (key === null) return { ok: false, code: "usage", line: "需要卡的 key。" };
+  if (args["card"] === "idle") return keepIdle(ctx, key, daysOf(args));
+  if (args["card"] !== "stall")
+    return { ok: false, code: "usage", line: "card 要是 idle 或 stall。" };
+  const nameOf = (id: string): string => ctx.topics.doc.topics[id]?.name ?? id;
+  const nowMs = Date.parse(ctx.now);
+  const result = deferStall(ctx.lifecycle.stalls, key, args["days"] ?? KEEP_DEFAULT_DAYS, {
+    nameOf,
+    nowMs,
+  });
+  if (!result.ok) return result;
+  const store = withStall(ctx.lifecycle, key, result.stall);
+  return { ok: true, changed: true, store, line: result.line, records: result.records };
+}
+
+/** 先不關，到某天 on a 沒人處理的議題 card: the topic waits until then (T4), and the card goes. */
+function keepIdle(ctx: OpContext, topic: string, days: number | null): LifecycleResult {
+  if (ctx.lifecycle.idle[topic] === undefined)
+    return { ok: false, code: "refused", line: `${topic} 現在不是「沒人處理的議題」。` };
+  if (days === null)
+    return { ok: false, code: "usage", line: `先不關要選幾天（1 到 ${KEEP_MAX_DAYS}）。` };
+  const until = new Date(Date.parse(ctx.now) + days * 86_400_000).toISOString();
+  const store = withKept(ctx.lifecycle, topic, until);
+  const name = ctx.topics.doc.topics[topic]?.name ?? topic;
+  const day = until.slice(5, 10);
+  return {
+    ok: true,
+    changed: true,
+    store,
+    line: `ok ${topic} 先不關，到 ${day}`,
+    records: [
+      {
+        kind: "lifecycle.answered",
+        topic,
+        outcome: "kept",
+        text: `「沒人處理的議題」議題「${name}」：先不關，到 ${day}`,
+      },
+    ],
   };
 }
 
@@ -583,14 +718,7 @@ export const OPERATIONS = {
     },
     schedules: archiveSchedules,
   },
-  keep: {
-    channel: "page",
-    commitFile: "topics",
-    run: (ctx, args) => {
-      const id = stringField(args, "id");
-      return id === null ? { usage: "keep 需要議題 id。" } : topics.keepOpen(ctx.topics, id);
-    },
-  },
+  keep: { channel: "page", commitFile: "topics", run: keep, lifecycle: keptUntil },
   reopen: {
     channel: "both",
     commitFile: "topics",
@@ -629,6 +757,27 @@ export const OPERATIONS = {
   },
   "todo-drop": { channel: "page", commitFile: "todos", run: closeByCaptain("不做了") },
   "todo-takedown": { channel: "page", commitFile: "todos", run: closeByCaptain("撤下") },
+  "todo-accept": {
+    channel: "page",
+    commitFile: "todos",
+    run: onItem((ctx, task) => todos.closeUnverified(ctx.todos, task, ctx.label)),
+  },
+  "todo-unclaim": {
+    channel: "page",
+    commitFile: "todos",
+    run: onItem((ctx, task) => todos.unclaimItem(ctx.todos, task, ctx.now, ctx.label)),
+  },
+  "lifecycle-settings": {
+    channel: "page",
+    commitFile: "lifecycle",
+    run: (ctx, args) => {
+      const result = changeSettings(ctx.lifecycle.settings, args);
+      if (!result.ok || !result.changed) return result;
+      const store = withSettings(ctx.lifecycle, result.settings);
+      return { ok: true, changed: true, store, line: result.line, records: result.records };
+    },
+  },
+  "lifecycle-answer": { channel: "page", commitFile: "lifecycle", run: deferAnswer },
   // The page's route computes every argument itself (api.ts); a page request never names them.
   "program-confirm": {
     channel: "page",
@@ -757,7 +906,7 @@ function commit(
   if (!saved.ok) return answer(board, refused(saved.line));
   return {
     ...answer(saved.board, { ok: true, line }),
-    committed: change.file,
+    committed: change.file === "memory" ? "lifecycle" : change.file,
     records: saved.records,
     appendError: saved.appendError,
   };
@@ -780,6 +929,7 @@ function applyTopicOp(
     result: TopicResult;
     follow: (result: TopicOk) => Follow;
     schedules: (result: TopicOk) => SchedulePart | null;
+    lifecycle: (result: TopicOk) => Frozen<LifecycleStore> | null;
   },
 ): Applied {
   const { result } = run;
@@ -812,6 +962,7 @@ function applyTopicOp(
           },
         }),
     ...schedulePartOf(run.schedules(result)),
+    ...lifecyclePartOf(run.lifecycle(result)),
   };
   return {
     ...commit(target, board, change, actor, withFollowLine(stamped.line, follow)),
@@ -899,12 +1050,41 @@ function runTopicOp(
   const follow = (ok: TopicOk): Follow =>
     operation.hashtags?.(ctx, request.args, ok) ?? { follow: null, line: "" };
   const part = (ok: TopicOk): SchedulePart | null => operation.schedules?.(ctx, ok) ?? null;
-  return applyTopicOp(target, board, request, actor, { result, follow, schedules: part });
+  const lifecycle = (ok: TopicOk): Frozen<LifecycleStore> | null =>
+    operation.lifecycle?.(ctx, request.args, ok) ?? null;
+  return applyTopicOp(target, board, request, actor, {
+    result,
+    follow,
+    schedules: part,
+    lifecycle,
+  });
 }
 
 /** A topic change's part in schedules.json as the change carries it. */
 function schedulePartOf(part: SchedulePart | null): { schedules?: SchedulePart } {
   return part === null ? {} : { schedules: part };
+}
+
+function lifecyclePartOf(part: Frozen<LifecycleStore> | null): {
+  lifecycle?: Frozen<LifecycleStore>;
+} {
+  return part === null ? {} : { lifecycle: part };
+}
+
+function applyLifecycleOp(
+  target: CommitTarget,
+  board: StoredBoard,
+  actor: Actor,
+  result: LifecycleResult,
+): Applied {
+  if (!result.ok) return answer(board, { ok: false, code: result.code, line: result.line });
+  if (!result.changed) return answer(board, { ok: true, line: result.line });
+  const change = {
+    file: "lifecycle" as const,
+    next: result.store,
+    records: withSuffix(result.records, "你在頁面上"),
+  };
+  return commit(target, board, change, actor, result.line);
 }
 
 function applyScheduleOp(
@@ -967,10 +1147,13 @@ export function applyOperation(
     confirmations: board.confirmations,
     hashtags: board.hashtags,
     schedules: board.schedules,
+    lifecycle: board.lifecycle,
     by,
     ...who,
   };
   const actor: Actor = { by, label: who.label };
+  const blocked = transitionProblem(request.op, ctx, request.args);
+  if (blocked !== null) return answer(board, refused(blocked));
   if (operation.commitFile === "topics")
     return runTopicOp(target, board, request, actor, { operation, ctx });
   if (operation.commitFile === "hashtags")
@@ -979,5 +1162,7 @@ export function applyOperation(
     return applyConfirmOp(target, board, request, actor, operation.run(ctx, request.args));
   if (operation.commitFile === "schedules")
     return applyScheduleOp(target, board, request, actor, operation.run(ctx, request.args));
+  if (operation.commitFile === "lifecycle")
+    return applyLifecycleOp(target, board, actor, operation.run(ctx, request.args));
   return applyTodoOp(target, board, request, actor, operation.run(ctx, request.args));
 }

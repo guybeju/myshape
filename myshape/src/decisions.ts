@@ -255,6 +255,33 @@ function closeDrafts(read: DecisionRead, wasOpen: Set<string>, closed: ClosedHol
 }
 
 /**
+ * The decisions the last good read showed open that this one shows neither
+ * open nor closed (D12): each leaves a hold.vanished record. Only a home that
+ * reports its closed decisions can say so; for any other, a close looks the same.
+ */
+function vanishedOf(read: DecisionRead): Draft[] {
+  const { previous, report } = read;
+  if (report.closed_cursor === null || previous === undefined || previous.cursor === null)
+    return [];
+  const present = new Set([...report.holds, ...report.closed_holds].map((hold) => hold.id));
+  return previous.openSeen.flatMap((seen) => {
+    const [task = "", set = ""] = seen.split("\t");
+    const key = `hold.vanished\t${read.home}\t${task}\t${set}`;
+    if (present.has(task) || read.saved(key)) return [];
+    return [
+      {
+        kind: "hold.vanished" as const,
+        topic: read.topicOf(task, ""),
+        home: read.home,
+        task,
+        key,
+        text: `待決事項 ${read.home}/${task} 從回報裡不見了，沒有關閉的紀錄`,
+      },
+    ];
+  });
+}
+
+/**
  * The records one good read of a home leaves, and what to remember of it. A
  * hold not seen at the last read gets an opening at its set time; a closed
  * decision not seen before gets a close at the time the home's hold line
@@ -279,7 +306,7 @@ export function decisionStep(read: DecisionRead): DecisionStep {
       .filter((key) => !waiting.has(key)),
   };
   return {
-    drafts: [...openingsOf(read), ...closes.drafts],
+    drafts: [...openingsOf(read), ...closes.drafts, ...vanishedOf(read)],
     next: { ...seen, seenAt: seenAtOf(previous, seen, read.readStartedAt) },
   };
 }

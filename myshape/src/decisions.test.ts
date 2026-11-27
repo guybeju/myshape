@@ -217,7 +217,10 @@ describe("decisionStep", () => {
       const { drafts } = reads([
         report({ closed_cursor: START }),
         report({ code_commit: "c2", holds: [hold("gap", { hold_set: null })] }),
-        report({ code_commit: "c3", holds: [hold("dated", { hold_set: "2026-11-22" })] }),
+        report({
+          code_commit: "c3",
+          holds: [hold("gap", { hold_set: null }), hold("dated", { hold_set: "2026-11-22" })],
+        }),
       ]);
       expect(kinds(drafts)).toEqual([[], [], []]);
     });
@@ -430,6 +433,31 @@ describe("decisionStep", () => {
       ]);
       expect(drafts[1]?.[0]?.text.endsWith(words), words).toBe(true);
     }
+  });
+});
+
+describe("a decision that vanished (D12)", () => {
+  const kinds = (drafts: ReturnType<typeof reads>["drafts"]) =>
+    drafts.map((list) => list.map((draft) => `${draft.kind} ${draft.task ?? ""}`));
+  it("records once a decision gone from a read with no close for it", () => {
+    const { drafts } = reads([
+      report({ closed_cursor: START, holds: [hold("gone"), hold("tagged"), hold("stays")] }),
+      report({ holds: [hold("stays")], closed_holds: [closed("tagged")] }),
+      report({ holds: [hold("stays")] }),
+    ]);
+    expect(kinds(drafts)).toEqual([[], ["hold.closed tagged", "hold.vanished gone"], []]);
+    expect(drafts[1]?.find((draft) => draft.kind === "hold.vanished")).toMatchObject({
+      home: "main",
+      task: "gone",
+      key: `hold.vanished\tmain\tgone\t${hold("gone").hold_set ?? ""}`,
+      text: "待決事項 main/gone 從回報裡不見了，沒有關閉的紀錄",
+    });
+  });
+
+  it("says nothing for a home that reports no closed decisions, nor on the first read", () => {
+    const silent = { closed_cursor: null };
+    const { drafts } = reads([report({ ...silent, holds: [hold("gone")] }), report(silent)]);
+    expect(kinds(drafts)).toEqual([[], []]);
   });
 });
 

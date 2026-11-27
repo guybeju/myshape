@@ -2,12 +2,22 @@
 // inputs always give the same view.
 import type { Frozen } from "./records.js";
 import type { BoardEvent, JournalEvent, LedgerEvent, Summary } from "./journal.js";
-import type { HomeReport, OnAnswer, ReportHold, ReportQueued, ReportTask } from "./report.js";
+import type {
+  HoldBucket,
+  HomeReport,
+  OnAnswer,
+  ReportHold,
+  ReportQueued,
+  ReportTask,
+} from "./report.js";
 import { orNull } from "./files.js";
 import { QUEUES, resolveTopicId } from "./topics.js";
 import type { Queue, TopicState } from "./topics.js";
 import { itemTopic } from "./todos.js";
 import type { ItemState, TodoStore } from "./todos.js";
+import { emptyLifecycle, evaluate } from "./lifecycle.js";
+import type { Evaluation, IdleView, LifecycleContext, StallView } from "./lifecycle.js";
+import { BOARD_CAP, TURN_ORDER } from "./lifecycle-settings.js";
 
 export type Light = "decide" | "stuck" | "working" | "done" | "unknown";
 export type HomeVersion = "same" | "different" | "incompatible" | "unreported" | "unknown";
@@ -34,6 +44,8 @@ export interface ViewInput {
   label: string;
   /** How many live decisions are shown at a time (the root report's cap), or null for all. */
   decisionsAtOnce: number | null;
+  /** What every card's lifecycle reads besides the view; none means no clocks and every read home fresh. */
+  lifecycle?: LifecycleContext;
 }
 
 export type Placement =
@@ -77,6 +89,10 @@ export interface QueuedView {
   topic: string | null;
   /** What keeps the item from being dispatched, or null when nothing does. */
   waiting: string | null;
+  /** The home's own words for it: a question for the captain, held, and the ids it waits for. */
+  captain: boolean;
+  held: boolean;
+  blockers: string[];
 }
 
 /**
@@ -94,6 +110,10 @@ export interface TodoView {
   commands: string[];
   state: ItemState;
   reason: string | null;
+  /** The state word todos.json holds for an item in the "unknown" state (O6), else null. */
+  unknown_state: string | null;
+  /** Claimed, and the aggregator's check never came within its deadline (O5). */
+  unverified: boolean;
 }
 
 export interface HoldView {
@@ -113,6 +133,11 @@ export interface HoldView {
    */
   waits_turn: boolean;
   deferred_reason: string | null;
+  /** Why a decision is in the queue though the home defers it: aged, dated and due, or overdue (D5). */
+  note: string | null;
+  bucket: HoldBucket;
+  /** The ids a blocked decision waits for. */
+  blockers: string[];
   topic: string | null;
   stale: boolean;
 }
@@ -178,7 +203,24 @@ export interface TopicView {
   status: "confirmed" | "archived";
   queue: Queue | null;
   close_reason: string | null;
+  /** When the aggregator's close proposal was made. */
+  close_at: string | null;
+  /** When 先不關 ends, while it has not. */
+  kept_until: string | null;
   archived_at: string | null;
+}
+
+/**
+ * One card in the captain's one queue: the aggregator's decision or close
+ * proposal, or one of the board's two cards that say nobody picked something
+ * up (沒人處理的議題, 沒人接).
+ */
+export interface TurnView {
+  kind: (typeof TURN_ORDER)[number];
+  /** "home\ttask" for a decision, the topic id for a close proposal or 沒人處理的議題, the stall key for 沒人接. */
+  key: string;
+  topic: string | null;
+  waits_turn: boolean;
 }
 
 export interface BoardView {
@@ -197,6 +239,12 @@ export interface BoardView {
   questions: QuestionView[];
   updates: UpdateView[];
   summaries: SummaryView[];
+  /** The captain's one queue, in its order; past the cap a card waits its turn. */
+  turns: TurnView[];
+  /** The 沒人接 cards, in front of the captain (N2) or put off (N4). */
+  stalls: StallView[];
+  /** The 沒人處理的議題 cards: topics in 高 or 一般 with no work past their deadline. */
+  idle: IdleView[];
 }
 
 /**
@@ -281,6 +329,8 @@ function deferredReason(hold: ReportHold): string | null {
       return `延到 ${hold.hold_until === null ? "之後" : hold.hold_until}`;
     case "blocked":
       return `等 ${hold.unresolved_blocker_ids.join("、")} 完成`;
+    case "unknown":
+      return `讀不懂的分類：${hold.unreadable ?? ""}`;
   }
 }
 
@@ -502,9 +552,21 @@ function agentsOf(
   return [...running, ...ended];
 }
 
-/** Whether a hold is due now, and if not, why it waits. */
-function holdTiming(hold: ReportHold): { live: boolean; deferred_reason: string | null } {
-  return { live: hold.hold_bucket === "live", deferred_reason: deferredReason(hold) };
+/**
+ * Whether a hold is due now, and if not, why it waits. An aged decision stays
+ * in the queue, and a dated one comes into it once its date comes, whatever
+ * the home's bucket says (spec/lifecycle.markdown, 待決事項).
+ */
+function holdTiming(
+  hold: ReportHold,
+  nowMs: number,
+): { live: boolean; deferred_reason: string | null; note: string | null } {
+  if (hold.hold_bucket === "aged")
+    return { live: true, deferred_reason: null, note: "已放超過 14 天" };
+  const due = hold.hold_until !== null && Date.parse(hold.hold_until) <= nowMs;
+  if (hold.hold_bucket === "dated" && due)
+    return { live: true, deferred_reason: null, note: `延到 ${hold.hold_until}，日期到了` };
+  return { live: hold.hold_bucket === "live", deferred_reason: deferredReason(hold), note: null };
 }
 
 /** A hold as shown, with the age that orders it among its topic's holds. */
@@ -513,7 +575,7 @@ interface RankedHold {
   ageDays: number;
 }
 
-function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): RankedHold[] {
+function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer, nowMs: number): RankedHold[] {
   if (home.report === null) return [];
   return home.report.holds.map((hold) => {
     const outcome = answerOutcome(hold);
@@ -530,7 +592,9 @@ function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): RankedHold
         options: parseOptions(hold.question),
         on_answer: outcome.on_answer,
         on_answer_recorded: outcome.recorded,
-        ...holdTiming(hold),
+        ...holdTiming(hold, nowMs),
+        bucket: hold.hold_bucket,
+        blockers: [...hold.unresolved_blocker_ids],
         waits_turn: false,
         topic: placement.topic,
         stale,
@@ -798,6 +862,8 @@ function topicViews(topics: Frozen<TopicState>): Record<string, TopicView> {
       status: topic.status,
       queue: orNull(QUEUES.find((queue) => topics.doc.queues[queue].includes(id))),
       close_reason: topic.close_proposal === undefined ? null : topic.close_proposal.reason,
+      close_at: topic.close_proposal?.at ?? null,
+      kept_until: null,
       archived_at: null,
     };
   }
@@ -808,13 +874,48 @@ function topicViews(topics: Frozen<TopicState>): Record<string, TopicView> {
       status: "archived",
       queue: null,
       close_reason: null,
+      close_at: null,
+      kept_until: null,
       archived_at: topic.archived_at,
     };
   }
   return views;
 }
 
+/** The lifecycle's inputs when the caller gives none: no clocks, every home with a report fresh. */
+function plainContext(input: ViewInput): LifecycleContext {
+  const reported = input.homes.filter(
+    (home) =>
+      home.report !== null &&
+      home.lastOkAt !== null &&
+      input.nowMs - home.lastOkAt <= input.staleMs,
+  );
+  return {
+    store: emptyLifecycle(),
+    schedules: [],
+    allPaused: false,
+    writes: [],
+    fresh: new Set(reported.map((home) => home.id)),
+    present: new Set(input.homes.map((home) => home.id)),
+    questions: new Map(),
+    label: input.label,
+    nowMs: input.nowMs,
+  };
+}
+
 export function buildView(input: ViewInput): BoardView {
+  return evaluateBoard(input).view;
+}
+
+/** The view and the lifecycle's look at it, which the service commits (board-server.ts). */
+export function evaluateBoard(input: ViewInput): { view: BoardView; evaluation: Evaluation } {
+  const view = baseView(input);
+  const context = input.lifecycle ?? plainContext(input);
+  const evaluation = evaluate(view, context);
+  return { view: finishView(view, evaluation, context, input.decisionsAtOnce), evaluation };
+}
+
+function baseView(input: ViewInput): BoardView {
   const placer = new Placer(input.topics, input.homes);
   const ledger = ledgerEvents(input);
   const last = lastEvents(ledger);
@@ -831,6 +932,9 @@ export function buildView(input: ViewInput): BoardView {
     closed_todos: closedTodos(input),
     closed_decisions: closedDecisions(input),
     questions: [],
+    turns: [],
+    stalls: [],
+    idle: [],
     updates: updatesOf(input, placer),
     summaries: input.summaries
       .map((summary) => ({
@@ -844,7 +948,7 @@ export function buildView(input: ViewInput): BoardView {
   input.homes.forEach((home, index) => {
     const stale = (homes[index] as HomeView).stale;
     view.agents.push(...agentsOf(home, stale, placer, last, runs));
-    ranked.push(...holdsOf(home, stale, placer));
+    ranked.push(...holdsOf(home, stale, placer, input.nowMs));
     if (home.report === null) return;
     for (const item of home.report.queued) {
       view.queued.push({
@@ -854,27 +958,118 @@ export function buildView(input: ViewInput): BoardView {
         title: item.title,
         topic: placer.queued(home.id, item).topic,
         waiting: waitingFor(item),
+        captain: item.captain,
+        held: item.hold !== null,
+        blockers: [...item.blockers],
       });
     }
     view.questions.push(...questionsOf(home.id, home.report, placer));
   });
-  view.holds = takeTurns(
-    ranked.toSorted(holdOrder(view)).map((entry) => entry.view),
-    input.decisionsAtOnce,
-  );
-  view.queued = view.queued.map((item) => queuedForTurn(item, view.holds));
+  view.holds = ranked.toSorted(holdOrder(view)).map((entry) => entry.view);
   view.todos = todoViews(input, view);
   return view;
 }
 
-/** Holds in the board's order with every live one past the first `cap` marked as waiting its turn. */
-function takeTurns(holds: HoldView[], cap: number | null): HoldView[] {
-  if (cap === null) return holds;
+/**
+ * The view with every card's lifecycle in it: a decision waiting on work the
+ * board cannot see is in the queue once overdue (D5), an item whose check
+ * never came says so (O5), and the one queue takes its turns.
+ */
+function finishView(
+  base: BoardView,
+  evaluation: Evaluation,
+  context: LifecycleContext,
+  cap: number | null,
+): BoardView {
+  const holds = base.holds.map((hold) => {
+    if (!evaluation.queued.has(`hold\t${hold.home}\t${hold.task}`)) return hold;
+    const note = `它等的 ${hold.blockers.join("、")} 看板找不到`;
+    return { ...hold, live: true, deferred_reason: null, note };
+  });
+  // The base order is the board's (holdRank); a decision now in the queue moves up with the live ones.
+  holds.sort((a, b) => Number(!a.live) - Number(!b.live));
+  const topics = { ...base.topics };
+  for (const [id, until] of Object.entries(context.store.kept)) {
+    const topic = topics[id];
+    if (topic !== undefined && Date.parse(until) > context.nowMs)
+      topics[id] = { ...topic, kept_until: until };
+  }
+  const view: BoardView = {
+    ...base,
+    topics,
+    holds,
+    todos: base.todos.map((todo) => ({
+      ...todo,
+      unverified: evaluation.unverified.has(todo.task),
+    })),
+    stalls: evaluation.stalls,
+    idle: evaluation.idle,
+  };
+  view.turns = takeTurns(turnEntries(view), cap);
+  const waiting = new Set(view.turns.filter((turn) => turn.waits_turn).map((turn) => turn.key));
+  view.holds = holds.map((hold) =>
+    waiting.has(turnKey(hold)) ? { ...hold, waits_turn: true } : hold,
+  );
+  view.queued = base.queued.map((item) => queuedForTurn(item, view.holds));
+  return view;
+}
+
+/** Sort key for a topic's card in the queue: its queue and place (archived and none last), then age. */
+function topicRank(view: BoardView, topic: string | null, since: string): [number, number, string] {
+  const queue = topic === null ? null : (view.topics[topic]?.queue ?? null);
+  if (topic === null || queue === null) return [QUEUES.length, 0, since];
+  return [QUEUES.indexOf(queue), view.queues[queue].indexOf(topic), since];
+}
+
+function byRank(view: BoardView) {
+  return (
+    a: { topic: string | null; since: string },
+    b: { topic: string | null; since: string },
+  ): number => {
+    const [left, right] = [topicRank(view, a.topic, a.since), topicRank(view, b.topic, b.since)];
+    return left[0] - right[0] || left[1] - right[1] || left[2].localeCompare(right[2]);
+  };
+}
+
+/**
+ * Every card of the one queue, in its order (decision 4, TURN_ORDER): the
+ * aggregator's decisions in the board's order, then its close proposals, then
+ * the board's 沒人處理的議題 and 沒人接 cards, each by its topic's queue and
+ * place, then age.
+ */
+function turnEntries(view: BoardView): TurnView[] {
+  const kinds: Record<TurnView["kind"], TurnView[]> = {
+    hold: view.holds
+      .filter((hold) => hold.live)
+      .map((hold) => ({ kind: "hold", key: turnKey(hold), topic: hold.topic, waits_turn: false })),
+    close: Object.entries(view.topics)
+      .filter(([, topic]) => topic.close_reason !== null)
+      .map(([id, topic]) => ({ topic: id, since: topic.close_at ?? "" }))
+      .toSorted(byRank(view))
+      .map(({ topic }) => ({ kind: "close", key: topic as string, topic, waits_turn: false })),
+    idle: view.idle
+      .toSorted(byRank(view))
+      .map((card) => ({ kind: "idle", key: card.topic, topic: card.topic, waits_turn: false })),
+    stall: view.stalls
+      .filter((stall) => stall.state === "N2")
+      .toSorted(byRank(view))
+      .map((stall) => ({ kind: "stall", key: stall.key, topic: stall.topic, waits_turn: false })),
+  };
+  return TURN_ORDER.flatMap((kind) => kinds[kind]);
+}
+
+/**
+ * The queue with every card past the cap waiting its turn. With the
+ * aggregator's decisions_at_once every kind counts toward it; without one the
+ * decisions are all shown and close proposals and the board's own cards take
+ * BOARD_CAP at a time.
+ */
+function takeTurns(turns: TurnView[], cap: number | null): TurnView[] {
   let shown = 0;
-  return holds.map((hold) => {
-    if (!hold.live) return hold;
+  return turns.map((turn) => {
+    if (cap === null && turn.kind === "hold") return turn;
     shown += 1;
-    return shown > cap ? { ...hold, waits_turn: true } : hold;
+    return shown > (cap ?? BOARD_CAP) ? { ...turn, waits_turn: true } : turn;
   });
 }
 
@@ -889,32 +1084,46 @@ function queuedForTurn(item: QueuedView, holds: HoldView[]): QueuedView {
   return own?.waits_turn === true ? { ...item, waiting: "決定排隊" } : item;
 }
 
+function queueKey(turn: Pick<TurnView, "kind" | "key">): string {
+  return `${turn.kind}\t${turn.key}`;
+}
+
 /**
- * Which decisions just got their turn: those `waiting` held (as "home\ttask")
- * that are live and no longer waiting. A decision that was never seen waiting
- * came to the front when it opened, which its home already knows.
+ * Which cards of the queue just got their turn: those `waiting` held (as
+ * "kind\tkey") that are now shown. A card that was never seen waiting came
+ * to the front when it appeared, which its home already knows.
  *
  * Returns:
- *   The decisions whose turn came, in the board's order, and the keys of
- *   those still waiting, to pass to the next call.
+ *   The cards whose turn came, in the queue's order, and the keys of those
+ *   still waiting, to pass to the next call.
  */
 export function turnsTaken(
   waiting: ReadonlySet<string>,
-  holds: readonly HoldView[],
-): { taken: HoldView[]; waiting: Set<string> } {
-  const taken = holds.filter((hold) => hold.live && !hold.waits_turn && waiting.has(turnKey(hold)));
-  return { taken, waiting: new Set(holds.filter((hold) => hold.waits_turn).map(turnKey)) };
+  turns: readonly TurnView[],
+): { taken: TurnView[]; waiting: Set<string> } {
+  const taken = turns.filter((turn) => !turn.waits_turn && waiting.has(queueKey(turn)));
+  return { taken, waiting: new Set(turns.filter((turn) => turn.waits_turn).map(queueKey)) };
 }
 
-/** The notice that a decision's turn came: one fixed sentence, with how many still wait. */
-export function turnNoticeText(view: BoardView, hold: HoldView, stillWaiting: number): string {
-  // A hold's topic comes from the placer, which only names topics the view lists.
-  const where =
-    hold.topic === null
-      ? "沒有議題"
-      : `議題「${(view.topics[hold.topic] as TopicView).name}」，id ${hold.topic}`;
+/** Where a card of the queue is: its topic's name and id, or no topic. */
+function placeWords(view: BoardView, topic: string | null): string {
+  // A card's topic comes from the placer or the board's own topics, which the view lists.
+  return topic === null
+    ? "沒有議題"
+    : `議題「${(view.topics[topic] as TopicView).name}」，id ${topic}`;
+}
+
+/**
+ * The notice that a card's turn came: one fixed sentence naming whose card it
+ * is and where, with how many still wait; never the card's question or reasons.
+ */
+export function turnNoticeText(view: BoardView, turn: TurnView, stillWaiting: number): string {
   const rest = stillWaiting > 0 ? `；還有 ${stillWaiting} 個決定排隊` : "";
-  return `看板上輪到 ${hold.home}/${hold.task} 的決定了（${where}）${rest}`;
+  const where = placeWords(view, turn.topic);
+  if (turn.kind === "close") return `看板上輪到關閉議題的提議了（${where}）${rest}`;
+  if (turn.kind === "idle") return `看板上輪到「沒人處理的議題」了（${where}）${rest}`;
+  if (turn.kind === "stall") return `看板上輪到「沒人接」卡了（${where}）${rest}`;
+  return `看板上輪到 ${turn.key.replace("\t", "/")} 的決定了（${where}）${rest}`;
 }
 
 /** Sort key for an item: its topic's queue and place (no topic and archived last), then age. */
@@ -936,6 +1145,8 @@ function todoViews(input: ViewInput, view: BoardView): TodoView[] {
       commands: [...item.commands],
       state: item.state,
       reason: item.reason,
+      unknown_state: item.unknown_state ?? null,
+      unverified: false,
     },
   }));
   return entries

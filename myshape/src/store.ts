@@ -1,10 +1,10 @@
 // Loads the board's state files and is their only writer. A change and its
 // records are saved together: commitChange renames the change's commit file
-// (topics.json, todos.json, confirmations.json, hashtags.json or
-// schedules.json) with the
-// records in its `outbox`, then appends them to events.jsonl,
-// and every later commit (and every start) first saves any outbox record the
-// journal still lacks.
+// (topics.json, todos.json, confirmations.json, hashtags.json, schedules.json
+// or lifecycle.json) with the records in its `outbox`, then appends them to
+// events.jsonl, and every later commit (and every start) first saves any
+// outbox record the journal still lacks. The one change without a record is
+// the board's memory of what it saw (lifecycle.ts LifecycleMemory).
 import fs from "node:fs";
 import {
   isRecord,
@@ -45,6 +45,9 @@ import { emptyHashtags, parseHashtags, reconcile } from "./hashtags.js";
 import type { HashtagStore } from "./hashtags.js";
 import { emptySchedules, parseSchedules } from "./schedules.js";
 import type { ScheduleStore } from "./schedules.js";
+import { emptyLifecycle } from "./lifecycle.js";
+import type { Clock, LifecycleMemory, LifecycleStore, Stall } from "./lifecycle.js";
+import { TIMED_STATES, parseSettings } from "./lifecycle-settings.js";
 import type { ItemState, TodoItem, TodoStore } from "./todos.js";
 
 const FILE_MODE = 0o644;
@@ -157,6 +160,29 @@ interface ParsedDoc {
   doc: TopicsDoc;
   /** Leftover proposals, now confirmed and last in their queues, oldest first. */
   confirmed: LeftoverProposal[];
+  /** Topics that were in no queue (T10), now last in 一般, and queue entries that named no topic. */
+  misplaced: { id: string; name: string }[];
+  dropped: string[];
+}
+
+/** Puts every topic no queue holds last in 一般 (T10); returns them. */
+function placeMisplaced(doc: TopicsDoc): { id: string; name: string }[] {
+  const queued = new Set(QUEUES.flatMap((queue) => doc.queues[queue]));
+  const misplaced = Object.entries(doc.topics)
+    .filter(([id]) => !queued.has(id))
+    .map(([id, topic]) => ({ id, name: topic.name }));
+  for (const { id } of misplaced) doc.queues.normal.push(id);
+  return misplaced;
+}
+
+/** Queue entries that name no topic: they are dropped when the queues are read. */
+function droppedEntries(raw: Record<string, unknown>, topics: Record<string, unknown>): string[] {
+  return QUEUES.flatMap((queue) => {
+    const list = raw[queue];
+    return Array.isArray(list)
+      ? list.filter((id) => typeof id !== "string" || !Object.hasOwn(topics, id))
+      : [];
+  }).map(String);
 }
 
 /**
@@ -184,11 +210,12 @@ function parseDoc(raw: unknown): ParsedDoc {
     .toSorted()
     .map((key) => waiting.get(key) as LeftoverProposal);
   for (const proposal of oldestFirst) doc.queues[proposal.queue].push(proposal.id);
+  const misplaced = placeMisplaced(doc);
   doc.merged = stringRecord(raw["merged"]);
   doc.history = parseHistory(raw["history"]);
   doc.todos = parseTodos(raw["todos"]);
   doc.next_seq = parseNextSeq(raw["next_seq"]);
-  return { doc, confirmed: oldestFirst };
+  return { doc, confirmed: oldestFirst, misplaced, dropped: droppedEntries(queues, topics) };
 }
 
 interface ParsedArchive {
@@ -274,7 +301,13 @@ function parseOutbox(raw: unknown): StoredRecord[] {
 }
 
 /** The files a change can commit through; each holds the records of its last commit. */
-export type CommitFile = "topics" | "todos" | "confirmations" | "hashtags" | "schedules";
+export type CommitFile =
+  | "topics"
+  | "todos"
+  | "confirmations"
+  | "hashtags"
+  | "schedules"
+  | "lifecycle";
 
 /** What the board keeps on disk, as the service holds it. */
 export interface StoredBoard {
@@ -283,6 +316,7 @@ export interface StoredBoard {
   confirmations: Frozen<ConfirmationStore>;
   hashtags: Frozen<HashtagStore>;
   schedules: Frozen<ScheduleStore>;
+  lifecycle: Frozen<LifecycleStore>;
   outbox: Readonly<Record<CommitFile, readonly StoredRecord[]>>;
 }
 
@@ -316,7 +350,11 @@ export interface SchedulePart {
 /**
  * One change: its commit file, the next state of that file's family, and its
  * records. A topic change may carry a follow-up in hashtags.json, saved right
- * after topics.json, and a part in schedules.json, saved right before it.
+ * after topics.json, and a part in schedules.json or lifecycle.json (先不關's
+ * date), saved right before it. The board's memory of what it saw is the one
+ * change that may carry no record: it can only replace that memory (the
+ * clocks, the homes, the 沒人接 cards) in lifecycle.json, and keeps the
+ * file's outbox unless it brings records of its own.
  */
 export type Change =
   | {
@@ -325,7 +363,10 @@ export type Change =
       records: Records;
       hashtags?: HashtagFollow;
       schedules?: SchedulePart;
+      lifecycle?: Frozen<LifecycleStore>;
     }
+  | { file: "lifecycle"; next: Frozen<LifecycleStore>; records: Records }
+  | { file: "memory"; memory: Frozen<LifecycleMemory>; records: readonly Draft[] }
   | { file: "todos"; next: Frozen<TodoStore>; records: Records }
   | { file: "confirmations"; next: Frozen<ConfirmationStore>; records: Records }
   | { file: "hashtags"; next: Frozen<HashtagStore>; records: Records }
@@ -365,6 +406,7 @@ function flushOutbox(sink: RecordSink, outbox: StoredBoard["outbox"]): string | 
     ...outbox.confirmations,
     ...outbox.hashtags,
     ...outbox.schedules,
+    ...outbox.lifecycle,
   ];
   for (const record of waiting) {
     if (sink.has(record.rid)) continue;
@@ -417,8 +459,18 @@ function writeTodos(
     EMPTY_DOC,
   );
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
-  writeFileAtomic(paths.todos, serialize({ ...next, outbox }), FILE_MODE);
+  writeFileAtomic(paths.todos, serialize({ ...next, items: storedItems(next), outbox }), FILE_MODE);
   return topics;
+}
+
+/** The items as todos.json keeps them: one in the "unknown" state keeps the word it was read with. */
+function storedItems(store: Frozen<TodoStore>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(store.items).map(([id, item]) => {
+      const { unknown_state: word, ...rest } = item;
+      return [id, item.state === "unknown" ? { ...rest, state: word ?? "" } : rest];
+    }),
+  );
 }
 
 /**
@@ -433,8 +485,12 @@ function writeTodos(
  */
 function writeOwnFile(
   paths: BoardPaths,
-  file: "confirmations" | "hashtags" | "schedules",
-  next: Frozen<ConfirmationStore> | Frozen<HashtagStore> | Frozen<ScheduleStore>,
+  file: "confirmations" | "hashtags" | "schedules" | "lifecycle",
+  next:
+    | Frozen<ConfirmationStore>
+    | Frozen<HashtagStore>
+    | Frozen<ScheduleStore>
+    | Frozen<LifecycleStore>,
   outbox: readonly StoredRecord[],
 ): void {
   fs.mkdirSync(paths.boardDataDir, { recursive: true });
@@ -452,7 +508,7 @@ function writeChange(
   paths: BoardPaths,
   board: StoredBoard,
   change: Change,
-  stamp: (records: Records) => StoredRecord[],
+  stamp: (records: readonly Draft[]) => StoredRecord[],
 ): Written {
   const records = stamp(change.records);
   if (change.file === "todos") {
@@ -479,7 +535,20 @@ function writeChange(
     const outbox = { ...board.outbox, schedules: records };
     return { board: { ...board, schedules: change.next, outbox }, records };
   }
-  const part = writeSchedulePart(paths, board, change.schedules, stamp);
+  if (change.file === "lifecycle" || change.file === "memory") {
+    const next =
+      change.file === "lifecycle" ? change.next : { ...board.lifecycle, ...change.memory };
+    const kept = records.length === 0 ? board.outbox.lifecycle : records;
+    writeOwnFile(paths, "lifecycle", next, kept);
+    return {
+      board: { ...board, lifecycle: next, outbox: { ...board.outbox, lifecycle: kept } },
+      records,
+    };
+  }
+  if (change.lifecycle !== undefined)
+    writeOwnFile(paths, "lifecycle", change.lifecycle, board.outbox.lifecycle);
+  const lifecycle = change.lifecycle ?? board.lifecycle;
+  const part = writeSchedulePart(paths, { ...board, lifecycle }, change.schedules, stamp);
   writeTopics(paths, board.topics, change.next, records);
   const next = {
     ...part.board,
@@ -504,7 +573,7 @@ function writeSchedulePart(
   paths: BoardPaths,
   board: StoredBoard,
   part: SchedulePart | undefined,
-  stamp: (records: Records) => StoredRecord[],
+  stamp: (records: readonly Draft[]) => StoredRecord[],
 ): Written {
   if (part === undefined) return { board, records: [] };
   const records = stamp(part.records);
@@ -531,7 +600,7 @@ export function commitChange(
   if (unsaved !== null)
     return { ok: false, line: `看板寫不進紀錄（${unsaved}），這次的修改沒有做` };
   const ts = target.nowSeconds();
-  const stamp = (drafts: Records): StoredRecord[] =>
+  const stamp = (drafts: readonly Draft[]): StoredRecord[] =>
     drafts.map((draft: Draft) => stampRecord(draft, actor, target.nextRid(), ts));
   fs.mkdirSync(target.paths.dataDir, { recursive: true });
   const saved = writeChange(target.paths, board, change, stamp);
@@ -557,6 +626,9 @@ export interface ReadBoard {
   confirmed: LeftoverProposal[];
   /** Archived topics stored as proposals. */
   archivedProposals: { id: string; name: string }[];
+  /** Topics in no queue, now last in 一般, and queue entries that named no topic (T10). */
+  misplaced: { id: string; name: string }[];
+  dropped: string[];
 }
 
 /**
@@ -575,9 +647,10 @@ export function readBoard(paths: BoardPaths): ReadBoard {
   const rawConfirmations = readFile(paths.confirmations);
   const rawHashtags = readFile(paths.hashtags);
   const rawSchedules = readFile(paths.schedules);
+  const rawLifecycle = readFile(paths.lifecycle);
   const live =
     rawTopics === null
-      ? { doc: empty.doc, confirmed: [] }
+      ? { doc: empty.doc, confirmed: [], misplaced: [], dropped: [] }
       : parseFile(paths.topics, rawTopics, parseDoc);
   const gone =
     rawArchive === null
@@ -602,17 +675,21 @@ export function readBoard(paths: BoardPaths): ReadBoard {
       confirmations,
       hashtags: readHashtags(paths, rawHashtags, state),
       schedules,
+      lifecycle: parseOr(paths.lifecycle, rawLifecycle, parseLifecycle, emptyLifecycle),
       outbox: {
         topics: parseOutbox(rawTopics),
         todos: parseOutbox(rawTodos),
         confirmations: parseOutbox(rawConfirmations),
         hashtags: parseOutbox(rawHashtags),
         schedules: parseOutbox(rawSchedules),
+        lifecycle: parseOutbox(rawLifecycle),
       },
     },
     hasTodos: store !== null,
     confirmed: live.confirmed,
     archivedProposals: gone.proposals,
+    misplaced: live.misplaced,
+    dropped: live.dropped,
   };
 }
 
@@ -624,9 +701,23 @@ export interface LoadedBoard {
   appendErrors: string[];
 }
 
-/** The records of confirming leftover proposals, live and archived; null when there are none. */
+/** The records of confirming leftover proposals and of repairing the queues; null when there are none. */
 function confirmRecords(read: ReadBoard): Records | null {
   const drafts: Draft[] = [
+    ...read.misplaced.map((topic) => ({
+      kind: "topic.moved" as const,
+      topic: topic.id,
+      text: `議題「${topic.name}」不在任何佇列裡，放到「一般」最後`,
+    })),
+    ...(read.dropped.length === 0
+      ? []
+      : [
+          {
+            kind: "topic.moved" as const,
+            topic: null,
+            text: `佇列裡的 ${read.dropped.join("、")} 不是看板上的議題，拿掉了`,
+          },
+        ]),
     ...read.confirmed.map((proposal) => ({
       kind: "topic.confirmed" as const,
       topic: proposal.id,
@@ -677,23 +768,29 @@ export function loadBoard(target: CommitTarget, label: string): LoadedBoard {
   return { board, confirmed: read.confirmed, appendErrors: errors };
 }
 
-const ITEM_STATES: readonly ItemState[] = ["open", ...TODO_STATES];
+const ITEM_STATES: readonly Exclude<ItemState, "unknown">[] = ["open", ...TODO_STATES];
 
 function stringList(raw: unknown): string[] | null {
   return Array.isArray(raw) && raw.every((value) => typeof value === "string") ? raw : null;
 }
 
-/** One stored item, or null when it lacks what the page needs to show it. */
+/**
+ * One stored item, or null when it lacks what the page needs to show it. A
+ * state word this board does not know keeps the item, in the "unknown" state
+ * (O6), with the word it was read with.
+ */
 function parseItem(raw: unknown): TodoItem | null {
   if (!isRecord(raw)) return null;
   const title = stringField(raw, "title");
   const action = stringField(raw, "action");
-  const state = ITEM_STATES.find((name) => name === raw["state"]);
+  const word = raw["state"];
+  const state = ITEM_STATES.find((name) => name === word) ?? "unknown";
   const commands = stringList(raw["commands"]);
   const topic = raw["topic"];
-  if (title === null || action === null || state === undefined || commands === null) return null;
+  if (title === null || action === null || commands === null) return null;
   if (topic !== null && typeof topic !== "string") return null;
   return {
+    ...(state === "unknown" ? { unknown_state: typeof word === "string" ? word : "" } : {}),
     title,
     topic,
     action,
@@ -744,5 +841,57 @@ function parseConfirmations(raw: unknown): ConfirmationStore {
       const parsed = parseConfirmation(entry);
       return parsed === null ? [] : [parsed];
     }),
+  };
+}
+
+function parseClock(raw: unknown): Clock | null {
+  if (!isRecord(raw)) return null;
+  const state = TIMED_STATES.find((name) => name === raw["state"]);
+  const since = stringField(raw, "since");
+  if (state === undefined || since === null || Number.isNaN(Date.parse(since))) return null;
+  const clock: Clock = { state, since, sig: textField(raw, "sig") };
+  if (raw["raised"] === true) clock.raised = true;
+  return clock;
+}
+
+function parseStall(raw: unknown): Stall | null {
+  if (!isRecord(raw)) return null;
+  const since = stringField(raw, "since");
+  const members = stringList(raw["members"]);
+  if (since === null || members === null) return null;
+  const deferred = raw["deferred"];
+  if (!isRecord(deferred)) return { since, members };
+  const until = stringField(deferred, "until");
+  const put = stringList(deferred["members"]);
+  return until === null || put === null
+    ? { since, members }
+    : { since, members, deferred: { until, members: put } };
+}
+
+/** Each entry of an object that `parse` reads; the others are skipped. */
+function entriesOf<T>(raw: unknown, parse: (value: unknown) => T | null): Record<string, T> {
+  const found: Record<string, T> = {};
+  if (!isRecord(raw)) return found;
+  for (const [key, value] of Object.entries(raw)) {
+    const parsed = parse(value);
+    if (parsed !== null && key !== "__proto__") found[key] = parsed;
+  }
+  return found;
+}
+
+/** data/myshape/lifecycle.json; what is not whole is skipped, an invalid setting reads as its default. */
+function parseLifecycle(raw: unknown): LifecycleStore {
+  if (!isRecord(raw) || raw["v"] !== 1) throw new Error("expected an object with v: 1");
+  const memory: LifecycleMemory = {
+    clocks: entriesOf(raw["clocks"], parseClock),
+    homes: entriesOf(raw["homes"], stringList),
+    stalls: entriesOf(raw["stalls"], parseStall),
+    idle: stringRecord(raw["idle"]),
+  };
+  return {
+    v: 1,
+    settings: parseSettings(raw["settings"]),
+    kept: stringRecord(raw["kept"]),
+    ...memory,
   };
 }

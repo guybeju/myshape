@@ -2,8 +2,8 @@
 // under myshape/src (tests excluded) with the scanner of the TypeScript the
 // board builds with, so a comment or a string is never code, and prints one
 // line per problem:
-//   - topics.json, the archive, todos.json, confirmations.json, hashtags.json
-//     and schedules.json are written (writeFileAtomic or writeIfChanged) only
+//   - topics.json, the archive, todos.json, confirmations.json, hashtags.json,
+//     schedules.json and lifecycle.json are written (writeFileAtomic or writeIfChanged) only
 //     in store.ts's writeTopics, writeTodos, writeOwnFile and writeIfChanged,
 //     and those three writers are called only from commitChange, the
 //     writeChange it calls, and the writeSchedulePart that writeChange calls;
@@ -16,11 +16,12 @@
 //     which commits them with commitChange;
 //   - no file but topics.ts, todos.ts, confirmations.ts, hashtags.ts,
 //     schedules.ts, schedule-clock.ts (the clock's pure step over the
-//     schedules, which the service commits) and store.ts assigns into,
+//     schedules, which the service commits), lifecycle.ts, lifecycle-settings.ts
+//     and stalls.ts (the lifecycle's pure steps) and store.ts assigns into,
 //     deletes from or pushes onto the board's state (doc, archive, items,
 //     marks, closed, outbox, queues, merged, history, confirmations, entries,
-//     hashtags, views, settings, series, occurrences, recent, removed), which
-//     a cast past the read-only types would otherwise allow.
+//     hashtags, views, settings, series, occurrences, recent, removed, clocks,
+//     stalls, idle, kept), which a cast past the read-only types would otherwise allow.
 //
 // Usage: node state-writers.mjs <typescript-package-dir> <src-dir>
 import fs from "node:fs";
@@ -31,10 +32,11 @@ const { SyntaxKind: K } = await import(path.join(typescript, "dist/ast/index.js"
 const { createScanner } = await import(path.join(typescript, "dist/ast/scanner.js"));
 
 const STATE_FIELDS = new Set(["doc", "archive", "items", "marks", "closed", "outbox", "queues", "merged", "history",
-  "confirmations", "entries", "hashtags", "views", "settings", "series", "occurrences", "recent", "removed"]);
+  "confirmations", "entries", "hashtags", "views", "settings", "series", "occurrences", "recent", "removed",
+  "clocks", "stalls", "idle", "kept"]);
 const STATE_OWNERS = new Set(["topics.ts", "todos.ts", "confirmations.ts", "hashtags.ts", "schedules.ts",
-  "schedule-clock.ts", "store.ts"]);
-const STATE_PATHS = new Set(["topics", "archive", "todos", "confirmations", "hashtags", "schedules"]);
+  "schedule-clock.ts", "lifecycle.ts", "lifecycle-settings.ts", "stalls.ts", "store.ts"]);
+const STATE_PATHS = new Set(["topics", "archive", "todos", "confirmations", "hashtags", "schedules", "lifecycle"]);
 const STORE_EXPORTS = new Set(["readBoard", "loadBoard", "commitChange"]);
 const WRITERS = new Set(["writeTopics", "writeTodos", "writeOwnFile", "writeIfChanged"]);
 const WRITER_CALLERS = new Set(["commitChange", "writeChange", "writeSchedulePart"]);
@@ -49,7 +51,8 @@ const BEFORE_REGEX = new Set([K.OpenParenToken, K.CommaToken, K.EqualsToken, K.C
 // A cast to one of these drops the read-only type of the board's state.
 const MUTABLE_STATE = new Set(["TopicState", "TopicsDoc", "ArchiveDoc", "Topic", "TodoStore", "TodoItem", "StoredBoard",
   "ConfirmationStore", "Confirmation", "HashtagStore", "HashtagEntry", "SavedView", "HashtagSettings",
-  "ScheduleStore", "Series", "Occurrence", "RecentEntry", "Settings"]);
+  "ScheduleStore", "Series", "Occurrence", "RecentEntry", "Settings", "LifecycleStore", "LifecycleSettings", "Stall",
+  "Clock"]);
 const MUTATORS = new Set(["push", "pop", "splice", "shift", "unshift", "sort", "reverse", "fill"]);
 
 /** Every code token of `text` with the top-level function it is in. */

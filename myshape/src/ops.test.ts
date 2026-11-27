@@ -68,6 +68,10 @@ const FIXTURES = {
   "todo-claim": { args: { task: "open" }, fromPage: true },
   "todo-drop": { args: { task: "open" }, fromPage: true },
   "todo-takedown": { args: { task: "obsolete" }, fromPage: true },
+  "todo-accept": { args: { task: "unverified" }, fromPage: true },
+  "todo-unclaim": { args: { task: "unverified" }, fromPage: true },
+  "lifecycle-settings": { args: { T2: { remind: 60, raise: 120 } }, fromPage: true },
+  "lifecycle-answer": { args: { card: "stall", key: "a", days: 7 }, fromPage: true },
   "program-confirm": {
     args: {
       path: "/opt/agg/bin/feed",
@@ -168,7 +172,17 @@ function todosFixture(): TodoStore {
       open: item("open"),
       claimed: item("claimed"),
       obsolete: item("obsolete", { captain_closes: true, reason: "不用了" }),
+      unverified: item("claimed"),
     },
+  };
+}
+
+/** The item "unverified" was claimed weeks ago (O5), and topic a has a 沒人接 card in front of the captain. */
+function lifecycleFixture(): Record<string, unknown> {
+  return {
+    v: 1,
+    clocks: { "todo\tunverified": { state: "O3", since: "2026-11-01T00:00:00Z", sig: "" } },
+    stalls: { a: { since: "2026-11-20T00:00:00Z", members: ["queued\tmain\tq1"] } },
   };
 }
 
@@ -254,6 +268,7 @@ beforeEach(() => {
   write(paths.todos, todosFixture());
   write(paths.hashtags, hashtagsFixture());
   write(paths.schedules, schedulesFixture(topics));
+  write(paths.lifecycle, lifecycleFixture());
   journal = new Journal(paths.events);
   let n = 0;
   target = {
@@ -278,6 +293,7 @@ function files(): Record<string, string | null> {
     confirmations: read(paths.confirmations),
     hashtags: read(paths.hashtags),
     schedules: read(paths.schedules),
+    lifecycle: read(paths.lifecycle),
     events: read(paths.events),
   };
 }
@@ -292,7 +308,12 @@ function journalLines(): StoredRecord[] {
         .map((line) => JSON.parse(line) as StoredRecord);
 }
 
-const WHOLE_BOARD = new Set(["schedule.settings_changed", "schedule.all_paused", "schedule.seen"]);
+const WHOLE_BOARD = new Set([
+  "schedule.settings_changed",
+  "schedule.all_paused",
+  "schedule.seen",
+  "lifecycle.settings_changed",
+]);
 
 function run(board: StoredBoard, op: OperationName) {
   const fixture: Fixture = FIXTURES[op];

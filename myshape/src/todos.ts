@@ -6,7 +6,8 @@ import type { Draft, Frozen, RecordKind } from "./records.js";
 import { GOAL_MAX, oneLine, resolveTopicId } from "./topics.js";
 import type { TodoMark, TodoState, TopicState } from "./topics.js";
 
-export type ItemState = "open" | TodoState;
+/** "unknown" is a state word in todos.json this board does not know (O6): the item stays, not dropped. */
+export type ItemState = "open" | TodoState | "unknown";
 
 /** One hands-on item, as `data/myshape/todos.json` stores it. */
 export interface TodoItem {
@@ -20,6 +21,8 @@ export interface TodoItem {
   guidance: string;
   commands: string[];
   state: ItemState;
+  /** The word todos.json holds for an item in the "unknown" state, written back as it was. */
+  unknown_state?: string;
   /** Why the aggregator rejected the claim or no longer needs the item. */
   reason: string | null;
   /** When the state last changed. */
@@ -43,7 +46,7 @@ export interface TodoStore {
 export type CloseWords = "不做了" | "撤下";
 
 /** How an item left the page, on a closing record. */
-export type Outcome = "done" | "dropped" | "taken_down";
+export type Outcome = "done" | "done_unverified" | "dropped" | "taken_down" | "unclaimed";
 
 /**
  * One record about an item: every step writes one, under the item's topic
@@ -261,7 +264,9 @@ function withState(
   reason: string | null,
 ): TodoStore {
   const next = structuredClone(store) as TodoStore;
-  next.items[id] = { ...(next.items[id] as TodoItem), state, reason, at: now };
+  const { unknown_state: _word, ...item } = next.items[id] as TodoItem;
+  void _word;
+  next.items[id] = { ...item, state, reason, at: now };
   return next;
 }
 
@@ -409,6 +414,43 @@ export function doneItem(store: Frozen<TodoStore>, id: string, label: string): T
 }
 
 /**
+ * The captain's 當作做完，關掉 on an item whose check never came (O5): it
+ * closes as done without a check, and the aggregator is told as for 做完了.
+ */
+export function closeUnverified(store: Frozen<TodoStore>, id: string, label: string): TodoResult {
+  const item = itemOf(store, id);
+  if (item === undefined) return notOpen(id);
+  const actor: Actor = { by: "captain", label };
+  const event = record("todo.done", item, id, actor, "已關：你說做完了，沒有驗證", {
+    outcome: "done_unverified",
+  });
+  const notice = closing(
+    item,
+    id,
+    `使用者在看板上：「${item.title}」當作做完，關掉（${label} 沒有驗證）（${id}）`,
+    "captain",
+    "做完了",
+  );
+  return changed(without(store, id), `ok ${id} 已關（你說做完了，沒有驗證）`, [event], [notice]);
+}
+
+/** The captain's 收回，還沒做完 on an item whose check never came (O5): back to still to do. */
+export function unclaimItem(
+  store: Frozen<TodoStore>,
+  id: string,
+  now: string,
+  label: string,
+): TodoResult {
+  const item = itemOf(store, id);
+  if (item === undefined) return notOpen(id);
+  const actor: Actor = { by: "captain", label };
+  const event = record("lifecycle.answered", item, id, actor, "：你收回了，還沒做完", {
+    outcome: "unclaimed",
+  });
+  return changed(withState(store, id, "open", now, null), `ok ${id} 已收回，還沒做完`, [event]);
+}
+
+/**
  * The captain's 不做了, or 好，撤下 on an item the aggregator no longer needs:
  * the item leaves the page with the captain's words in its topic's updates.
  */
@@ -471,7 +513,7 @@ export function withProjection(topics: Frozen<TopicState>, store: Frozen<TodoSto
 export function projectMarks(store: Frozen<TodoStore>): Record<string, TodoMark> {
   const marks: Record<string, TodoMark> = { ...store.marks };
   for (const [id, item] of Object.entries(store.items)) {
-    if (item.state === "open") continue;
+    if (item.state === "open" || item.state === "unknown") continue;
     marks[id] =
       item.reason === null
         ? { state: item.state, at: item.at }

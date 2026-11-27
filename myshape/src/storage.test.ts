@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emptySchedules } from "./schedules.js";
+import { emptyLifecycle } from "./lifecycle.js";
 import { emptyConfirmations } from "./confirmations.js";
 import * as files from "./files.js";
 import { Journal, Offsets, Summaries } from "./journal.js";
@@ -56,7 +57,15 @@ function boardOf(state: TopicState): StoredBoard {
     confirmations: emptyConfirmations(),
     hashtags: emptyHashtags(),
     schedules: emptySchedules(),
-    outbox: { topics: [], todos: [], confirmations: [], hashtags: [], schedules: [] },
+    lifecycle: emptyLifecycle(),
+    outbox: {
+      topics: [],
+      todos: [],
+      confirmations: [],
+      hashtags: [],
+      schedules: [],
+      lifecycle: [],
+    },
   };
 }
 
@@ -176,6 +185,7 @@ describe("layout", () => {
       confirmations: "/d/myshape/confirmations.json",
       hashtags: "/d/myshape/hashtags.json",
       schedules: "/d/myshape/schedules.json",
+      lifecycle: "/d/myshape/lifecycle.json",
     });
   });
 
@@ -399,6 +409,10 @@ describe("store", () => {
     };
     fs.writeFileSync(paths.topics, JSON.stringify(raw));
     const { doc } = loadBoard(target, "plain").board.topics;
+    // A queue entry that names no topic is dropped, and says so (T10).
+    expect(saved.map((record) => record.text)).toContain(
+      "佇列裡的 ghost、3 不是看板上的議題，拿掉了",
+    );
     // A proposal listed in a queue by hand is not in it; it is confirmed like any other.
     expect(doc.queues).toEqual({ high: ["a"], normal: ["p"], later: [] });
     expect(doc.merged).toEqual({ old: "a" });
@@ -411,9 +425,10 @@ describe("store", () => {
       paths.topics,
       JSON.stringify({ ...raw, next_seq: 9, queues: undefined, merged: undefined }),
     );
+    // A topic in no queue goes last in 一般 (T10), so no topic is ever where nobody sees it.
     expect(loadTopicState(paths).state.doc).toMatchObject({
       next_seq: 9,
-      queues: { high: [], normal: ["p"], later: [] },
+      queues: { high: [], normal: ["p", "a"], later: [] },
       merged: {},
     });
     fs.writeFileSync(paths.topics, JSON.stringify({ ...raw, next_seq: 2.5 }));

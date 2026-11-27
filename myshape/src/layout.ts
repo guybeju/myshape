@@ -60,6 +60,8 @@ export interface BoardPaths {
   hashtags: string;
   /** The schedules, their open occurrences and the captain's schedule settings. */
   schedules: string;
+  /** The lifecycle deadlines, 先不關 dates, and what the board saw of every timed card. */
+  lifecycle: string;
 }
 
 export function boardPaths(config: Pick<BoardConfig, "state" | "data" | "config">): BoardPaths {
@@ -88,6 +90,7 @@ export function boardPaths(config: Pick<BoardConfig, "state" | "data" | "config"
     confirmations: path.join(boardDataDir, "confirmations.json"),
     hashtags: path.join(boardDataDir, "hashtags.json"),
     schedules: path.join(boardDataDir, "schedules.json"),
+    lifecycle: path.join(boardDataDir, "lifecycle.json"),
   };
 }
 
