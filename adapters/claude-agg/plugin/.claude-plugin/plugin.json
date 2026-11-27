@@ -1,4 +1,4 @@
 {
   "name": "claude-agg",
-  "description": "Skills for claude-agg, the myshape board aggregator: the rules its worker sessions follow, and a read-only status check for whoever runs it."
+  "description": "Skills for claude-agg, the board aggregator: the rules its worker sessions follow, and a read-only status check for whoever runs it."
 }
