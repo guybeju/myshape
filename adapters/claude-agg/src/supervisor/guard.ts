@@ -127,11 +127,15 @@ function approvableWords(segment: readonly string[]): boolean {
   const words = segment.slice(start);
   const [first, ...rest] = words;
   if (first === undefined) return true;
+  if (first.includes("$")) return false;
   if (NEVER_APPROVED_CONSTRUCTS.has(first)) return false;
   if (isAssignment(first)) return false;
   const name = first.replace(/^.*\//, "");
   if (NEVER_APPROVED.has(name)) return false;
   if (name === "make" && rest.some(isAssignment)) return false;
+  if (name === "git" && rest.find((word) => !word.startsWith("-"))?.includes("$") === true) {
+    return false;
+  }
   if (name === "rm" || name === "rmdir") {
     return rest.some((word) => !word.startsWith("-")) && rest.every(plainRemovable);
   }
@@ -142,8 +146,10 @@ function approvableWords(segment: readonly string[]): boolean {
  * Whether a Bash command is a shape the guard may approve: never wider than
  * Claude Code's own sandbox auto-allow. Each simple command is read after its
  * leading reserved words (`!`, `{`, `}`, if, then, elif, else, fi, do, done,
- * while, until). Refused shapes: a command starting with case, for, select,
- * function, coproc or [[; a first word in NEVER_APPROVED; a leading VAR=;
+ * while, until). Refused shapes: a command whose first word holds `$` at all
+ * (quotes are dropped, so $'env' and ${x:-env} would read as a plain word); a
+ * command starting with case, for, select, function, coproc or [[; a first
+ * word in NEVER_APPROVED; a leading VAR=;
  * `make` with a NAME= argument; a here-document, ${!…} or ${ |…}, anything
  * naming /proc/…/environ or /dev/tcp|udp, command substitution, a background
  * `&`, and rm/rmdir of anything but plain relative paths.
@@ -254,7 +260,10 @@ function pushAt(words: readonly string[], git: number): string[] | undefined {
   for (let at = git + 1; at < words.length; at += 1) {
     const word = words[at] ?? "";
     if (GIT_VALUE_OPTIONS.has(word)) at += 1;
-    else if (!word.startsWith("-")) return word === "push" ? words.slice(at + 1) : undefined;
+    // A subcommand written with $ ($'push', ${x:-push}) cannot be read: taken as push.
+    else if (!word.startsWith("-")) {
+      return word === "push" || word.includes("$") ? words.slice(at + 1) : undefined;
+    }
   }
   return undefined;
 }

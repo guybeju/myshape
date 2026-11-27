@@ -265,6 +265,22 @@ describe("the hook", () => {
   });
 });
 
+describe("a git subcommand written with $", () => {
+  it.each([
+    "git $'push' origin main",
+    "git ${x:-push} origin main",
+    "git -C . $'push' origin main",
+  ])("is taken as a push: %s", (command) => {
+    expect(bash(command)).toEqual(denied(REASONS.pushDefault));
+  });
+
+  it("is refused outright where nothing may be pushed", () => {
+    expect(bash("git $'push' origin agg/t-1", { ...CTX, defaultBranch: null })).toEqual(
+      denied(REASONS.noPush),
+    );
+  });
+});
+
 describe("sandboxApprovable", () => {
   it.each([
     "npm test",
@@ -341,6 +357,13 @@ describe("sandboxApprovable", () => {
     ["make with an assignment", "make CC=clang"],
     ["make with an assignment after a target", "make all CFLAGS=-O2"],
     ["make by path with an assignment", "/usr/bin/make CC=clang"],
+    ["an ANSI-C quoted first word", "$'env' curl x"],
+    ["a defaulted variable as first word", "${x:-env} curl x"],
+    ["a variable as first word", "$CMD x"],
+    ["a variable inside the first word", "/usr/bin/$TOOL x"],
+    ["a variable first word after then", "if true; then $'eval' ls; fi"],
+    ["a variable first word after a pipe", "ls | $'env' x"],
+    ["git with a quoted subcommand", "git $'push' origin main"],
   ])("does not approve %s", (_what, command) => {
     expect(sandboxApprovable(command)).toBe(false);
   });
