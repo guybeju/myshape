@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # An aggregator written only from the board's contract (contracts section 7,
-# statements C1 to C12), knowing nothing of Firstmate. Its work for each home
-# is $TB_AGG/plain/<home>.json: tasks, queued, holds, status_decisions and
-# topics, plus optional further homes for the root. It reports no ledger
+# statements C1 to C12, and the topics call of section 4), knowing nothing of
+# Firstmate. Its work for each home is $TB_AGG/plain/<home>.json: tasks,
+# queued, holds, status_decisions and topics, plus optional further homes for
+# the root. Its topics call answers the named tasks' tag files from the same
+# file, leaving out the tasks that have none. It reports no ledger
 # ("absent"), unless $TB_AGG/plain/<home>.events exists: then its ledger
 # cursor is the number of event lines already handed over, with a token of its
 # own making. Its name on the board is "plain". stub-lib.sh says where every
@@ -44,6 +46,17 @@ case "${1:-}" in
       + (if $home == "main" then {aggregator: {name: "plain", label: "plain"}, secondmates: (.secondmates // [])} else {} end)' \
       "$TB_AGG/plain/$1.json"
     ;;
+  topics)
+    shift
+    stub_log topics "$@"
+    stub_env_probe "$1"
+    stub_control "$1"
+    [ -f "$TB_AGG/plain/$1.json" ] || { printf 'plain has no home %s\n' "$1" >&2; exit 2; }
+    home=$1
+    shift
+    jq -c '{topics: ((.topics // {}) | with_entries(select(.key | IN($ARGS.positional[]))))}' \
+      "$TB_AGG/plain/$home.json" --args "$@"
+    ;;
   deliver) stub_deliver apply ;;
-  *) printf 'plain: feed or deliver\n' >&2; exit 2 ;;
+  *) printf 'plain: feed, topics or deliver\n' >&2; exit 2 ;;
 esac

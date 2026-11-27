@@ -6,12 +6,14 @@
 # programs a fixed, short environment, so a stub finds its files from its own
 # location, never from inherited variables.
 #
-#   $TB_AGG/calls.log        "feed <home> <offset> <sha> <time>" or "deliver <id> <kind> <time>"
+#   $TB_AGG/calls.log        "feed <home> <offset> <sha> <time>", "topics <home> <task>… <time>"
+#                            (stub-plain only) or "deliver <id> <kind> <time>"
 #   $TB_AGG/received.jsonl   every action record, as received
 #   $TB_AGG/play             the next outcomes, one per line: an outcome line
 #                            ({"outcome":…}), or "sleep <seconds> <outcome line>";
 #                            an empty file answers {"outcome":"delivered"}
-#   $TB_AGG/control/<home>   how the feed for <home> misbehaves until removed:
+#   $TB_AGG/control/<home>   how the feed (and stub-plain's topics call) for
+#                            <home> misbehaves until removed:
 #                            "sleep <seconds>", "exit4 <line>", "fail <line>",
 #                            "usage <line>" (exit 2, as a reader refusing its
 #                            arguments), "garbage", "schema2"

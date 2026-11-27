@@ -337,7 +337,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 }
 ```
 
-寫 aggregator 的人要知道的，每一條都由 `myshape/test/stage-7-aggregator.sh` 的 `stub-plain` 照著寫（它只讀這一節）：
+寫 aggregator 的人要知道的，每一條都由 `myshape/test/stage-7-aggregator.sh` 的 `stub-plain` 照著寫（它只讀這一節與第 4 節的 `topics` 呼叫）：
 
 - **C1** `ledger` 一定要有。`status` 是 `delta`、`continuity-broken` 或 `absent`；`to_offset` 是 ≥ 0 的整數，`to_prefix_sha256` 是 `-` 或 64 位十六進位。看板把兩者當成不透明的值，下一次讀取原樣交回；`continuity-broken` 讓看板從 `0 -` 重讀。`absent` 可以一直是，意思是沒有帳本。
 - **C2** `holds[].hold_bucket`：`live` 是現在就要答；`aged`、`dated`（帶 `hold_until`）、`blocked`（帶 `unresolved_blocker_ids`）是延後並寫明原因；沒有這個欄位當成 `live`；其他的字讓那個待決事項不顯示。
