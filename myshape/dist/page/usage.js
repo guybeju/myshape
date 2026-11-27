@@ -3,7 +3,10 @@ import { when } from "./parts.js";
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
-/** A length of time in the largest two units that matter, rounded down: "2 天 3 小時", "4 小時 5 分", "6 分". */
+/**
+ * A length of time in the largest two units that matter, rounded down:
+ * "2 天 3 小時", "4 小時 5 分", "6 分".
+ */
 export function spanText(ms) {
     if (ms < MINUTE_MS)
         return "不到 1 分";
@@ -56,7 +59,10 @@ const GROUP_PILL = {
     stale: "舊的數字",
     unavailable: "讀不到",
 };
-/** The class of a metric's row: a stale one is greyed, and only a current one carries its severity. */
+/**
+ * The class of a metric's row: a stale one is greyed, and only a current
+ * one carries its severity.
+ */
 export function itemClass(item) {
     if (item.stale !== null)
         return "usage-item stale";

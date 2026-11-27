@@ -20,8 +20,9 @@
 # and adds what the board asks of an aggregator: the aggregator block (main
 # only), a ledger_hint for a home whose ledger is off, and read hints of 60 s
 # and 400 s for remote secondmates. The main home's report also carries the
-# metrics block with this machine's Claude usage (fmb_usage_metrics). Exit 0 prints the report; 4 says the home
-# cannot report, with one line on stderr: the remote checkout has no reader, or
+# metrics block with this machine's Claude usage (fmb_usage_metrics). Exit 0
+# prints the report; 4 says the home cannot report, with one line on stderr:
+# the remote checkout has no reader, or
 # the reader found the Firstmate it runs on missing a capability it needs (the
 # reader's own exit 4 and line, passed on unchanged; for a remote home its own
 # code root's); 2 an unknown home; any other code is the reader's own failure.
@@ -86,8 +87,10 @@ FMB_USAGE_JQ='
   def gid: "claude:" + (lane | idpart | .[0:96]);
   def glabel: lane | if . == "default" then "Claude"
                      else "Claude · " + (plain | if length > 60 then .[0:59] + "…" else . end) end;
-  def wlabel: {"five_hour": "5 小時", "seven_day": "7 天"}[.id] // (.label | tostring | plain | .[0:80]);
-  def used: (100 - .percentRemaining) * 10 | round / 10 | if . < 0 then 0 elif . > 100 then 100 else . end;
+  def wlabel: {"five_hour": "5 小時", "seven_day": "7 天"}[.id]
+              // (.label | tostring | plain | .[0:80]);
+  def used: (100 - .percentRemaining) * 10 | round / 10
+            | if . < 0 then 0 elif . > 100 then 100 else . end;
   def severity: if . >= $critical then "critical" elif . >= $warn then "warn" else "normal" end;
   def note: if fresh then ""
             else "quota-axi：" + (.state.status // "?" | tostring)
@@ -99,13 +102,15 @@ FMB_USAGE_JQ='
   | [.providers[]? | select(.provider == "claude")] as $lanes
   | {v: 1, stale_after_s: $stale,
      groups: (if ($lanes | length) == 0
-              then [{id: "claude", label: "Claude", state: "unavailable", note: "quota-axi 沒有回報 Claude。"}]
+              then [{id: "claude", label: "Claude", state: "unavailable",
+                     note: "quota-axi 沒有回報 Claude。"}]
               else [$lanes[] | {id: gid, label: glabel, state: gstate, note: note}]
               end),
      items: [$lanes[] | select(fresh) | gid as $group
              | ((.state.refreshedAt | when) // ($report.generatedAt | when)) as $at
              | .windows[]? | select(.percentRemaining | type == "number") | used as $used
-             | {id: ($group + "." + (.id | tostring | idpart) | .[0:128]), group: $group, label: wlabel,
+             | {id: ($group + "." + (.id | tostring | idpart) | .[0:128]),
+                group: $group, label: wlabel,
                 value: $used, unit: "%", severity: ($used | severity)}
                + (if $at == null then {} else {measured_at: $at} end)
                + (if (.resetsAt | when) == null then {} else {resets_at: .resetsAt} end)]}'
@@ -144,7 +149,8 @@ fmb_decorate() {
 # fmb_usage_unavailable <note>: a metrics block that says the usage could not be read, and why.
 fmb_usage_unavailable() {
   jq -cn --arg note "$1" --argjson stale "$FMB_USAGE_STALE_S" \
-    '{v: 1, stale_after_s: $stale, groups: [{id: "claude", label: "Claude", state: "unavailable", note: $note}], items: []}'
+    '{v: 1, stale_after_s: $stale,
+      groups: [{id: "claude", label: "Claude", state: "unavailable", note: $note}], items: []}'
 }
 
 # fmb_usage_metrics: print the metrics block of this machine's Claude usage for
@@ -161,8 +167,8 @@ fmb_usage_metrics() {
     fmb_usage_unavailable "這台機器沒有 quota-axi，看不到 Claude 的用量。"
     return 0
   fi
-  out=$(fm_run_timed "$FMB_USAGE_BOUND_S" quota-axi --provider claude --json --no-credential-refresh \
-    --max-age "$FMB_USAGE_MAX_AGE_S" < /dev/null 2>/dev/null) || rc=$?
+  out=$(fm_run_timed "$FMB_USAGE_BOUND_S" quota-axi --provider claude --json \
+    --no-credential-refresh --max-age "$FMB_USAGE_MAX_AGE_S" < /dev/null 2>/dev/null) || rc=$?
   if fm_timed_out "$rc"; then
     fmb_usage_unavailable "quota-axi 在 ${FMB_USAGE_BOUND_S} 秒內沒有回答，這次沒有用量。"
     return 0
@@ -175,8 +181,9 @@ fmb_usage_metrics() {
       return 0
       ;;
   esac
-  printf '%s\n' "$out" | jq -cs --argjson stale "$FMB_USAGE_STALE_S" --argjson warn "$FMB_USAGE_WARN" \
-    --argjson critical "$FMB_USAGE_CRITICAL" "$FMB_USAGE_JQ" 2>/dev/null ||
+  printf '%s\n' "$out" | jq -cs --argjson stale "$FMB_USAGE_STALE_S" \
+    --argjson warn "$FMB_USAGE_WARN" --argjson critical "$FMB_USAGE_CRITICAL" \
+    "$FMB_USAGE_JQ" 2>/dev/null ||
     fmb_usage_unavailable "quota-axi 的輸出讀不懂，這次沒有用量。"
 }
 

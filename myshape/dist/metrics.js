@@ -15,7 +15,10 @@ export const NOTE_MAX = 200;
 export const UNIT_MAX = 16;
 /** The largest magnitude a value other than a percentage may have. */
 export const VALUE_MAX = 1e12;
-/** How long a measurement counts as current, in seconds: the aggregator's word within these bounds. */
+/**
+ * How long a measurement counts as current, in seconds: the aggregator's
+ * word, within these bounds.
+ */
 export const STALE_AFTER_S = { min: 10, max: 86_400, fallback: 900 };
 /** How far ahead of the board's clock a measured time may be and still count as now, in seconds. */
 export const FUTURE_SKEW_S = 60;
@@ -36,7 +39,10 @@ function idOf(raw, name) {
     need(typeof value === "string" && value.length <= ID_MAX && ID.test(value), `${name} 不是合格的 id`);
     return value;
 }
-/** One line of plain text within `max` code points; "" when it may be empty and is missing or empty. */
+/**
+ * One line of plain text within `max` code points; "" when it may be empty
+ * and is missing or empty.
+ */
 function textOf(raw, name, max, mayBeEmpty) {
     const value = raw[name];
     if (mayBeEmpty && (value === undefined || value === ""))

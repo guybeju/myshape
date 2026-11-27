@@ -43,7 +43,7 @@ first mate 這一側推什麼在 [adapter](../../fm-board/spec/adapter.markdown)
 ## first mate 這一側（今天推的）
 
 - 只有主 home 的回報帶，數字來自這台機器上的 quota-axi：每個 Claude 帳號（quota-axi 的 lane）一組，名稱是它的 `accountKey`（`default` 寫成「Claude」）；每個有百分比的時段一筆，值是用了的百分比（100 減 `percentRemaining`，到小數一位）、它的 `resetsAt`、量的時間（`state.refreshedAt`，quota-axi 剛問過廠商時是報告的 `generatedAt`）；用了 80% 是 `warn`，95% 是 `critical`；`stale_after_s` 是 600。
-- quota-axi 只跑一次：`--provider claude --json --no-credential-refresh --max-age 300`，最多 10 秒（`fm_run_timed`）；從不加 `--allow-keychain-prompt`、`--allow-claude-inference` 或 `--full`。`--max-age` 讓 300 秒內的讀取用 quota-axi 上一次的答案，不是每次讀取都去問廠商。這一側自己不讀任何憑證或 token；帳號的名稱只取 quota-axi 不含秘密的輸出。
+- quota-axi 只跑一次：`--provider claude --json --no-credential-refresh --max-age 300`，最多 10 秒（`fm_run_timed`）；從不加 `--allow-keychain-prompt`、`--allow-claude-inference` 或 `--full`。`--max-age` 讓 300 秒內的讀取用 quota-axi 上一次的答案，不是每次讀取都去問廠商。有頁面時看板每 10 秒讀一次主 home，所以最多每 300 秒問一次廠商；沒有頁面時每 900 秒才讀一次（contracts 第 10 節），那時每次讀取都會問一次。這一側自己不讀任何憑證或 token；帳號的名稱只取 quota-axi 不含秘密的輸出。
 - 沒有 quota-axi、逾時、exit 不是 0 或 1、輸出讀不懂時，回報帶一個 `unavailable` 的組說明原因、沒有數字；不是新鮮的讀數（quota-axi 的 `stale`、`unavailable` 等）是那一組 `stale` 或 `unavailable`，說明是它的狀態與錯誤，也沒有數字。回報的其他部分不受影響，讀取照常成功。
 
 ### 已知的限制

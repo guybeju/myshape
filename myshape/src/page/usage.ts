@@ -11,7 +11,10 @@ const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
-/** A length of time in the largest two units that matter, rounded down: "2 天 3 小時", "4 小時 5 分", "6 分". */
+/**
+ * A length of time in the largest two units that matter, rounded down:
+ * "2 天 3 小時", "4 小時 5 分", "6 分".
+ */
 export function spanText(ms: number): string {
   if (ms < MINUTE_MS) return "不到 1 分";
   const days = Math.floor(ms / DAY_MS);
@@ -63,7 +66,10 @@ const GROUP_PILL: Record<MetricGroupView["state"], string | null> = {
   unavailable: "讀不到",
 };
 
-/** The class of a metric's row: a stale one is greyed, and only a current one carries its severity. */
+/**
+ * The class of a metric's row: a stale one is greyed, and only a current
+ * one carries its severity.
+ */
 export function itemClass(item: MetricView): string {
   if (item.stale !== null) return "usage-item stale";
   return item.severity === "normal" ? "usage-item" : `usage-item sev-${item.severity}`;
