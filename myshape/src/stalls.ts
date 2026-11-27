@@ -12,6 +12,12 @@ import type { Draft, Frozen } from "./records.js";
 /** The stall key of a topic, and of work with no topic. */
 export const NO_TOPIC = "-";
 
+/** MM-DD of `iso` in this machine's time, as the page prints days. */
+export function localDay(iso: string): string {
+  const date = new Date(iso);
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 export function stallKeyOf(topic: string | null): string {
   return topic === null ? NO_TOPIC : topic;
 }
@@ -112,7 +118,7 @@ export function deferStall(
   if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > KEEP_MAX_DAYS)
     return { ok: false, code: "usage", line: `延幾天要是 1 到 ${KEEP_MAX_DAYS} 的整數。` };
   const until = new Date(context.nowMs + days * 86_400_000).toISOString();
-  const shown = until.slice(5, 10);
+  const shown = localDay(until);
   return {
     ok: true,
     stall: {

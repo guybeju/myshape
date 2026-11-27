@@ -114,7 +114,7 @@ O3 過了期限就進它議題的「沒人接」卡（決定 5 選 B）：船長
 | --- | --- |
 | `todo-add`（內容改寫）、`todo-done`、`todo-obsolete` | 任何 |
 | `todo-claim`（做完了） | O1、O2、O3（O3 再按什麼都不改） |
-| `todo-failed` | O1、O3 |
+| `todo-failed` | O1、O3（O2 上同一個原因再跑一次什麼都不改，照第 9 節的原樣重做回 0） |
 | `todo-drop`（不做了） | O1、O2、O6 |
 | `todo-takedown`（好，撤下） | O4 |
 

@@ -540,6 +540,17 @@ function writeChange(
   return writeTopicChange(paths, board, change, { records, stamp });
 }
 
+// The writers' parameter types are aliases: test/state-writers.mjs reads the
+// first brace after a top-level function as its body.
+type LifecycleChange = Extract<Change, { file: "lifecycle" | "memory" }>;
+type TopicChange = Extract<Change, { file: "topics" }>;
+
+/** A change's records once stamped, and how to stamp the records of its parts. */
+interface Stamped {
+  records: StoredRecord[];
+  stamp: (records: readonly Draft[]) => StoredRecord[];
+}
+
 /**
  * Writes lifecycle.json: a captain's change whole, or the board's memory over
  * what the file holds. A memory change with no record keeps the file's outbox.
@@ -547,7 +558,7 @@ function writeChange(
 function writeLifecycle(
   paths: BoardPaths,
   board: StoredBoard,
-  change: Extract<Change, { file: "lifecycle" | "memory" }>,
+  change: LifecycleChange,
   records: StoredRecord[],
 ): StoredBoard {
   const next = change.file === "lifecycle" ? change.next : { ...board.lifecycle, ...change.memory };
@@ -563,8 +574,8 @@ function writeLifecycle(
 function writeTopicChange(
   paths: BoardPaths,
   board: StoredBoard,
-  change: Extract<Change, { file: "topics" }>,
-  saved: { records: StoredRecord[]; stamp: (records: readonly Draft[]) => StoredRecord[] },
+  change: TopicChange,
+  saved: Stamped,
 ): Written {
   const { records, stamp } = saved;
   if (change.lifecycle !== undefined)

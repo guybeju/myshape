@@ -30,7 +30,7 @@ import {
 } from "./lifecycle.js";
 import type { LifecycleStore } from "./lifecycle.js";
 import { KEEP_DEFAULT_DAYS, KEEP_MAX_DAYS, changeSettings } from "./lifecycle-settings.js";
-import { deferStall } from "./stalls.js";
+import { deferStall, localDay } from "./stalls.js";
 
 /** What an operation reads: the board as it is, who the agent side is, and the time. */
 export interface OpContext {
@@ -169,6 +169,9 @@ function transitionProblem(
   const id = stringField(args, "task");
   const item = id === null || !Object.hasOwn(ctx.todos.items, id) ? undefined : ctx.todos.items[id];
   if (id === null || item === undefined) return null;
+  // The same verdict again changes nothing, and a redo is not refused (contracts section 9).
+  const reason = topics.oneLine(stringField(args, "reason") ?? "", topics.GOAL_MAX);
+  if (op === "todo-failed" && item.state === "rejected" && item.reason === reason) return null;
   return todoTransitionProblem(op, id, todoState(item));
 }
 
@@ -445,7 +448,7 @@ function keepIdle(ctx: OpContext, topic: string, days: number | null): Lifecycle
   const until = new Date(Date.parse(ctx.now) + days * 86_400_000).toISOString();
   const store = withKept(ctx.lifecycle, topic, until);
   const name = ctx.topics.doc.topics[topic]?.name ?? topic;
-  const day = until.slice(5, 10);
+  const day = localDay(until);
   return {
     ok: true,
     changed: true,

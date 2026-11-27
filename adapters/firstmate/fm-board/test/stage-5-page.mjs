@@ -193,7 +193,7 @@ export default async function run(page) {
   // first mate puts the answered call off until December, so the loose call's turn comes.
   const backlog = `${process.env.TB_MAIN}/data/backlog.md`;
   const held = "(hold: 要合併嗎？ 選項：合併 | 先不要) (hold-kind: captain)";
-  fs.writeFileSync(backlog, fs.readFileSync(backlog, "utf8").replace(held, `${held} (hold-until: 2026-12-01)`));
+  fs.writeFileSync(backlog, fs.readFileSync(backlog, "utf8").replace(held, `${held} (hold-until: 2099-12-01)`));
   await page.waitFor("the loose call's turn", has("這個要不要做？"), 15000);
   if (await page.evaluate(has("個決定排隊，輪到時才顯示"))) throw new Error("no decision waits once the loose call is in front");
   // A decision that records no outcome: a typed answer says it will be released by default.

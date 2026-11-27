@@ -968,6 +968,10 @@ describe("the lifecycle operations", () => {
       line: "claimed 現在是「驗證沒過」，不能 todo-failed；現在能做的：todo-claim、todo-done、todo-obsolete、todo-drop。",
     });
     expect(again.committed).toBeNull();
+    // The same verdict again is a redo: nothing changes, and it is not refused.
+    const redo = apply(rejected.board, "todo-failed", { task: "claimed", reason: "沒起來" }, false);
+    expect(redo.response).toMatchObject({ ok: true });
+    expect(redo.committed).toBeNull();
     expect(apply(board, "todo-takedown", { task: "open" }).response).toMatchObject({
       code: "refused",
     });
