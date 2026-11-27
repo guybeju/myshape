@@ -24,6 +24,7 @@ async function follow(list: object[], mode: InitMessage["permissionMode"] = "aut
   const prompt = new PromptStream("go");
   const report = await followSession(messages(list, error), prompt, abort, {
     mode,
+    apiKeySource: "none",
     onStart: (start) => starts.push(start),
   });
   return { report, aborted: abort.signal.aborted, starts };
@@ -61,7 +62,7 @@ describe("followSession", () => {
     const { report } = await follow([init("s1", "auto", "apiKeyHelper")]);
     expect(report.end).toEqual({
       kind: "refused",
-      reason: "session 的認證來源是 apiKeyHelper，不是訂閱 token，已停下。",
+      reason: "session 的認證來源是 apiKeyHelper，不是設定的 none，已停下。",
     });
   });
 
@@ -162,8 +163,32 @@ describe("a session that hands back no output in the schema", () => {
 });
 
 describe("refuseStart", () => {
-  it("lets auto with no API key go on", () => {
-    expect(refuseStart(init("s") as InitMessage, "auto")).toBeUndefined();
+  const subscription = { mode: "auto", apiKeySource: "none" } as const;
+  const apiKey = { mode: "auto", apiKeySource: "ANTHROPIC_API_KEY" } as const;
+
+  it("lets the subscription token's start (no API key) go on", () => {
+    expect(refuseStart(init("s") as InitMessage, subscription)).toBeUndefined();
+  });
+
+  it("lets an API key's start go on when the settings select the API key", () => {
+    const start = init("s", "auto", "ANTHROPIC_API_KEY") as InitMessage;
+    expect(refuseStart(start, apiKey)).toBeUndefined();
+  });
+
+  it("refuses each mode's start under the other mode", () => {
+    expect(refuseStart(init("s") as InitMessage, apiKey)).toBe(
+      "session 的認證來源是 none，不是設定的 ANTHROPIC_API_KEY，已停下。",
+    );
+    const start = init("s", "auto", "ANTHROPIC_API_KEY") as InitMessage;
+    expect(refuseStart(start, subscription)).toBe(
+      "session 的認證來源是 ANTHROPIC_API_KEY，不是設定的 none，已停下。",
+    );
+  });
+
+  it("refuses the wrong permission mode first", () => {
+    expect(refuseStart(init("s", "default") as InitMessage, subscription)).toBe(
+      "session 開始時的權限模式是 default，不是 auto，已停下。",
+    );
   });
 });
 

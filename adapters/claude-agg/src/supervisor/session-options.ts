@@ -3,6 +3,7 @@
 // sections 4.2, 4.3 and 5.3).
 
 import type { PlainEnv } from "./commands.js";
+import { AUTH_VARIABLE, type Credential } from "./credential.js";
 import { preToolUseHook, type GuardContext } from "./guard.js";
 import type { QueryOptions } from "./sdk.js";
 
@@ -83,17 +84,21 @@ export const PLANNER_OUTPUT_SCHEMA: Record<string, unknown> = {
 
 /**
  * A session's whole environment. The SDK's `env` replaces the child's
- * environment, so this is everything it gets: no `ANTHROPIC_API_KEY`,
- * `ANTHROPIC_AUTH_TOKEN` or cloud provider name, whose precedence is above the
- * subscription token's.
+ * environment, so this is everything it gets: four plain names picked one by
+ * one from `base` (nothing else of the supervisor's environment), exactly one
+ * credential under its mode's name, never `ANTHROPIC_AUTH_TOKEN` or a cloud
+ * provider name, and the subprocess scrub always on, so the credential is
+ * taken out of every Bash command, hook and stdio MCP server the session
+ * starts.
  */
-export function sessionEnv(base: PlainEnv, token: string): Record<string, string> {
+export function sessionEnv(base: PlainEnv, credential: Credential): Record<string, string> {
   return {
     PATH: base.PATH,
     HOME: base.HOME,
     LANG: base.LANG,
     TMPDIR: base.TMPDIR,
-    CLAUDE_CODE_OAUTH_TOKEN: token,
+    [AUTH_VARIABLE[credential.mode]]: credential.secret,
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: MAX_SUBAGENT_DEPTH,
     CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: MAX_CONCURRENT_SUBAGENTS,
   };
@@ -151,7 +156,7 @@ export interface SessionContext {
    */
   model: string | undefined;
   env: PlainEnv;
-  token: string;
+  credential: Credential;
   guard: GuardContext;
   abortController: AbortController;
 }
@@ -169,7 +174,7 @@ export function workerOptions(session: WorkerSession, ctx: SessionContext): Quer
     settingSources: ["project"],
     projectConfigRoot: session.mainCheckout,
     strictMcpConfig: true,
-    env: sessionEnv(ctx.env, ctx.token),
+    env: sessionEnv(ctx.env, ctx.credential),
     maxTurns: WORKER_MAX_TURNS,
     outputFormat: { type: "json_schema", schema: WORKER_OUTPUT_SCHEMA },
     persistSession: true,
@@ -191,7 +196,7 @@ export function plannerOptions(cwd: string, ctx: SessionContext): QueryOptions {
     hooks: { PreToolUse: [{ hooks: [preToolUseHook(ctx.guard)], onFailure: "block" }] },
     settingSources: [],
     strictMcpConfig: true,
-    env: sessionEnv(ctx.env, ctx.token),
+    env: sessionEnv(ctx.env, ctx.credential),
     maxTurns: PLANNER_MAX_TURNS,
     outputFormat: { type: "json_schema", schema: PLANNER_OUTPUT_SCHEMA },
     persistSession: false,

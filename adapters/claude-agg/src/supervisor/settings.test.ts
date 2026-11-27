@@ -24,7 +24,7 @@ import {
   type Settings,
 } from "./settings.js";
 import { StateStore } from "./state-store.js";
-import { redactor } from "./token.js";
+import { redactor } from "./credential.js";
 
 const dir = mkdtempSync(join(tmpdir(), "claude-agg-settings-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -190,7 +190,7 @@ describe("how a worker can end", () => {
       result(workerOutput("report")),
     ]);
     expect(world.commands.summaries[0]?.text).toBe(
-      "session 的認證來源是 ANTHROPIC_API_KEY，不是訂閱 token，已停下。",
+      "session 的認證來源是 ANTHROPIC_API_KEY，不是設定的 none，已停下。",
     );
     expect(world.query.aborted).toBe(1);
   });
@@ -303,8 +303,8 @@ describe("the subscription token", () => {
 
   it("starts nothing without a token", async () => {
     const world = new World({ normal: ["build"] });
-    const deps = { ...world.deps(), token: "" };
-    await expect(Supervisor.start(world.settings(), deps)).rejects.toThrow("no subscription token");
+    const deps = { ...world.deps(), credential: { mode: "api-key" as const, secret: "" } };
+    await expect(Supervisor.start(world.settings(), deps)).rejects.toThrow("no credential");
     expect(world.commands.calls).toEqual([]);
   });
 });

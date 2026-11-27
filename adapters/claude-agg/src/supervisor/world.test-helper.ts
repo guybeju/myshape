@@ -75,7 +75,7 @@ export class World {
     return {
       query: this.query.query,
       run: this.commands.run,
-      token: CANARY,
+      credential: { mode: "subscription-token", secret: CANARY },
       env: ENV,
       nowMs: () => this.nowMs,
       log: (line) => this.logs.push(line),

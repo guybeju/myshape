@@ -23,7 +23,7 @@ const guard = {
 const CTX: SessionContext = {
   model: undefined,
   env: ENV,
-  token: CANARY,
+  credential: { mode: "subscription-token", secret: CANARY },
   guard,
   abortController: abort,
 };
@@ -35,6 +35,7 @@ const ENV_ALL = {
   LANG: ENV.LANG,
   TMPDIR: ENV.TMPDIR,
   CLAUDE_CODE_OAUTH_TOKEN: CANARY,
+  CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
   CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: "1",
   CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: "2",
 };
@@ -161,17 +162,37 @@ describe("plannerOptions", () => {
 });
 
 describe("sessionEnv", () => {
-  it("holds one credential name and no name that outranks it", () => {
-    const env = sessionEnv({ ...ENV }, CANARY);
-    expect(Object.keys(env).toSorted()).toEqual(Object.keys(ENV_ALL).toSorted());
-    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK"]) {
-      expect(env).not.toHaveProperty(name);
-    }
+  const OUTRANKING = [
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+  ];
+  const AUTH_NAMES = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
+
+  it.each([
+    ["subscription-token", "CLAUDE_CODE_OAUTH_TOKEN"],
+    ["api-key", "ANTHROPIC_API_KEY"],
+  ] as const)("in %s mode holds exactly one credential, %s", (mode, name) => {
+    const env = sessionEnv({ ...ENV }, { mode, secret: CANARY });
+    expect(AUTH_NAMES.filter((each) => each in env)).toEqual([name]);
+    expect(env[name]).toBe(CANARY);
+    for (const other of OUTRANKING) expect(env).not.toHaveProperty(other);
+    expect(env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"]).toBe("1");
   });
 
-  it("takes nothing but the four names from what it is given", () => {
-    const loaded = { ...ENV, ANTHROPIC_API_KEY: "x", SSH_AUTH_SOCK: "/s" } as typeof ENV;
-    expect(Object.keys(sessionEnv(loaded, CANARY))).not.toContain("ANTHROPIC_API_KEY");
+  it("takes nothing of the supervisor's environment but the four names", () => {
+    const supervisorEnv = {
+      ...ENV,
+      ANTHROPIC_API_KEY: "sk-ant-supervisor-not-real",
+      GH_TOKEN: "gh-not-real",
+      SSH_AUTH_SOCK: "/s",
+      MYSHAPE_HOME: "/srv/home",
+      GIT_TERMINAL_PROMPT: "0",
+    } as typeof ENV;
+    const env = sessionEnv(supervisorEnv, { mode: "subscription-token", secret: CANARY });
+    expect(Object.keys(env).toSorted()).toEqual(Object.keys(ENV_ALL).toSorted());
+    expect(Object.values(env)).not.toContain("sk-ant-supervisor-not-real");
   });
 });
 

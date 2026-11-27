@@ -325,7 +325,7 @@ function startSupervisor(query: ScriptedQuery, fake: FakeCommands): Promise<Supe
     {
       query: query.query,
       run: runner(fake),
-      token: CANARY,
+      credential: { mode: "subscription-token", secret: CANARY },
       env: scratch.env,
       nowMs: () => Date.now(),
       log: (line) => logs.push(line),

@@ -71,13 +71,13 @@ import { plannerOptions, workerOptions, type SessionContext } from "./session-op
 import { checkSettings, takeLock, type RepoSetting, type Settings } from "./settings.js";
 import { StateStore, type PlannedTask } from "./state-store.js";
 import { boardTodos, todoOps, type TodoOp } from "./todos.js";
-import { redactor } from "./token.js";
+import { AUTH_SOURCE, redactor, type Credential } from "./credential.js";
 
 export interface Deps {
   query: QueryFn;
   run: RunCommand;
-  /** The subscription token, handed to sessions only. */
-  token: string;
+  /** The settings' credential, handed to sessions only. */
+  credential: Credential;
   env: PlainEnv;
   nowMs: () => number;
   log: (line: string) => void;
@@ -229,7 +229,7 @@ export class Supervisor {
     this.settings = settings;
     this.deps = deps;
     this.release = release;
-    this.redact = redactor(deps.token);
+    this.redact = redactor(deps.credential.secret);
     this.store = new StateStore(join(settings.home, "agg"), this.redact, () =>
       Math.floor(deps.nowMs() / 1000),
     );
@@ -249,7 +249,7 @@ export class Supervisor {
 
   /** Checks the settings, takes the lock, sets the home up, starts the board, and reconciles. */
   static async start(settings: Settings, deps: Deps): Promise<Supervisor> {
-    if (deps.token === "") throw new Error("claude-agg: no subscription token; nothing starts");
+    if (deps.credential.secret === "") throw new Error("claude-agg: no credential; nothing starts");
     const checked = checkSettings(settings, deps.realPath);
     const release = takeLock(checked.worktreeRoot, deps.pid, deps.isAlive);
     const supervisor = new Supervisor(checked, deps, release);
@@ -855,11 +855,16 @@ export class Supervisor {
 
   // --- the planner -------------------------------------------------------------
 
+  /** The `apiKeySource` every session's start message must name. */
+  private apiKeySource(): string {
+    return AUTH_SOURCE[this.deps.credential.mode];
+  }
+
   private sessionContext(defaultBranch: string | null, abort: AbortController): SessionContext {
     return {
       model: this.settings.model,
       env: this.deps.env,
-      token: this.deps.token,
+      credential: this.deps.credential,
       abortController: abort,
       guard: {
         home: this.settings.home,
@@ -904,7 +909,11 @@ export class Supervisor {
     const prompt = new PromptStream(plannerPrompt(this.plannerBrief(entry, messages, purpose)));
     const options = plannerOptions(this.settings.worktreeRoot, this.sessionContext(null, abort));
     const run = this.deps.query({ prompt, options });
-    const report = await followSession(run, prompt, abort, { mode: "dontAsk", onStart: () => {} });
+    const report = await followSession(run, prompt, abort, {
+      mode: "dontAsk",
+      apiKeySource: this.apiKeySource(),
+      onStart: () => {},
+    });
     this.takePlan(entry.topic, report, purpose?.ref);
     if (report.end.kind === "quota") {
       for (const item of messages) this.offered.delete(item.file);
@@ -1092,6 +1101,7 @@ export class Supervisor {
     this.streams.set(id, prompt);
     const report = await followSession(run, prompt, abort, {
       mode: "auto",
+      apiKeySource: this.apiKeySource(),
       onStart: (init) => {
         task.session_id = init.session_id;
         if (init.model !== undefined) task.model = init.model;
