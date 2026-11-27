@@ -1275,8 +1275,13 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
   // when the sandbox refused the write on the .git target itself (a line of
   // its output names that path and the refusal), the file is byte for byte
   // unchanged, and the command really ran. Selected by -t "sandbox-blocks-git".
+  // git runs from the worktree with --git-dir, so it reaches its write step
+  // (-C <main> stops at getcwd, since the sandbox reads only <main>/.git);
+  // that step is config.lock beside the config, and git reports the refusal
+  // against the config path. dd opens the hook itself (install writes a
+  // temporary file in hooks/ first).
   it(
-    "sandbox-blocks-git (iii-a): git by an absolute path that needs no xcrun cannot write <main>/.git/config",
+    "sandbox-blocks-git (iii-a): git by an absolute path that needs no xcrun, given --git-dir from the worktree, cannot write <main>/.git/config",
     async (test) => {
       const repo = repository();
       const configPath = join(repo.main, ".git", "config");
@@ -1287,7 +1292,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       const run = await probeSession(
         repo,
         probe,
-        `${gitPath} -C ${repo.main} config --local agg.probe 1; echo "write-exit=$?"`,
+        `${gitPath} --git-dir=${join(repo.main, ".git")} config --local agg.probe 1; echo "write-exit=$?"`,
       );
       expectStarted(run);
       expect(readFileSync(configPath).equals(config)).toBe(true);
@@ -1302,8 +1307,8 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       command: (source, hook) => `sh -c "cp ${source} ${hook}"; echo "write-exit=$?"`,
     },
     {
-      what: "install -m 755",
-      command: (source, hook) => `install -m 755 ${source} ${hook}; echo "write-exit=$?"`,
+      what: "dd of=",
+      command: (source, hook) => `dd if=${source} of=${hook}; echo "write-exit=$?"`,
     },
   ];
   for (const { what, command } of copies) {
