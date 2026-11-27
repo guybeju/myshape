@@ -198,7 +198,7 @@ function nudgeLine(line: NudgeLine, settings: Frozen<LifecycleSettings>, nameOf:
   if (line.topic === null) return `沒有議題的 ${line.label}（${said}）`;
   const place = `議題「${nameOf(line.topic)}」（id ${line.topic}）`;
   if (line.key.startsWith("topic\t"))
-    return `${place}沒有任何開著的工作，${raiseWords("T2", settings)}`;
+    return `${place}沒有任何開著的工作，滿 ${durationWords(settings.T2.raise)}成為「沒人處理的議題」交給使用者`;
   return `${place}的 ${line.label}（${said}）`;
 }
 

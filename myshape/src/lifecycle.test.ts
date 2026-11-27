@@ -648,7 +648,7 @@ describe("reminders", () => {
     const { evaluation } = look(homes, store());
     expect(evaluation.nudge?.text).toBe(
       "看板提醒：這些卡沒有人接手，期限到了就交給使用者決定：" +
-        "議題「Idle」（id idle）沒有任何開著的工作，滿 3 天交給使用者；" +
+        "議題「Idle」（id idle）沒有任何開著的工作，滿 3 天成為「沒人處理的議題」交給使用者；" +
         "議題「High」（id hi）的 main/parked（停著、沒有日期也沒有等的項目，滿 3 天交給使用者）；" +
         "沒有議題的 main/loose（沒有議題的排隊項目與 agent，滿 3 天交給使用者）。",
     );
