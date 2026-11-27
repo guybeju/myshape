@@ -182,20 +182,23 @@ export function isShown(shown: Map<string, string[]> | null, topic: string | nul
 }
 
 /**
- * What the filter hides that waits on the captain: decisions (live holds and
- * close proposals) and hands-on items still to do.
+ * What the filter hides that waits on the captain: decisions (live holds
+ * shown now and close proposals), decisions waiting their turn, and hands-on
+ * items still to do.
  */
 export function owedOutside(
   source: FilterSource,
   shown: Map<string, string[]> | null,
-): { decide: number; handsOn: number } {
-  if (shown === null) return { decide: 0, handsOn: 0 };
-  const holds = source.holds.filter((hold) => hold.live && !isShown(shown, hold.topic)).length;
+): { decide: number; queued: number; handsOn: number } {
+  if (shown === null) return { decide: 0, queued: 0, handsOn: 0 };
+  const hidden = source.holds.filter((hold) => hold.live && !isShown(shown, hold.topic));
+  const holds = hidden.filter((hold) => !hold.waits_turn).length;
+  const queued = hidden.length - holds;
   const proposals = Object.entries(source.topics).filter(
     ([id, topic]) => topic.close_reason !== null && !shown.has(id),
   ).length;
   const handsOn = source.todos.filter(
     (todo) => todo.state !== "claimed" && !isShown(shown, todo.topic),
   ).length;
-  return { decide: holds + proposals, handsOn };
+  return { decide: holds + proposals, queued, handsOn };
 }

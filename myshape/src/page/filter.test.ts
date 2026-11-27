@@ -55,6 +55,7 @@ function source(): FilterSource {
         on_answer: "close",
         on_answer_recorded: true,
         live: true,
+        waits_turn: false,
         deferred_reason: null,
         topic: "gpu",
         stale: false,
@@ -68,8 +69,23 @@ function source(): FilterSource {
         on_answer: "close",
         on_answer_recorded: true,
         live: true,
+        waits_turn: false,
         deferred_reason: null,
         topic: null,
+        stale: false,
+      },
+      {
+        home: "main",
+        task: "h3",
+        title: "排在後面",
+        question: "?",
+        options: [],
+        on_answer: "close",
+        on_answer_recorded: true,
+        live: true,
+        waits_turn: true,
+        deferred_reason: null,
+        topic: "misc",
         stale: false,
       },
     ],
@@ -149,12 +165,18 @@ describe("the filter", () => {
 
   it("counts what waits on the captain outside the filter", () => {
     const shown = shownTopics(source(), filter({ any: ["AI_INFRA"] }));
-    expect(owedOutside(source(), shown)).toEqual({ decide: 2, handsOn: 1 });
+    expect(owedOutside(source(), shown)).toEqual({ decide: 2, queued: 1, handsOn: 1 });
     expect(owedOutside(source(), shownTopics(source(), filter({ any: ["WORK"] })))).toEqual({
       decide: 2,
+      queued: 1,
       handsOn: 0,
     });
-    expect(owedOutside(source(), null)).toEqual({ decide: 0, handsOn: 0 });
+    expect(owedOutside(source(), shownTopics(source(), filter({ untagged: true })))).toEqual({
+      decide: 3,
+      queued: 0,
+      handsOn: 1,
+    });
+    expect(owedOutside(source(), null)).toEqual({ decide: 0, queued: 0, handsOn: 0 });
   });
 
   it("cycles a hashtag button through 有, 沒有 and off, leaving any saved view", () => {

@@ -5,8 +5,16 @@ import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 import { emptyTodos } from "./todos.js";
 import type { TodoItem, TodoStore } from "./todos.js";
-import { LEDGER_PER_TOPIC, buildView, parseOptions, parseTags, placeTask } from "./view.js";
-import type { HomeSnapshot, ViewInput } from "./view.js";
+import {
+  LEDGER_PER_TOPIC,
+  buildView,
+  parseOptions,
+  parseTags,
+  placeTask,
+  turnNoticeText,
+  turnsTaken,
+} from "./view.js";
+import type { HoldView, HomeSnapshot, ViewInput } from "./view.js";
 
 const NOW = Date.parse("2026-07-10T00:00:00Z");
 const T0 = Date.parse("2026-07-01T00:00:00Z") / 1000;
@@ -87,6 +95,7 @@ function input(extra: Partial<ViewInput> = {}): ViewInput {
     nowMs: NOW,
     staleMs: 180_000,
     label: "plain",
+    decisionsAtOnce: null,
     ...extra,
   };
 }
@@ -643,6 +652,7 @@ describe("holds and questions", () => {
       on_answer: "release",
       on_answer_recorded: false,
       live: true,
+      waits_turn: false,
       deferred_reason: null,
       topic: "hi",
       stale: false,
@@ -680,6 +690,110 @@ describe("holds and questions", () => {
       }),
     );
     expect(view.holds.map((entry) => entry.task)).toEqual(["a", "b"]);
+  });
+});
+
+describe("decisions at once", () => {
+  // Across homes, in the board's order: sm1's high topic, then main's normal ones, then no topic.
+  const homes = (): HomeSnapshot[] => [
+    home("main", {
+      report: report({
+        holds: [
+          hold("normal"),
+          hold("loose"),
+          hold("deferred", { hold_bucket: "dated", hold_until: "2026-12-01" }),
+        ],
+        topics: { normal: tag("n2"), deferred: tag("hi") },
+        queued: ["normal", "loose", "deferred"].map((id): ReportQueued => ({
+          id,
+          kind: "captain",
+          title: id,
+          hold: "q",
+          captain: true,
+          blockers: [],
+          topic_hint: null,
+        })),
+      }),
+    }),
+    home("sm1", { report: report({ holds: [hold("high")], topics: { high: tag("hi") } }) }),
+  ];
+  const turns = (cap: number | null) =>
+    buildView(input({ homes: homes(), decisionsAtOnce: cap })).holds.map(
+      (entry) => `${entry.home}/${entry.task}:${entry.live ? "" : "deferred,"}${entry.waits_turn}`,
+    );
+
+  it("shows every live decision when the aggregator sets no cap, as before", () => {
+    expect(turns(null)).toEqual([
+      "sm1/high:false",
+      "main/normal:false",
+      "main/loose:false",
+      "main/deferred:deferred,false",
+    ]);
+  });
+
+  it("lets the first live decisions in the board's order through and queues the rest", () => {
+    expect(turns(1)).toEqual([
+      "sm1/high:false",
+      "main/normal:true",
+      "main/loose:true",
+      "main/deferred:deferred,false",
+    ]);
+    expect(turns(2)).toEqual([
+      "sm1/high:false",
+      "main/normal:false",
+      "main/loose:true",
+      "main/deferred:deferred,false",
+    ]);
+    expect(turns(5)).toEqual(turns(null));
+  });
+
+  it("says a queued item whose decision waits its turn is queued for a decision", () => {
+    const view = buildView(input({ homes: homes(), decisionsAtOnce: 1 }));
+    expect(view.queued.map((entry) => `${entry.task}:${entry.waiting}`)).toEqual([
+      "normal:決定排隊",
+      "loose:決定排隊",
+      "deferred:等你決定",
+    ]);
+    const open = buildView(input({ homes: homes(), decisionsAtOnce: null }));
+    expect(open.queued.every((entry) => entry.waiting === "等你決定")).toBe(true);
+  });
+
+  it("finds the decisions whose turn came: queued before, at the front now", () => {
+    const first = buildView(input({ homes: homes(), decisionsAtOnce: 1 }));
+    const seen = turnsTaken(new Set(), first.holds);
+    expect(seen.taken).toEqual([]);
+    expect([...seen.waiting]).toEqual(["main\tnormal", "main\tloose"]);
+    // sm1's decision was answered: main/normal comes to the front, main/loose still waits.
+    const [, ...rest] = homes();
+    const next = buildView(
+      input({
+        homes: [
+          homes()[0] as HomeSnapshot,
+          ...rest.map((entry) => ({ ...entry, report: report() })),
+        ],
+        decisionsAtOnce: 1,
+      }),
+    );
+    const step = turnsTaken(seen.waiting, next.holds);
+    expect(step.taken.map((entry) => entry.task)).toEqual(["normal"]);
+    expect([...step.waiting]).toEqual(["main\tloose"]);
+    // A decision that was never queued is not announced, and one gone from every home is forgotten.
+    expect(turnsTaken(new Set(["main\tgone"]), first.holds).taken).toEqual([]);
+    expect([...turnsTaken(new Set(["main\tgone"]), []).waiting]).toEqual([]);
+  });
+
+  it("writes the notice of a decision's turn as one fixed sentence", () => {
+    const view = buildView(input({ homes: homes(), decisionsAtOnce: 1 }));
+    const [high, normal, loose] = view.holds;
+    expect(turnNoticeText(view, high as HoldView, 2)).toBe(
+      "看板上輪到 sm1/high 的決定了（議題「High」，id hi）；還有 2 個決定排隊",
+    );
+    expect(turnNoticeText(view, normal as HoldView, 0)).toBe(
+      "看板上輪到 main/normal 的決定了（議題「Normal two」，id n2）",
+    );
+    expect(turnNoticeText(view, loose as HoldView, 1)).toBe(
+      "看板上輪到 main/loose 的決定了（沒有議題）；還有 1 個決定排隊",
+    );
   });
 });
 

@@ -24,13 +24,14 @@ import { boardPaths, parseConfigArgs } from "./layout.js";
 import { MAX_REQUEST_BYTES } from "./protocol.js";
 import { DispatchNotifier, fileStore } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
+import { parseAggregator } from "./report.js";
 import { DecisionStore, decisionStep } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
 import { localLabel, machineTimeZone } from "./schedule-time.js";
 import { TICK_MS, endedNotices, tick } from "./schedule-clock.js";
 import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
-import { buildView, placeTask } from "./view.js";
+import { buildView, placeTask, turnNoticeText, turnsTaken } from "./view.js";
 import { findLines } from "./lineage.js";
 import { checkName, hashtagView, nameOfKey, topicsWith } from "./hashtags.js";
 import { openKeys, scheduleView } from "./schedule-view.js";
@@ -381,17 +382,48 @@ function boardView(service) {
         version: viewVersion(service),
         polling: service.poller.active,
         writes: visibleWrites(service),
-        ...buildView({
-            topics: service.board.topics,
-            todos: service.board.todos,
-            homes: service.poller.snapshots(),
-            events: service.journal.events,
-            summaries: service.summaries.all,
-            nowMs: Date.now(),
-            staleMs: service.timings.staleMs,
-            label: labelOf(service),
-        }),
+        ...buildView(viewInput(service)),
     };
+}
+function viewInput(service) {
+    return {
+        topics: service.board.topics,
+        todos: service.board.todos,
+        homes: service.poller.snapshots(),
+        events: service.journal.events,
+        summaries: service.summaries.all,
+        nowMs: Date.now(),
+        staleMs: service.timings.staleMs,
+        label: labelOf(service),
+        decisionsAtOnce: service.aggregator?.decisions_at_once ?? null,
+    };
+}
+/**
+ * Tells the aggregator once about each decision whose turn came: one it saw
+ * waiting behind the cap that is now among the decisions shown. The fixed id
+ * keeps it to one notice per decision, across restarts too. With no cap
+ * nothing waits, so nothing is sent.
+ */
+function noticeTurns(service) {
+    const input = viewInput(service);
+    if (input.decisionsAtOnce === null) {
+        service.waitingTurns.clear();
+        return;
+    }
+    const view = buildView(input);
+    const step = turnsTaken(service.waitingTurns, view.holds);
+    service.waitingTurns = step.waiting;
+    for (const hold of step.taken) {
+        const text = turnNoticeText(view, hold, step.waiting.size);
+        const topic = hold.topic === null ? {} : { topic: topicRef(service, hold.topic) };
+        const digest = crypto
+            .createHash("sha256")
+            .update(`${hold.home}\n${hold.task}\n${hold.question}`)
+            .digest("hex");
+        submitNotice(service, { kind: "notice", event: "decision.front", text, ...topic }, hold.topic, {
+            id: `w-d-${digest.slice(0, 16)}`,
+        });
+    }
 }
 /** Test-only: the whole board state, as the page will get it. Counts as a viewer. */
 async function dump(service, args) {
@@ -775,13 +807,7 @@ function loadAggregator(file) {
     catch {
         return null;
     }
-    if (!isRecord(raw))
-        return null;
-    return {
-        name: stringField(raw, "name"),
-        label: stringField(raw, "label"),
-        update_hint: stringField(raw, "update_hint"),
-    };
+    return parseAggregator(raw);
 }
 /** Keeps the root report's aggregator block, so texts written before the next read can use it. */
 function rememberAggregator(service, aggregator) {
@@ -825,6 +851,7 @@ function loadService(boot) {
         version: 1,
         ipc: null,
         clock: null,
+        waitingTurns: new Set(),
         aggregator,
         poller: new Poller(run, journal, new Offsets(paths), timings, {
             onChange: bump,
@@ -832,6 +859,7 @@ function loadService(boot) {
             closedCursor: (home) => decisions.get(home)?.cursor ?? null,
             onReport: (home, report, startedAt) => {
                 recordDecisions(service, home, report, startedAt);
+                noticeTurns(service);
                 // A deliverer that may run again without a start or a confirmation
                 // (a binding put back as it was) hands its waiting writes over here.
                 if (home === MAIN_HOME)
@@ -912,6 +940,9 @@ function topicOp(service, op, args, fromPage = false) {
         service.version += 1;
         if (applied.appendError !== null)
             log(`records wait in the outbox: ${applied.appendError}`);
+        // Moving, archiving, merging or reopening a topic can give another decision its turn.
+        if (applied.committed === "topics")
+            noticeTurns(service);
     }
     notifyDecision(service, applied.decisions);
     for (const notice of applied.notices)

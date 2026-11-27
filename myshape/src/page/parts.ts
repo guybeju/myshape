@@ -173,6 +173,21 @@ function holdMeta(view: View, actions: Actions, hold: HoldView, showTopic: boole
   );
 }
 
+/** True for a live decision shown now, with its answer buttons; not one waiting its turn. */
+export function inFront(hold: HoldView): boolean {
+  return hold.live && !hold.waits_turn;
+}
+
+/**
+ * The line that stands for the decisions waiting their turn: only how many,
+ * no question and no buttons, so only the ones in front can be answered.
+ */
+export function turnFold(holds: HoldView[]): Child {
+  const waiting = holds.filter((hold) => hold.waits_turn).length;
+  if (waiting === 0) return null;
+  return h("p", { class: "note turns" }, `還有 ${waiting} 個決定排隊，輪到時才顯示`);
+}
+
 /** One backlog item that no worker has been dispatched for. */
 export function queuedRow(item: QueuedView): Child {
   return h(

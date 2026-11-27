@@ -1,5 +1,5 @@
 import { h } from "./dom.js";
-import { agentRow, closedFold, closedTodoEntries, holdCard, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
+import { agentRow, closedFold, closedTodoEntries, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, turnFold, untaggedQueued, } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
 import { dropHint } from "./drop.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
@@ -28,11 +28,13 @@ function topicCard(view, actions, id, shown) {
     if (topic === undefined)
         return null;
     const agents = view.agents.filter((agent) => agent.topic === id);
-    const deciding = view.holds.filter((hold) => hold.topic === id && hold.live).length;
+    const own = view.holds.filter((hold) => hold.topic === id);
+    const deciding = own.filter(inFront).length;
+    const turns = own.filter((hold) => hold.waits_turn).length;
     const doing = liveTodos(view, id).filter(needsCaptain).length;
     const waiting = view.queued.filter((item) => item.topic === id).length;
     const unsent = view.writes.filter((write) => write.topic === id && BAD_WRITES.includes(write.state)).length;
-    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), topicChips(view, id), matchedFields(shown, id));
+    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, turns > 0 ? h("span", { class: "pill" }, `決定排隊 ${turns}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), topicChips(view, id), matchedFields(shown, id));
 }
 /**
  * The topics a queue box lists: those the filter shows, without the scheduled
@@ -159,8 +161,8 @@ export function home(page, view, actions) {
             : section("要你動手", todos.map((todo) => todoCard(page, view, actions, todo, true))),
         shown === null ? noTopic(view) : null,
         section("等你決定", closeProposals(view, actions, shown), mine(view.holds)
-            .filter((hold) => hold.live)
-            .map((hold) => holdCard(page, view, actions, hold, true))),
+            .filter(inFront)
+            .map((hold) => holdCard(page, view, actions, hold, true)), turnFold(mine(view.holds))),
         section("最近的結果", mine(view.summaries)
             .slice(0, RECENT_SUMMARIES)
             .map((summary) => summaryRow(view, actions, summary, true))),

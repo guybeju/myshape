@@ -146,13 +146,19 @@ function parseFeedHome(raw) {
         read_timeout_s: seconds(raw["read_timeout_s"], READ_TIMEOUT_S),
     };
 }
-function parseAggregator(raw) {
+/** A cap is a positive whole number; anything else is no cap, so no decision is ever hidden by mistake. */
+function capOf(value) {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+/** The aggregator block of a root report, or of the board's own copy of the last one. */
+export function parseAggregator(raw) {
     if (!isRecord(raw))
         return null;
     return {
         name: stringField(raw, "name"),
         label: stringField(raw, "label"),
         update_hint: stringField(raw, "update_hint"),
+        decisions_at_once: capOf(raw["decisions_at_once"]),
     };
 }
 function parseQuestion(raw) {

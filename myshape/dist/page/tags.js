@@ -90,6 +90,7 @@ function owedLine(view, actions, shown) {
     const owed = owedOutside(view, shown);
     const parts = [
         `等你決定 ${owed.decide}`,
+        ...(owed.queued > 0 ? [`決定排隊 ${owed.queued}`] : []),
         ...(owed.handsOn > 0 ? [`要你動手 ${owed.handsOn}`] : []),
     ];
     return h("p", { class: owed.decide + owed.handsOn > 0 ? "owed red" : "owed" }, h("button", { class: "link", onclick: () => actions.setFilter(NO_FILTER) }, `這個篩選之外還有：${parts.join("、")}`));

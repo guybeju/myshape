@@ -150,6 +150,7 @@ function owedLine(view: View, actions: Actions, shown: Map<string, string[]> | n
   const owed = owedOutside(view, shown);
   const parts = [
     `等你決定 ${owed.decide}`,
+    ...(owed.queued > 0 ? [`決定排隊 ${owed.queued}`] : []),
     ...(owed.handsOn > 0 ? [`要你動手 ${owed.handsOn}`] : []),
   ];
   return h(

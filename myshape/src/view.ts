@@ -32,6 +32,8 @@ export interface ViewInput {
   staleMs: number;
   /** The agent side's label, which the lines derived from its tag commands use. */
   label: string;
+  /** How many live decisions are shown at a time (the root report's cap), or null for all. */
+  decisionsAtOnce: number | null;
 }
 
 export type Placement =
@@ -105,6 +107,11 @@ export interface HoldView {
   /** False when the hold recorded no outcome and on_answer is the default. */
   on_answer_recorded: boolean;
   live: boolean;
+  /**
+   * True for a live decision behind the first `decisionsAtOnce` in the board's
+   * order: it waits its turn, folded, and cannot be answered on the page yet.
+   */
+  waits_turn: boolean;
   deferred_reason: string | null;
   topic: string | null;
   stale: boolean;
@@ -524,6 +531,7 @@ function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer): RankedHold
         on_answer: outcome.on_answer,
         on_answer_recorded: outcome.recorded,
         ...holdTiming(hold),
+        waits_turn: false,
         topic: placement.topic,
         stale,
       },
@@ -850,9 +858,60 @@ export function buildView(input: ViewInput): BoardView {
     }
     view.questions.push(...questionsOf(home.id, home.report, placer));
   });
-  view.holds = ranked.toSorted(holdOrder(view)).map((entry) => entry.view);
+  view.holds = takeTurns(
+    ranked.toSorted(holdOrder(view)).map((entry) => entry.view),
+    input.decisionsAtOnce,
+  );
+  view.queued = view.queued.map((item) => queuedForTurn(item, view.holds));
   view.todos = todoViews(input, view);
   return view;
+}
+
+/** Holds in the board's order with every live one past the first `cap` marked as waiting its turn. */
+function takeTurns(holds: HoldView[], cap: number | null): HoldView[] {
+  if (cap === null) return holds;
+  let shown = 0;
+  return holds.map((hold) => {
+    if (!hold.live) return hold;
+    shown += 1;
+    return shown > cap ? { ...hold, waits_turn: true } : hold;
+  });
+}
+
+function turnKey(hold: Pick<HoldView, "home" | "task">): string {
+  return `${hold.home}\t${hold.task}`;
+}
+
+/** A queued captain item whose decision waits its turn says so instead of 等你決定. */
+function queuedForTurn(item: QueuedView, holds: HoldView[]): QueuedView {
+  if (item.waiting !== "等你決定") return item;
+  const own = holds.find((hold) => hold.home === item.home && hold.task === item.task);
+  return own?.waits_turn === true ? { ...item, waiting: "決定排隊" } : item;
+}
+
+/**
+ * Which decisions just got their turn: those `waiting` held (as "home\ttask")
+ * that are live and no longer waiting. A decision that was never seen waiting
+ * came to the front when it opened, which its home already knows.
+ *
+ * Returns:
+ *   The decisions whose turn came, in the board's order, and the keys of
+ *   those still waiting, to pass to the next call.
+ */
+export function turnsTaken(
+  waiting: ReadonlySet<string>,
+  holds: readonly HoldView[],
+): { taken: HoldView[]; waiting: Set<string> } {
+  const taken = holds.filter((hold) => hold.live && !hold.waits_turn && waiting.has(turnKey(hold)));
+  return { taken, waiting: new Set(holds.filter((hold) => hold.waits_turn).map(turnKey)) };
+}
+
+/** The notice that a decision's turn came: one fixed sentence, with how many still wait. */
+export function turnNoticeText(view: BoardView, hold: HoldView, stillWaiting: number): string {
+  const name = hold.topic === null ? undefined : view.topics[hold.topic]?.name;
+  const where = name === undefined ? "沒有議題" : `議題「${name}」，id ${hold.topic}`;
+  const rest = stillWaiting > 0 ? `；還有 ${stillWaiting} 個決定排隊` : "";
+  return `看板上輪到 ${hold.home}/${hold.task} 的決定了（${where}）${rest}`;
 }
 
 /** Sort key for an item: its topic's queue and place (no topic and archived last), then age. */
