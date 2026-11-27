@@ -16,13 +16,15 @@ TMP_ROOT=$(fm_test_tmproot dispatch-plan-stage-5-machine)
 # shellcheck source=dispatch-plan/test/helpers.sh
 . "$ROOT/dispatch-plan/test/helpers.sh"
 
-# machine <home> <arg>...: run machine in <home> from the scratch code root.
+# machine <home> <arg>...: run machine in <home> from the scratch code root,
+# on the pinned host.
 machine() {
-  FM_HOME="$1" FM_ROOT_OVERRIDE="$CODE" "$CODE/bin/fm-dispatch-plan.sh" machine "${@:2}"
+  FM_HOME="$1" FM_ROOT_OVERRIDE="$CODE" dp_on_host "$CODE/bin/fm-dispatch-plan.sh" machine "${@:2}"
 }
 
 # A main home with a capped project "sample" (3 places), one local secondmate,
-# and these task records, all of project sample:
+# a one-tool list (so no test runs every tool on the runner), and these task
+# records, all of project sample:
 #   main/w1  ship, paused in the summary, high effort, direct-PR
 #   main/w2  scout, working, xhigh
 #   main/w3  ship whose PR is ready: it holds no place
@@ -33,6 +35,7 @@ setup_machine() {
   local name=$1 now
   now=$(date +%s)
   dp_code_root "$TMP_ROOT/$name-code"
+  printf 'jq\t-\n' > "$CODE/dispatch-plan/common-tools.tsv"
   MAIN=$(tb_make_home "$name-main")
   dp_git_dir "$MAIN"
   dp_git_dir "$MAIN/projects/sample"

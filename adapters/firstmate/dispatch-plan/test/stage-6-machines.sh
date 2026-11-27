@@ -17,9 +17,10 @@ TMP_ROOT=$(fm_test_tmproot dispatch-plan-stage-6-machines)
 # shellcheck source=dispatch-plan/test/helpers.sh
 . "$ROOT/dispatch-plan/test/helpers.sh"
 
-# machines <home> <arg>...: run machines in <home> from the scratch code root.
+# machines <home> <arg>...: run machines in <home> from the scratch code root,
+# on the pinned host.
 machines() {
-  FM_HOME="$1" FM_ROOT_OVERRIDE="$CODE" "$CODE/bin/fm-dispatch-plan.sh" machines "${@:2}"
+  FM_HOME="$1" FM_ROOT_OVERRIDE="$CODE" dp_on_host "$CODE/bin/fm-dispatch-plan.sh" machines "${@:2}"
 }
 
 # label: this machine's label, as its record gives it.
@@ -30,10 +31,12 @@ label() {
 # A main home whose project "sample" admits <limit> workers, held by main/w1
 # (ship, paused) and main/w2 (scout, working); main/n1 (normal) queued in main,
 # and in the local secondmate sm1 s1 (high, sample) and s2 (normal, a project
-# with no line and no clone here). Sets MAIN and MATE.
+# with no line and no clone here). The tool list names jq only, so no test runs
+# every tool on the runner. Sets MAIN and MATE.
 setup_machines() {
   local name=$1 limit=$2
   dp_code_root "$TMP_ROOT/$name-code"
+  printf 'jq\t-\n' > "$CODE/dispatch-plan/common-tools.tsv"
   MAIN=$(tb_make_home "$name-main")
   dp_git_dir "$MAIN"
   dp_git_dir "$MAIN/projects/sample"
@@ -111,6 +114,16 @@ far_verdict() {
   machines "$MAIN" --json | jq -r '.machines[] | select(.via == "far5") | .verdict | "\(.machine) \(.reasons | join("|"))"'
 }
 
+# assert_seconds <low> <high> <verdict> <before> <after> <message>: <verdict>
+# is "unknown <before><n><after>" with <n> from <low> to <high>. The view reads
+# its clock a few seconds after far_verdict wrote the record.
+assert_seconds() {
+  local n=${3#"unknown $4"}
+  n=${n%"$5"}
+  case "$n" in '' | *[!0-9]*) fail "$6 (got: $3)" ;; esac
+  [ "$n" -ge "$1" ] && [ "$n" -le "$2" ] || fail "$6 (got: $3)"
+}
+
 # rule-v1 over a far machine's record: the design's cases, from the reader's
 # side, so a record from another version or clock is judged here.
 # shellcheck disable=SC2016 # far_verdict's filters are jq; jq expands $now.
@@ -136,10 +149,10 @@ test_rule_v1_judges_each_record() {
   assert_equals "wait disk: 剩 5000 MB" "$(far_verdict '.collected_epoch = $now | .host.disk_free_mb = 5000')" "low disk must wait"
   assert_equals "unknown 不認得的紀錄版本 fm-dispatch-machine.v2" \
     "$(far_verdict '.collected_epoch = $now | .schema = "fm-dispatch-machine.v2"')" "another version must be unknown, named"
-  far_verdict '.collected_epoch = $now - 1226' | grep -Eqx 'unknown 紀錄是 122[67] 秒前的' ||
-    fail "a record more than 600 s old must be unknown, with its age"
-  far_verdict '.collected_epoch = $now + 900' | grep -Eqx 'unknown 紀錄的時間比這台快 (899|900) 秒' ||
-    fail "a record from a clock far ahead must be unknown"
+  assert_seconds 1226 1300 "$(far_verdict '.collected_epoch = $now - 1226')" '紀錄是 ' ' 秒前的' \
+    "a record more than 600 s old must be unknown, with its age"
+  assert_seconds 800 900 "$(far_verdict '.collected_epoch = $now + 900')" '紀錄的時間比這台快 ' ' 秒' \
+    "a record from a clock far ahead must be unknown"
   far_verdict '.collected_epoch = $now | .projects[0].limit = 3' >/dev/null
   assert_equals '[{"name":"firstmate","limit":3,"held":3,"free":0,"verdict":"wait","why":"上限 3 都佔了"}]' \
     "$(machines "$MAIN" --json | jq -c '.machines[] | select(.via == "far5") | .verdict.projects')" \

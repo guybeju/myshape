@@ -250,6 +250,8 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 | `stage-6-machines.sh` | 只在主 home、每台遠端只問一次、連不到、舊版、不是紀錄、`rule-v1` 的每一種情形（設計的 run I）從讀的一方判、該轉告、該通知、機器先等時不請人派、環境差異的每一種、`--json` |
 
 `dispatch-plan/test/helpers.sh` 讓每一次 `order` 與 `machine` 讀一台固定的主機：上游的探測程式在 Linux 上讀 `FM_PROC_ROOT_OVERRIDE` 代替 `/proc`，`DP_HOST/bin` 裡的 `getconf` 與 `df` 回答核心數與磁碟，其他呼叫交給真的那一支；所以斷言不看 runner 真的負載。
+只有 planner 的呼叫拿到這些（`PLAN` 是包著它的小腳本，其他用 `dp_on_host`），因為上游其他讀 `/proc` 的程式遇到假的 `/proc` 時沒有退路；`stage-4` 跑的 `fm-backlog-handoff.sh` 不在固定的主機上。
+`stage-5` 與 `stage-6` 的工具清單只有 `jq`（工具那一個測試除外），所以不會在 runner 上反覆跑每個工具的 `--version`。
 `stage-4` 到 `stage-6` 從一個暫時的 code root 跑，那裡的 `bin/fm-on.sh` 是假的：它把副本交給暫時的「遠端」home 裡真的 `queues-in` 或 `machine`、印一份固定的紀錄，或照設定失敗，所以測試不會連到任何別的機器。
 
 沒有測到的：

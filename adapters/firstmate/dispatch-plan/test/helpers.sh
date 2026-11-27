@@ -3,8 +3,6 @@
 # the board's test kit (myshape/test/kit/helpers.sh), and after TMP_ROOT is set.
 # shellcheck disable=SC2034 # PLAN is read by the sourcing tests.
 
-PLAN="$ROOT/bin/fm-dispatch-plan.sh"
-
 # section <output> <header>: the task ids listed under one section header.
 section() {
   printf '%s\n' "$1" | awk -v header="$2" '
@@ -59,38 +57,25 @@ dp_write_copy() {
 # The host every order and machine call in these tests reads, so no assertion
 # depends on the runner's real load: upstream's probes read
 # FM_PROC_ROOT_OVERRIDE in place of /proc on Linux, and the getconf and df on
-# DP_HOST/bin answer the core count and the free disk from DP_HOST's files.
-# Every other getconf or df call goes to the real one. macOS reads sysctl
-# instead, so there these tests read the real host.
+# DP_HOST/bin answer the core count and the free disk from DP_HOST's files;
+# every other getconf or df call goes to the real one. Only the planner's
+# calls get them (PLAN and dp_on_host), since other upstream /proc readers
+# have no fallback for a fixture /proc. macOS reads sysctl instead, so there
+# these tests read the real host.
 DP_HOST="$TMP_ROOT/host"
 
 # dp_host <load1> <load5> <mem_free_pct|-> <disk_free_mb> <cores>: make that
-# the host; a - memory leaves /proc/meminfo out, so memory cannot be read.
+# the host; a - memory leaves /proc/meminfo empty, so memory cannot be read.
 dp_host() {
-  local tool
-  mkdir -p "$DP_HOST/proc" "$DP_HOST/bin"
+  mkdir -p "$DP_HOST/proc"
   printf '%s %s 1.00 1/100 1\n' "$1" "$2" > "$DP_HOST/proc/loadavg"
-  rm -f "$DP_HOST/proc/meminfo"
-  [ "$3" = - ] || printf 'MemTotal:       10000000 kB\nMemAvailable:   %s kB\n' "$(($3 * 100000))" > "$DP_HOST/proc/meminfo"
+  if [ "$3" = - ]; then
+    : > "$DP_HOST/proc/meminfo"
+  else
+    printf 'MemTotal:       10000000 kB\nMemAvailable:   %s kB\n' "$(($3 * 100000))" > "$DP_HOST/proc/meminfo"
+  fi
   printf '%s\n' "$4" > "$DP_HOST/disk_mb"
   printf '%s\n' "$5" > "$DP_HOST/cores"
-  for tool in getconf df; do
-    [ -x "$DP_HOST/bin/$tool" ] && continue
-    command -v "$tool" > "$DP_HOST/real-$tool"
-  done
-  cat > "$DP_HOST/bin/getconf" <<EOF
-#!/usr/bin/env bash
-if [ "\${1:-}" = _NPROCESSORS_ONLN ]; then cat "$DP_HOST/cores"; else exec "\$(cat "$DP_HOST/real-getconf")" "\$@"; fi
-EOF
-  cat > "$DP_HOST/bin/df" <<EOF
-#!/usr/bin/env bash
-if [ "\${1:-}" = -Pk ]; then
-  printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfixture 1 1 %s 1%% /\n' "\$((\$(cat "$DP_HOST/disk_mb") * 1024))"
-else
-  exec "\$(cat "$DP_HOST/real-df")" "\$@"
-fi
-EOF
-  chmod +x "$DP_HOST/bin/getconf" "$DP_HOST/bin/df"
 }
 
 # dp_calm_host: an idle 4-core machine with half its memory and 100 GB free.
@@ -98,9 +83,32 @@ dp_calm_host() {
   dp_host 0.10 0.10 50 102400 4
 }
 
+# dp_on_host <command...>: run <command> on the pinned host.
+dp_on_host() {
+  FM_PROC_ROOT_OVERRIDE="$DP_HOST/proc" PATH="$DP_HOST/bin:$PATH" "$@"
+}
+
+mkdir -p "$DP_HOST/bin"
+cat > "$DP_HOST/bin/getconf" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = _NPROCESSORS_ONLN ]; then cat "$DP_HOST/cores"; else exec "$(command -v getconf)" "\$@"; fi
+EOF
+cat > "$DP_HOST/bin/df" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = -Pk ]; then
+  printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nfixture 1 1 %s 1%% /\n' "\$((\$(cat "$DP_HOST/disk_mb") * 1024))"
+else
+  exec "$(command -v df)" "\$@"
+fi
+EOF
+# PLAN runs the planner of this checkout on the pinned host.
+cat > "$DP_HOST/plan" <<EOF
+#!/usr/bin/env bash
+FM_PROC_ROOT_OVERRIDE="$DP_HOST/proc" PATH="$DP_HOST/bin:\$PATH" exec "$ROOT/bin/fm-dispatch-plan.sh" "\$@"
+EOF
+chmod +x "$DP_HOST/bin/getconf" "$DP_HOST/bin/df" "$DP_HOST/plan"
+PLAN="$DP_HOST/plan"
 dp_calm_host
-export FM_PROC_ROOT_OVERRIDE="$DP_HOST/proc"
-export PATH="$DP_HOST/bin:$PATH"
 
 # dp_code_root <dir>: a scratch code root whose every file links to the real
 # one, except bin/fm-on.sh, which is the far-machine stub below, and a copy of
