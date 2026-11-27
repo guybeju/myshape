@@ -535,16 +535,38 @@ function writeChange(
     const outbox = { ...board.outbox, schedules: records };
     return { board: { ...board, schedules: change.next, outbox }, records };
   }
-  if (change.file === "lifecycle" || change.file === "memory") {
-    const next =
-      change.file === "lifecycle" ? change.next : { ...board.lifecycle, ...change.memory };
-    const kept = records.length === 0 ? board.outbox.lifecycle : records;
-    writeOwnFile(paths, "lifecycle", next, kept);
-    return {
-      board: { ...board, lifecycle: next, outbox: { ...board.outbox, lifecycle: kept } },
-      records,
-    };
-  }
+  if (change.file === "lifecycle" || change.file === "memory")
+    return { board: writeLifecycle(paths, board, change, records), records };
+  return writeTopicChange(paths, board, change, { records, stamp });
+}
+
+/**
+ * Writes lifecycle.json: a captain's change whole, or the board's memory over
+ * what the file holds. A memory change with no record keeps the file's outbox.
+ */
+function writeLifecycle(
+  paths: BoardPaths,
+  board: StoredBoard,
+  change: Extract<Change, { file: "lifecycle" | "memory" }>,
+  records: StoredRecord[],
+): StoredBoard {
+  const next = change.file === "lifecycle" ? change.next : { ...board.lifecycle, ...change.memory };
+  const kept = records.length === 0 ? board.outbox.lifecycle : records;
+  writeOwnFile(paths, "lifecycle", next, kept);
+  return { ...board, lifecycle: next, outbox: { ...board.outbox, lifecycle: kept } };
+}
+
+/**
+ * Writes a topic change: its part in lifecycle.json and in schedules.json
+ * first, then topics.json, then its follow-up in hashtags.json.
+ */
+function writeTopicChange(
+  paths: BoardPaths,
+  board: StoredBoard,
+  change: Extract<Change, { file: "topics" }>,
+  saved: { records: StoredRecord[]; stamp: (records: readonly Draft[]) => StoredRecord[] },
+): Written {
+  const { records, stamp } = saved;
   if (change.lifecycle !== undefined)
     writeOwnFile(paths, "lifecycle", change.lifecycle, board.outbox.lifecycle);
   const lifecycle = change.lifecycle ?? board.lifecycle;
@@ -774,6 +796,13 @@ function stringList(raw: unknown): string[] | null {
   return Array.isArray(raw) && raw.every((value) => typeof value === "string") ? raw : null;
 }
 
+/** An item's state, or "unknown" with the word read for one this board does not know (O6). */
+function itemState(word: unknown): Pick<TodoItem, "state" | "unknown_state"> {
+  const state = ITEM_STATES.find((name) => name === word);
+  if (state !== undefined) return { state };
+  return { state: "unknown", unknown_state: typeof word === "string" ? word : "" };
+}
+
 /**
  * One stored item, or null when it lacks what the page needs to show it. A
  * state word this board does not know keeps the item, in the "unknown" state
@@ -783,20 +812,17 @@ function parseItem(raw: unknown): TodoItem | null {
   if (!isRecord(raw)) return null;
   const title = stringField(raw, "title");
   const action = stringField(raw, "action");
-  const word = raw["state"];
-  const state = ITEM_STATES.find((name) => name === word) ?? "unknown";
   const commands = stringList(raw["commands"]);
   const topic = raw["topic"];
   if (title === null || action === null || commands === null) return null;
   if (topic !== null && typeof topic !== "string") return null;
   return {
-    ...(state === "unknown" ? { unknown_state: typeof word === "string" ? word : "" } : {}),
+    ...itemState(raw["state"]),
     title,
     topic,
     action,
     guidance: textField(raw, "guidance"),
     commands,
-    state,
     reason: stringField(raw, "reason"),
     at: textField(raw, "at"),
     by: textField(raw, "by"),

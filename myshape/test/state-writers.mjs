@@ -6,7 +6,8 @@
 //     schedules.json and lifecycle.json are written (writeFileAtomic or writeIfChanged) only
 //     in store.ts's writeTopics, writeTodos, writeOwnFile and writeIfChanged,
 //     and those three writers are called only from commitChange, the
-//     writeChange it calls, and the writeSchedulePart that writeChange calls;
+//     writeChange it calls, and the writeSchedulePart, writeLifecycle and
+//     writeTopicChange that writeChange calls;
 //   - a record reaches the journal only through store.ts's flushOutbox (the
 //     sink's append) and the one sink, commitTarget in board-server.ts;
 //   - store.ts exports no function but readBoard, loadBoard and commitChange;
@@ -39,7 +40,8 @@ const STATE_OWNERS = new Set(["topics.ts", "todos.ts", "confirmations.ts", "hash
 const STATE_PATHS = new Set(["topics", "archive", "todos", "confirmations", "hashtags", "schedules", "lifecycle"]);
 const STORE_EXPORTS = new Set(["readBoard", "loadBoard", "commitChange"]);
 const WRITERS = new Set(["writeTopics", "writeTodos", "writeOwnFile", "writeIfChanged"]);
-const WRITER_CALLERS = new Set(["commitChange", "writeChange", "writeSchedulePart"]);
+const WRITER_CALLERS = new Set(["commitChange", "writeChange", "writeSchedulePart", "writeLifecycle",
+  "writeTopicChange"]);
 const ASSIGN = new Set([K.EqualsToken, K.PlusEqualsToken, K.MinusEqualsToken, K.AsteriskEqualsToken,
   K.SlashEqualsToken, K.BarBarEqualsToken, K.AmpersandAmpersandEqualsToken, K.QuestionQuestionEqualsToken,
   K.PlusPlusToken, K.MinusMinusToken]);

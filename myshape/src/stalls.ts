@@ -46,38 +46,47 @@ export function stallStep(
   nameOf: NameOf,
   nowMs: number,
 ): StallStep {
-  const now = new Date(nowMs).toISOString();
   const stalls: Record<string, Stall> = {};
   const records: Draft[] = [];
   for (const [key, list] of members) {
     if (list.length === 0) continue;
     const old = previous[key];
-    const put = old?.deferred;
-    stalls[key] = {
-      since: old?.since ?? now,
-      members: [...list],
-      ...(put !== undefined && Date.parse(put.until) > nowMs
-        ? { deferred: { until: put.until, members: [...put.members] } }
-        : {}),
-    };
-    if (old === undefined)
+    stalls[key] = nextStall(old, list, nowMs);
+    if (old === undefined) records.push(raisedRecord(nameOf, key, list.length));
+  }
+  for (const key of Object.keys(previous))
+    if (stalls[key] === undefined)
       records.push({
-        kind: "stall.raised",
+        kind: "stall.settled",
         topic: topicOfKey(key),
         outcome: "stall",
-        text: `「沒人接」：${where(nameOf, key)}有 ${list.length} 張卡過了期限，交給你決定`,
+        text: `「沒人接」${where(nameOf, key)}已不需要：每張卡都離開了逾期的狀態`,
       });
-  }
-  for (const key of Object.keys(previous)) {
-    if (stalls[key] !== undefined) continue;
-    records.push({
-      kind: "stall.settled",
-      topic: topicOfKey(key),
-      outcome: "stall",
-      text: `「沒人接」${where(nameOf, key)}已不需要：每張卡都離開了逾期的狀態`,
-    });
-  }
   return { stalls, records };
+}
+
+/** A 沒人接 card with these members: its first time kept, a 延到 kept while it runs. */
+function nextStall(
+  old: Frozen<Stall> | undefined,
+  members: readonly string[],
+  nowMs: number,
+): Stall {
+  const put = old?.deferred;
+  const running = put !== undefined && Date.parse(put.until) > nowMs;
+  return {
+    since: old?.since ?? new Date(nowMs).toISOString(),
+    members: [...members],
+    ...(running ? { deferred: { until: put.until, members: [...put.members] } } : {}),
+  };
+}
+
+function raisedRecord(nameOf: NameOf, key: string, count: number): Draft {
+  return {
+    kind: "stall.raised",
+    topic: topicOfKey(key),
+    outcome: "stall",
+    text: `「沒人接」：${where(nameOf, key)}有 ${count} 張卡過了期限，交給你決定`,
+  };
 }
 
 /** N4 while the captain's 延到 still covers every member, N2 otherwise. */

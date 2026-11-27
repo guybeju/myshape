@@ -1142,6 +1142,17 @@ export function applyOperation(
   const actor: Actor = { by, label: who.label };
   const blocked = transitionProblem(request.op, ctx, request.args);
   if (blocked !== null) return answer(board, refused(blocked));
+  return runOperation(target, board, request, { actor, operation, ctx });
+}
+
+/** Runs an operation the channel and the card's state allow, and saves it through its commit file. */
+function runOperation(
+  target: CommitTarget,
+  board: StoredBoard,
+  request: OpRequest,
+  run: { actor: Actor; operation: Operation; ctx: OpContext },
+): Applied {
+  const { actor, operation, ctx } = run;
   if (operation.commitFile === "topics")
     return runTopicOp(target, board, request, actor, { operation, ctx });
   if (operation.commitFile === "hashtags")
