@@ -16,6 +16,7 @@
 | [stage-5-browser](stage-5-browser.markdown) | 第五段：瀏覽器通道與頁面 |
 | [drag-under-filter](drag-under-filter.markdown) | 設計紀錄：篩選中拖曳議題怎麼排 |
 | [card-sort](card-sort.markdown) | 設計紀錄：側欄的卡片照優先順序或建立時間排列，與這時候拖曳怎麼算 |
+| [status-metrics](status-metrics.markdown) | 設計紀錄：aggregator 在回報裡帶的狀態數字（用量面板），看板只顯示 |
 | [stage-6-rules](stage-6-rules.markdown) | 第六段：`install-rules` 與規則範本 |
 | [rollout](../../fm-board/spec/rollout.markdown) | 上線的前提與步驟（fork 這一側的，放在 `fm-board/spec/`） |
 | [verification](verification.markdown) | 哪些事實測過、哪些只讀過原始碼、哪些還沒驗 |

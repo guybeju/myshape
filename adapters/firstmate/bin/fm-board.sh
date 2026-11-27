@@ -112,6 +112,8 @@ TOPICS_FILE="$DATA/topics.json"
 . "$SCRIPT_DIR/myshape-lib.sh"
 # shellcheck source=bin/fm-board-lib.sh
 . "$SCRIPT_DIR/fm-board-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-board-io-lib.sh
 . "$SCRIPT_DIR/fm-board-io-lib.sh"
 

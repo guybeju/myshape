@@ -9,6 +9,7 @@ import {
   LEDGER_PER_TOPIC,
   buildView,
   isFresh,
+  evaluateBoard,
   parseOptions,
   parseTags,
   placeTask,
@@ -16,6 +17,8 @@ import {
   turnsTaken,
 } from "./view.js";
 import type { HomeSnapshot, TurnView, ViewInput } from "./view.js";
+import { NO_METRICS, parseMetrics } from "./metrics.js";
+import type { Metrics } from "./metrics.js";
 
 const NOW = Date.parse("2026-07-10T00:00:00Z");
 const T0 = Date.parse("2026-07-01T00:00:00Z") / 1000;
@@ -71,6 +74,7 @@ function report(extra: Partial<HomeReport> = {}): HomeReport {
     secondmates: [],
     closed_holds: [],
     closed_cursor: null,
+    metrics: NO_METRICS,
     ...extra,
   };
 }
@@ -1426,5 +1430,68 @@ describe("closed decisions", () => {
         ledger,
       ]).map((entry) => entry[3]),
     ).toEqual(["hold.closed hold.opened"]);
+  });
+});
+
+describe("status metrics", () => {
+  // A block that would alarm anyone: an account out of quota, past its limit, with a red hint.
+  const alarming = parseMetrics({
+    v: 1,
+    groups: [{ id: "claude:default", label: "Claude", state: "unavailable", note: "讀不到" }],
+    items: [
+      {
+        id: "claude:default.five_hour",
+        group: "claude:default",
+        label: "5 小時",
+        value: 100,
+        unit: "%",
+        severity: "critical",
+        measured_at: "2026-07-09T23:00:00Z",
+        resets_at: "2026-07-09T23:30:00Z",
+      },
+    ],
+  });
+  const homes = (metrics: Metrics): HomeSnapshot[] => [
+    home("main", {
+      report: report({
+        tasks: [
+          { id: "w", kind: "ship", state: "working", source: "", detail: "", unstarted: false },
+        ],
+        holds: [hold("normal"), hold("loose")],
+        queued: [
+          {
+            id: "q",
+            kind: "ship",
+            title: "next",
+            hold: null,
+            captain: false,
+            blockers: [],
+            topic_hint: "n1",
+            hold_until: null,
+            turn: false,
+          },
+        ],
+        topics: { w: tag("n2"), normal: tag("n2") },
+        metrics,
+      }),
+    }),
+    home("sm1", {
+      report: report({ holds: [hold("high")], topics: { high: tag("hi") }, metrics }),
+    }),
+    home("sm2", { report: null, lastOkAt: null }),
+  ];
+
+  it("lists each home's metrics in the homes' order", () => {
+    const view = buildView(input({ homes: homes(alarming) }));
+    expect(view.metrics.map((entry) => entry.home)).toEqual(["main", "sm1"]);
+    expect(view.metrics[0]?.groups[0]?.items[0]).toMatchObject({ value: 100, stale: "group" });
+    expect(buildView(input({ homes: homes(NO_METRICS) })).metrics).toEqual([]);
+  });
+
+  it("changes nothing else the board shows or decides", () => {
+    const plain = evaluateBoard(input({ homes: homes(NO_METRICS), decisionsAtOnce: 1 }));
+    const shown = evaluateBoard(input({ homes: homes(alarming), decisionsAtOnce: 1 }));
+    expect({ ...shown.view, metrics: [] }).toEqual(plain.view);
+    expect(shown.evaluation).toEqual(plain.evaluation);
   });
 });

@@ -6,6 +6,7 @@ import { DecisionStore, decisionStep, holdSetSeconds } from "./decisions.js";
 import type { DecisionRead, HomeDecisions, PageAnswer } from "./decisions.js";
 import type { ClosedHold, HomeReport, ReportHold } from "./report.js";
 import { shortTime } from "./todos.js";
+import { NO_METRICS } from "./metrics.js";
 
 const READ_AT = 1_795_300_000;
 const SET = "2026-11-20T06:10:00Z";
@@ -64,6 +65,7 @@ function report(extra: Partial<HomeReport> = {}): HomeReport {
     secondmates: [],
     closed_holds: [],
     closed_cursor: { status: "delta", to_offset: 10, to_prefix_sha256: "s", more: false },
+    metrics: NO_METRICS,
     ...extra,
   };
 }

@@ -69,6 +69,15 @@ test_the_page_with_an_aggregator() {
   "secondmates": [ { "id": "w2", "read_every_s": 1 } ]
 }
 JSON
+  # The 用量 panel: a current reading with a reset ahead and a warn hint, a group that
+  # could not be read, a metric in no group, and one entry the board leaves out.
+  jq --arg now "$(jq -rn 'now | todate')" --arg later "$(jq -rn 'now + 7200 | todate')" '. + {metrics: {v: 1,
+      groups: [{id: "acct-a", label: "帳號 A"}, {id: "acct-b", label: "帳號 B", state: "unavailable", note: "這個帳號讀不到"}],
+      items: [{id: "a.window", group: "acct-a", label: "五小時", value: 42, unit: "%", severity: "warn",
+               measured_at: $now, resets_at: $later},
+              {id: "cost", label: "今天的花費", value: 3.25, unit: "USD", measured_at: $now},
+              {id: "bad id", label: "x", value: 1}]}}' "$agg/plain/main.json" > "$agg/plain/main.json.tmp"
+  mv "$agg/plain/main.json.tmp" "$agg/plain/main.json"
   printf '%s\n' '{ "tasks": [ { "id": "w2-job", "kind": "job", "state": "working" } ] }' > "$agg/plain/w2.json"
   printf '%s\n' '{"ts":1795000000,"event":"task.pr_ready","task":"j1","pr":"https://example.invalid/pr/9"}' > "$agg/plain/main.events"
   topic_wrapper "$TMP_ROOT/topic" "$SA_ROOT" "$home" "${SA_ENV[@]}"

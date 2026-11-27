@@ -5,8 +5,9 @@
 # Sourced by bin/fm-board.sh only; defines functions and has no side effects
 # on source.
 #
-# The caller must already have sourced fm-secondmate-registry-lib.sh and
-# myshape-lib.sh, and set SCRIPT_DIR, SELF, DATA and FM_HOME (exported).
+# The caller must already have sourced fm-secondmate-registry-lib.sh,
+# myshape-lib.sh and fm-timeout-lib.sh, and set SCRIPT_DIR, SELF, DATA and
+# FM_HOME (exported).
 #
 # feed <home> <offset> <prefix-sha256> [<closed-offset> <closed-sha256>] runs
 # this home's reader for <home>:
@@ -18,8 +19,10 @@
 # carried closed_cursor, so a home on older code never gets the extra arguments.
 # and adds what the board asks of an aggregator: the aggregator block (main
 # only), a ledger_hint for a home whose ledger is off, and read hints of 60 s
-# and 400 s for remote secondmates. Exit 0 prints the report; 4 says the home
-# cannot report, with one line on stderr: the remote checkout has no reader, or
+# and 400 s for remote secondmates. The main home's report also carries the
+# metrics block with this machine's Claude usage (fmb_usage_metrics). Exit 0
+# prints the report; 4 says the home cannot report, with one line on stderr:
+# the remote checkout has no reader, or
 # the reader found the Firstmate it runs on missing a capability it needs (the
 # reader's own exit 4 and line, passed on unchanged; for a remote home its own
 # code root's); 2 an unknown home; any other code is the reader's own failure.
@@ -56,6 +59,62 @@ FMB_NOT_ON_FORK_LINE="還沒換到 fork：在那台的 code root 加上 fork rem
 FMB_AGGREGATOR='{"name":"firstmate","label":"first mate","update_hint":"請在主 home 跑 /updatefirstmate。","decisions_at_once":1}'
 FMB_ERROR_MAX=600
 
+# The Claude usage the main home's report carries (fmb_usage_metrics): how long
+# quota-axi may take, how old a reading it may reuse instead of asking the
+# vendor (so the board's reads do not each ask), how long the board counts a
+# reading as current, and the used percentages the severity hint starts at.
+FMB_USAGE_BOUND_S=10
+FMB_USAGE_MAX_AGE_S=300
+FMB_USAGE_STALE_S=600
+FMB_USAGE_WARN=80
+FMB_USAGE_CRITICAL=95
+# quota-axi's --json report on stdin, slurped, to the board's metrics block:
+# one group per Claude lane it reports, "ok" only for a fresh reading ("stale"
+# for a stale cached one, else "unavailable"), and for
+# such a lane one metric per window that reports a percentage: the used
+# percentage, its reset, and when the vendor answered (the report's own time
+# for a reading taken just now). A lane that is not fresh gets no number, only
+# its status and error as the group's note. Nothing else of the report, such
+# as a remedy command (which names paths), is passed on.
+# shellcheck disable=SC2016 # jq variables, not shell ones.
+FMB_USAGE_JQ='
+  def plain: gsub("[[:cntrl:]\u202a-\u202e\u2066-\u2069]"; " ");
+  def idpart: gsub("[^A-Za-z0-9._:-]"; "-");
+  def fresh: .state.status == "fresh" and (.state.stale | not);
+  def gstate: if fresh then "ok" elif .state.status == "stale" or .state.stale == true then "stale"
+              else "unavailable" end;
+  def lane: (.accountKey // (.accountKeys // [])[0] // "default") | tostring;
+  def gid: "claude:" + (lane | idpart | .[0:96]);
+  def glabel: lane | if . == "default" then "Claude"
+                     else "Claude · " + (plain | if length > 60 then .[0:59] + "…" else . end) end;
+  def wlabel: {"five_hour": "5 小時", "seven_day": "7 天"}[.id]
+              // (.label | tostring | plain | .[0:80]);
+  def used: (100 - .percentRemaining) * 10 | round / 10
+            | if . < 0 then 0 elif . > 100 then 100 else . end;
+  def severity: if . >= $critical then "critical" elif . >= $warn then "warn" else "normal" end;
+  def note: if fresh then ""
+            else "quota-axi：" + (.state.status // "?" | tostring)
+                 + (if .state.error then "（" + (.state.error | tostring) + "）" else "" end)
+                 | plain | .[0:200] end;
+  def when: if type == "string" then . else null end;
+  if length != 1 or (.[0] | type) != "object" then error("not one report") else .[0] end
+  | . as $report
+  | [.providers[]? | select(.provider == "claude")] as $lanes
+  | {v: 1, stale_after_s: $stale,
+     groups: (if ($lanes | length) == 0
+              then [{id: "claude", label: "Claude", state: "unavailable",
+                     note: "quota-axi 沒有回報 Claude。"}]
+              else [$lanes[] | {id: gid, label: glabel, state: gstate, note: note}]
+              end),
+     items: [$lanes[] | select(fresh) | gid as $group
+             | ((.state.refreshedAt | when) // ($report.generatedAt | when)) as $at
+             | .windows[]? | select(.percentRemaining | type == "number") | used as $used
+             | {id: ($group + "." + (.id | tostring | idpart) | .[0:128]),
+                group: $group, label: wlabel,
+                value: $used, unit: "%", severity: ($used | severity)}
+               + (if $at == null then {} else {measured_at: $at} end)
+               + (if (.resetsAt | when) == null then {} else {resets_at: .resetsAt} end)]}'
+
 # fmb_registry_remote <id>: prints 1 for a remote registered secondmate, 0 for
 # a local one; returns 1 when <id> is not registered.
 fmb_registry_remote() {
@@ -73,15 +132,59 @@ fmb_ledger_hint() {
   printf '%s\n' "home $1 的帳本未開，它的 task 不會有更新。在主 home 的終端機跑 $command"
 }
 
-# fmb_decorate <home> <remote>: the reader's report on stdin, with this side's additions.
+# fmb_decorate <home> <remote> [<metrics>]: the reader's report on stdin, with
+# this side's additions; <metrics> is the metrics block to add, if any.
 fmb_decorate() {
-  jq -c --arg home "$1" --arg hint "$(fmb_ledger_hint "$1" "$2")" --argjson agg "$FMB_AGGREGATOR" '
+  jq -c --arg home "$1" --arg hint "$(fmb_ledger_hint "$1" "$2")" --argjson agg "$FMB_AGGREGATOR" \
+    --argjson metrics "${3:-null}" '
     (if .ledger_enabled == false then . + {ledger_hint: $hint} else . end)
     | if $home == "main" then
         . + {aggregator: $agg}
         | .secondmates = [(.secondmates // [])[]
             | if .remote == true then . + {read_every_s: 60, read_timeout_s: 400} else . end]
-      else . end'
+      else . end
+    | if $metrics == null then . else . + {metrics: $metrics} end'
+}
+
+# fmb_usage_unavailable <note>: a metrics block that says the usage could not be read, and why.
+fmb_usage_unavailable() {
+  jq -cn --arg note "$1" --argjson stale "$FMB_USAGE_STALE_S" \
+    '{v: 1, stale_after_s: $stale,
+      groups: [{id: "claude", label: "Claude", state: "unavailable", note: $note}], items: []}'
+}
+
+# fmb_usage_metrics: print the metrics block of this machine's Claude usage for
+# the main home's report (myshape/spec/status-metrics.markdown). quota-axi is
+# the only source: it runs with --no-credential-refresh and a --max-age bound,
+# never with --allow-keychain-prompt, --allow-claude-inference or --full, and
+# within FMB_USAGE_BOUND_S. This side reads no credential or token itself.
+# When quota-axi is missing, slow, fails or prints what this cannot read, the
+# block says so instead of carrying numbers; the read of the home goes on.
+# It always prints one JSON object and returns 0.
+fmb_usage_metrics() {
+  local out rc=0
+  if ! command -v quota-axi >/dev/null 2>&1; then
+    fmb_usage_unavailable "這台機器沒有 quota-axi，看不到 Claude 的用量。"
+    return 0
+  fi
+  out=$(fm_run_timed "$FMB_USAGE_BOUND_S" quota-axi --provider claude --json \
+    --no-credential-refresh --max-age "$FMB_USAGE_MAX_AGE_S" < /dev/null 2>/dev/null) || rc=$?
+  if fm_timed_out "$rc"; then
+    fmb_usage_unavailable "quota-axi 在 ${FMB_USAGE_BOUND_S} 秒內沒有回答，這次沒有用量。"
+    return 0
+  fi
+  # Exit 1 means quota-axi could read no provider, and it still prints its report.
+  case "$rc" in
+    0 | 1) ;;
+    *)
+      fmb_usage_unavailable "quota-axi 讀取失敗（exit $rc），這次沒有用量。"
+      return 0
+      ;;
+  esac
+  printf '%s\n' "$out" | jq -cs --argjson stale "$FMB_USAGE_STALE_S" \
+    --argjson warn "$FMB_USAGE_WARN" --argjson critical "$FMB_USAGE_CRITICAL" \
+    "$FMB_USAGE_JQ" 2>/dev/null ||
+    fmb_usage_unavailable "quota-axi 的輸出讀不懂，這次沒有用量。"
 }
 
 cmd_feed() {
@@ -96,7 +199,7 @@ cmd_feed() {
   fi
   if [ "$home" = main ]; then
     out=$("$SCRIPT_DIR/fm-topic-board-read.sh" ${closed[@]+"${closed[@]}"} "$offset" "$sha") || exit $?
-    printf '%s\n' "$out" | fmb_decorate main 0
+    printf '%s\n' "$out" | fmb_decorate main 0 "$(fmb_usage_metrics)"
     return
   fi
   remote=$(fmb_registry_remote "$home") || {

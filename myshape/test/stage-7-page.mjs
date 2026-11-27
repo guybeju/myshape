@@ -119,6 +119,15 @@ async function connected(page) {
   await page.waitFor("the fed workers", has("j1 working"), 15000);
   await noFirstmate(page, "the home page");
 
+  // The 用量 panel shows what the aggregator pushed, as it pushed it, and says what it left out.
+  const usage = `(document.querySelector("#sidebar .usage")?.innerText ?? "")`;
+  await page.waitFor("the 用量 panel", `${usage}.includes("42%")`);
+  for (const text of ["用量", "帳號 A", "五小時", "後重置", "量的", "帳號 B", "讀不到", "這個帳號讀不到", "今天的花費", "3.25 USD", "看板略過了 1 筆"]) {
+    if (!(await page.evaluate(`${usage}.includes(${JSON.stringify(text)})`))) throw new Error(`the 用量 panel must show ${text}`);
+  }
+  const marks = await page.evaluate(`[".usage-item.sev-warn", ".usage-item.stale", ".usage meter"].map((css) => document.querySelectorAll(css).length).join(",")`);
+  if (marks !== "1,0,1") throw new Error(`one current warn metric, none stale, one meter for the one percentage: ${marks}`);
+
   // AT10.1: a drag out of later changes the order, and the toast names plain.
   await page.evaluate(dropOnQueue("之後", "normal"));
   await page.waitFor("the toast naming plain", has("會通知 plain"));

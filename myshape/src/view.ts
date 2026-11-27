@@ -18,6 +18,8 @@ import type { ItemState, TodoStore } from "./todos.js";
 import { emptyLifecycle, evaluate } from "./lifecycle.js";
 import type { Evaluation, IdleView, LifecycleContext, StallView } from "./lifecycle.js";
 import { BOARD_CAP, TURN_ORDER } from "./lifecycle-settings.js";
+import { boardMetrics } from "./metrics.js";
+import type { HomeMetricsView } from "./metrics.js";
 
 export type Light = "decide" | "stuck" | "working" | "done" | "unknown";
 export type HomeVersion = "same" | "different" | "incompatible" | "unreported" | "unknown";
@@ -264,6 +266,8 @@ export interface BoardView {
   stalls: StallView[];
   /** The 沒人處理的議題 cards: topics in 高 or 一般 with no work past their deadline. */
   idle: IdleView[];
+  /** Each home's status metrics, shown on the page and read by nothing else in the view. */
+  metrics: HomeMetricsView[];
 }
 
 /**
@@ -956,6 +960,13 @@ function baseView(input: ViewInput): BoardView {
     stalls: [],
     idle: [],
     updates: updatesOf(input, placer),
+    metrics: boardMetrics(
+      input.homes.map((home) => ({
+        id: home.id,
+        metrics: home.report === null ? null : home.report.metrics,
+      })),
+      input.nowMs,
+    ),
     summaries: input.summaries
       .map((summary) => ({
         ...summary,

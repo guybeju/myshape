@@ -167,5 +167,29 @@
     "label": "first mate",
     "update_hint": "請在主 home 跑 /updatefirstmate。",
     "decisions_at_once": 1
+  },
+  "metrics": {
+    "v": 1,
+    "stale_after_s": 600,
+    "groups": [
+      {
+        "id": "claude:default",
+        "label": "Claude",
+        "state": "ok",
+        "note": ""
+      }
+    ],
+    "items": [
+      {
+        "id": "claude:default.five_hour",
+        "group": "claude:default",
+        "label": "5 小時",
+        "value": 37,
+        "unit": "%",
+        "severity": "normal",
+        "measured_at": "2026-11-19T00:00:00Z",
+        "resets_at": "2026-11-19T05:00:00Z"
+      }
+    ]
   }
 }

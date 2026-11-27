@@ -170,3 +170,12 @@ and no ledger line.
 
 These formats hold while `v` is 1. A reader ignores fields it does not know.
 Changing what a listed field means, or removing one, is a new `v`.
+
+## Status metrics
+
+The board's feed contract lets a report carry an optional `metrics` block:
+named numbers the board shows in its 用量 panel and never acts on
+(`myshape/spec/contracts.markdown` section 4.1). `agg-board.mjs feed`
+pushes none today. It may later push some, for example the supervisor's
+`cost_usd_estimate` totals, read from these files like the rest of its
+report.

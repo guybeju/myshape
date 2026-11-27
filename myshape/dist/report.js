@@ -2,6 +2,7 @@
 // section 4), parsed and checked once where it enters the service.
 import { isRecord, stringField, stringRecord, textField } from "./files.js";
 import { isValidItemId } from "./todos.js";
+import { parseMetrics } from "./metrics.js";
 export const REPORT_SCHEMA = 1;
 const ON_ANSWER = ["close", "release"];
 export const HOLD_BUCKETS = ["live", "aged", "dated", "blocked"];
@@ -242,6 +243,7 @@ export function parseReport(stdout) {
             secondmates: records(raw["secondmates"]).map(parseFeedHome).filter(present),
             closed_holds: records(raw["closed_holds"]).map(parseClosedHold).filter(present),
             closed_cursor: parseClosedCursor(raw["closed_cursor"]),
+            metrics: parseMetrics(raw["metrics"]),
         },
     };
 }

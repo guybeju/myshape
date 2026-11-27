@@ -2,8 +2,8 @@
 # An aggregator written only from the board's contract (contracts section 7,
 # statements C1 to C12, and the topics call of section 4), knowing nothing of
 # Firstmate. Its work for each home is $TB_AGG/plain/<home>.json: tasks,
-# queued, holds, status_decisions and topics, plus optional further homes for
-# the root. Its topics call answers the named tasks' tag files from the same
+# queued, holds, status_decisions and topics, an optional metrics block,
+# plus optional further homes for the root. Its topics call answers the named tasks' tag files from the same
 # file, leaving out the tasks that have none. It reports no ledger
 # ("absent"), unless $TB_AGG/plain/<home>.events exists: then its ledger
 # cursor is the number of event lines already handed over, with a token of its
@@ -43,6 +43,7 @@ case "${1:-}" in
       {schema: 1, code_commit: (.code_commit // "plain-0.1"), ledger_enabled: (.ledger_enabled // false),
        tasks: (.tasks // []), queued: (.queued // []), holds: (.holds // []),
        status_decisions: (.status_decisions // []), topics: (.topics // {}), ledger: $ledger}
+      + (if has("metrics") then {metrics} else {} end)
       + (if $home == "main" then {aggregator: {name: "plain", label: "plain"}, secondmates: (.secondmates // [])} else {} end)' \
       "$TB_AGG/plain/$1.json"
     ;;

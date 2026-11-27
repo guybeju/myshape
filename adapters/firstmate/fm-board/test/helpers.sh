@@ -11,6 +11,13 @@
 BOARD_READ="$ROOT/bin/fm-topic-board-read.sh"
 BOARD="$ROOT/bin/fm-board.sh"
 
+# bin/fm-board.sh feed runs quota-axi for the main home's Claude usage, and a
+# real one would read this machine's quota. So every suite finds the stand-in
+# fm-board/test/quota-axi/quota-axi first on PATH (its header says how it
+# answers); a board a suite starts copies this PATH to the programs it runs.
+PATH="$ROOT/fm-board/test/quota-axi:$PATH"
+export PATH
+
 # tb_write_registry <main-home> <local-secondmate-home>: register one local
 # secondmate (sm1) and one remote secondmate (far1).
 tb_write_registry() {

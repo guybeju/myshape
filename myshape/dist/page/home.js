@@ -8,6 +8,7 @@ import { filterBar, mergeTagNote, topicChips } from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
 import { lifecycleSettings, queueCards, undelivered } from "./cards.js";
+import { usagePanel } from "./usage.js";
 function shownOf(page, view) {
     return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
 }
@@ -82,7 +83,7 @@ function orderButtons(page, view, actions, order) {
 export function sidebar(page, view, actions) {
     const shown = shownOf(page, view);
     const order = cardOrder(page, view.hashtags.views);
-    return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), orderButtons(page, view, actions, order), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
+    return h("div", { id: "sidebar" }, usagePanel(view.metrics, Date.now()), h("h2", {}, "優先順序"), orderButtons(page, view, actions, order), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
 }
 function section(title, ...children) {
     const content = children
