@@ -304,26 +304,33 @@ export class Poller {
     const before = fingerprint(home);
     const eventsBefore = this.journal.events.length;
     for (let reads = 0; reads < MAX_CATCH_UP_READS; reads += 1) {
-      const { offset, sha } = this.offsets.get(home.id);
-      const closed = this.host.closedCursor(home.id);
-      const startedMs = Date.now();
-      const result = await this.run(
-        { kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) },
-        home.timeoutMs ?? this.timings.timeoutMs,
-      );
-      // The feed may not run now: nothing was read, and the page says why.
-      if (result.blocked !== undefined) return false;
-      const more =
-        result.code === 0
-          ? this.accept(home, result.stdout, startedMs)
-          : this.reject(home, result.code, result.stderr, closed !== null);
-      if (!more) break;
+      const step = await this.readOnce(home);
+      if (step === "blocked") return false;
+      if (step === "done") break;
     }
     // A read that found nothing new must not look like a change, or every
     // viewer would redraw the whole page on every poll.
     if (fingerprint(home) !== before || this.journal.events.length !== eventsBefore)
       this.host.onChange();
     return home.error === null;
+  }
+
+  /** One feed call: the feed may not run now, the home has more to read at once, or this read is done. */
+  private async readOnce(home: HomeState): Promise<"blocked" | "more" | "done"> {
+    const { offset, sha } = this.offsets.get(home.id);
+    const closed = this.host.closedCursor(home.id);
+    const startedMs = Date.now();
+    const result = await this.run(
+      { kind: "feed", home: home.id, offset, sha, ...(closed === null ? {} : { closed }) },
+      home.timeoutMs ?? this.timings.timeoutMs,
+    );
+    // The feed may not run now: nothing was read, and the page says why.
+    if (result.blocked !== undefined) return "blocked";
+    const more =
+      result.code === 0
+        ? this.accept(home, result.stdout, startedMs)
+        : this.reject(home, result.code, result.stderr, closed !== null);
+    return more ? "more" : "done";
   }
 
   /**

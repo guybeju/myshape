@@ -307,18 +307,10 @@ function deferAnswer(ctx, args) {
         return keepIdle(ctx, key, daysOf(args));
     if (args["card"] !== "stall")
         return { ok: false, code: "usage", line: "card 要是 idle 或 stall。" };
+    if (args["ask"] === true)
+        return askAnswer(ctx, key);
     const nameOf = (id) => ctx.topics.doc.topics[id]?.name ?? id;
     const nowMs = Date.parse(ctx.now);
-    if (args["ask"] === true) {
-        const shown = ctx.stalls().find((stall) => stall.key === key);
-        const members = shown === undefined ? [] : shown.members;
-        const asked = askStall(ctx.lifecycle.stalls, key, { nameOf, nowMs, label: ctx.label, members });
-        if (!asked.ok)
-            return asked;
-        const store = withStall(ctx.lifecycle, key, asked.stall);
-        const { line, records, message } = asked;
-        return { ok: true, changed: true, store, line, records, message };
-    }
     const result = deferStall(ctx.lifecycle.stalls, key, args["days"] ?? KEEP_DEFAULT_DAYS, {
         nameOf,
         nowMs,
@@ -327,6 +319,19 @@ function deferAnswer(ctx, args) {
         return result;
     const store = withStall(ctx.lifecycle, key, result.stall);
     return { ok: true, changed: true, store, line: result.line, records: result.records };
+}
+/** 請 <aggregator> 處理 on a 沒人接 card, naming its members as the page lists them now. */
+function askAnswer(ctx, key) {
+    const nameOf = (id) => ctx.topics.doc.topics[id]?.name ?? id;
+    const shown = ctx.stalls().find((stall) => stall.key === key);
+    const members = shown === undefined ? [] : shown.members;
+    const context = { nameOf, nowMs: Date.parse(ctx.now), label: ctx.label, members };
+    const asked = askStall(ctx.lifecycle.stalls, key, context);
+    if (!asked.ok)
+        return asked;
+    const store = withStall(ctx.lifecycle, key, asked.stall);
+    const { line, records, message } = asked;
+    return { ok: true, changed: true, store, line, records, message };
 }
 /** 先不關，到某天 on a 沒人處理的議題 card: the topic waits until then (T4), and the card goes. */
 function keepIdle(ctx, topic, days) {
