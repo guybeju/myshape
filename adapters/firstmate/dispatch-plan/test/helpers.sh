@@ -171,9 +171,11 @@ dp_summary() {
     '{schema: "fm-secondmate-home-summary.v1", generated_epoch: $at, endpoints: $endpoints}' > "$home/state/home-summary.json"
 }
 
-# dp_git_dir <dir>: <dir> as a git repository with one empty commit.
+# dp_git_dir <dir> [message]: <dir> as a git repository with one empty commit.
+# Two such commits made in the same second are the same commit unless their
+# messages differ.
 dp_git_dir() {
   mkdir -p "$1"
   git -C "$1" init -q
-  git -C "$1" -c user.name=test -c user.email=test@example.invalid commit -q --allow-empty -m init
+  git -C "$1" -c user.name=test -c user.email=test@example.invalid commit -q --allow-empty -m "${2:-init}"
 }

@@ -113,6 +113,7 @@ far_verdict() {
 
 # rule-v1 over a far machine's record: the design's cases, from the reader's
 # side, so a record from another version or clock is judged here.
+# shellcheck disable=SC2016 # far_verdict's filters are jq; jq expands $now.
 test_rule_v1_judges_each_record() {
   setup_machines rule 2
   dp_far_mate "$MAIN" far5 >/dev/null
@@ -194,7 +195,7 @@ test_names_environment_gaps() {
   local out here far6
   setup_machines env 2
   printf 'maintainer github.com/guybeju/firstmate\n' > "$MAIN/config/firstmate-role"
-  dp_git_dir "$MATE"
+  dp_git_dir "$MATE" "the secondmate home"
   printf 'jq\t-\n' > "$CODE/dispatch-plan/common-tools.tsv"
   dp_far_mate "$MAIN" far6 >/dev/null
   echo record > "$STUB/far6.mode"
