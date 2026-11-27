@@ -566,6 +566,12 @@ function stringList(value: unknown): string[] | null {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : null;
 }
 
+/** The order a view-save request lists cards in: 照優先順序 when absent, null when unknown. */
+function orderArg(args: Record<string, unknown>): hashtags.CardOrder | null {
+  const order = args["order"] ?? "priority";
+  return hashtags.isCardOrder(order) ? order : null;
+}
+
 /** What a view-save request asks for, or why it is malformed. */
 function viewInput(args: Record<string, unknown>): hashtags.ViewInput | string {
   const name = stringField(args, "name");
@@ -576,6 +582,8 @@ function viewInput(args: Record<string, unknown>): hashtags.ViewInput | string {
   if (name === null || typeof text !== "string" || any === null || none === null)
     return "視圖需要名稱，any 與 none 是 hashtag 名稱的清單，text 是文字。";
   if (id === null) return "視圖 id 要是字串。";
+  const order = orderArg(args);
+  if (order === null) return "order 要是 priority、newest 或 oldest。";
   return {
     ...id,
     name,
@@ -583,6 +591,7 @@ function viewInput(args: Record<string, unknown>): hashtags.ViewInput | string {
     none,
     text,
     untagged: args["untagged"] === true,
+    order,
   };
 }
 

@@ -535,6 +535,7 @@ function topicViews(topics) {
             close_at: topic.close_proposal?.at ?? null,
             kept_until: null,
             archived_at: null,
+            created_at: topic.created_at,
         };
     }
     for (const [id, topic] of Object.entries(topics.archive.topics)) {
@@ -547,6 +548,7 @@ function topicViews(topics) {
             close_at: null,
             kept_until: null,
             archived_at: topic.archived_at,
+            created_at: topic.created_at,
         };
     }
     return views;

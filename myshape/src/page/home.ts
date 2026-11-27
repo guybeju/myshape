@@ -1,5 +1,6 @@
 // The home page: the priority sidebar and the four Bearings-style sections,
 // followed by everything not yet filed under a topic.
+import type { CardOrder } from "#board/hashtags.js";
 import type { Queue } from "#board/topics.js";
 import type { AgentView, SummaryView } from "#board/view.js";
 import { h } from "./dom.js";
@@ -24,6 +25,7 @@ import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
 import type { Actions, Page, View } from "./state.js";
 import { dropHint } from "./drop.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
+import { cardOrder, sortCards } from "./sort.js";
 import { filterBar, mergeTagNote, topicChips } from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
@@ -97,19 +99,36 @@ function queueTopics(view: View, queue: Queue, shown: Shown): string[] {
   return view.queues[queue].filter((id) => isShown(shown, id) && !scheduled.has(id));
 }
 
-/** A queue's box; `data-filtered` says whether a filter is on, which the drop reads. */
-function queueBox(view: View, actions: Actions, queue: Queue, shown: Shown): Child {
-  const listed = queueTopics(view, queue, shown);
+/**
+ * A queue's box, its cards in `order`. `data-filtered` says whether a filter
+ * is on and `data-by-time` whether the cards are listed by creation time,
+ * which the drop reads.
+ */
+function queueBox(
+  view: View,
+  actions: Actions,
+  queue: Queue,
+  shown: Shown,
+  order: CardOrder,
+): Child {
+  const createdAt = (id: string): string => view.topics[id]?.created_at ?? "";
+  const listed = sortCards(queueTopics(view, queue, shown), order, createdAt);
   const unlisted = view.queues[queue].length - listed.length;
+  const byTime = order !== "priority";
   return h(
     "div",
-    { class: "queue", "data-queue": queue, "data-filtered": String(shown !== null) },
+    {
+      class: "queue",
+      "data-queue": queue,
+      "data-filtered": String(shown !== null),
+      "data-by-time": String(byTime),
+    },
     h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]),
     h(
       "div",
       { class: "list" },
       listed.map((id) => topicCard(view, actions, id, shown)),
-      h("div", { class: "empty" }, dropHint(listed.length, unlisted, shown !== null)),
+      h("div", { class: "empty" }, dropHint(listed.length, unlisted, shown !== null, byTime)),
     ),
   );
 }
@@ -138,14 +157,51 @@ function archivedBox(view: View, actions: Actions, shown: Shown): Child {
   );
 }
 
+const ORDER_LABEL: Record<CardOrder, string> = {
+  priority: "照優先順序",
+  newest: "新的在上",
+  oldest: "舊的在上",
+};
+
+/** The three orders the queues' cards can be listed in, and what the chosen one means. */
+function orderButtons(page: Page, view: View, actions: Actions, order: CardOrder): Child {
+  const saved = view.hashtags.views.find((entry) => entry.id === page.filter.view);
+  return h(
+    "div",
+    { class: "order" },
+    h(
+      "div",
+      { class: "btns" },
+      h("span", { class: "note" }, "排列："),
+      (Object.keys(ORDER_LABEL) as CardOrder[]).map((entry) =>
+        h(
+          "button",
+          { class: entry === order ? "primary" : "", onclick: () => actions.setOrder(entry) },
+          ORDER_LABEL[entry],
+        ),
+      ),
+    ),
+    order === "priority"
+      ? null
+      : h(
+          "p",
+          { class: "note" },
+          "照建立時間排列只改顯示的順序，優先順序與派工不變；拖到別的佇列會排在那裡的最後。",
+        ),
+    saved === undefined ? null : h("p", { class: "note" }, `排列記在視圖「${saved.name}」`),
+  );
+}
+
 export function sidebar(page: Page, view: View, actions: Actions): Child {
   const shown = shownOf(page, view);
+  const order = cardOrder(page, view);
   return h(
     "div",
     { id: "sidebar" },
     h("h2", {}, "優先順序"),
+    orderButtons(page, view, actions, order),
     nowStrip(page, view, actions),
-    QUEUES.map((queue) => queueBox(view, actions, queue, shown)),
+    QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)),
     scheduleColumn(
       view,
       actions,

@@ -1,5 +1,5 @@
 // What the page remembers between renders, and the actions its buttons call.
-import type { HashtagView } from "#board/hashtags.js";
+import type { CardOrder, HashtagView } from "#board/hashtags.js";
 import type { ScheduleView } from "#board/schedule-view.js";
 import type { Queue } from "#board/topics.js";
 import type { BoardView } from "#board/view.js";
@@ -91,6 +91,8 @@ export interface Page {
   notice: string | null;
   /** Which topics the home page shows; kept in the URL fragment (filter.ts). */
   filter: Filter;
+  /** The page's own card order, used when no saved view is chosen; kept in localStorage (sort.ts). */
+  order: CardOrder;
   /** Whether the hashtag settings panel, or the list of the agent's recent hashtag changes, is open. */
   tagPanel: "settings" | "recent" | null;
   /** Whether the schedule settings panel, or the list of the agent's recent schedule changes, is open. */
@@ -121,6 +123,8 @@ export interface Actions {
   /** Sends one change to any route, for the hashtag and view operations. */
   send: (path: string, body: Record<string, unknown>) => void;
   setFilter: (filter: Filter) => void;
+  /** Lists the queues' cards in `order`, remembered in the chosen saved view or by the page. */
+  setOrder: (order: CardOrder) => void;
   setTagPanel: (panel: Page["tagPanel"]) => void;
   setSchedulePanel: (panel: Page["schedulePanel"]) => void;
   /** Opens or closes the in-page question or form under `key`. */

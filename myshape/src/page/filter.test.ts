@@ -209,7 +209,15 @@ describe("the filter", () => {
   });
 
   it("starts from a saved view", () => {
-    const view = { id: "w", name: "工作", any: [], none: ["AI_INFRA"], text: "", untagged: false };
+    const view = {
+      id: "w",
+      name: "工作",
+      any: [],
+      none: ["AI_INFRA"],
+      text: "",
+      untagged: false,
+      order: "newest" as const,
+    };
     expect(viewFilter(view)).toEqual(filter({ none: ["AI_INFRA"], view: "w" }));
   });
 });

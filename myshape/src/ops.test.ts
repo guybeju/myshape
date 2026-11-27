@@ -119,7 +119,9 @@ function hashtagsFixture(): HashtagStore {
     ...emptyHashtags(),
     hashtags: { AI_INFRA: entry("ai_infra", "aggregator"), OLD: entry("old", "captain") },
     topics: { a: ["AI_INFRA"], c: ["OLD"] },
-    views: { old: { name: "舊的", any: ["OLD"], none: [], text: "", untagged: false } },
+    views: {
+      old: { name: "舊的", any: ["OLD"], none: [], text: "", untagged: false, order: "priority" },
+    },
   };
 }
 
@@ -881,6 +883,8 @@ describe("each hashtag operation's arguments", () => {
     usage("view-save", { name: "x", none: [1] });
     usage("view-save", { name: "x", text: 3 });
     usage("view-save", { name: "x", id: 3 });
+    usage("view-save", { name: "x", order: "sideways" });
+    usage("view-save", { name: "x", order: 1 });
     usage("view-delete", {});
     expect(journalLines()).toEqual([]);
   });
@@ -893,7 +897,13 @@ describe("each hashtag operation's arguments", () => {
       none: [],
       text: "",
       untagged: true,
+      order: "priority",
     });
+  });
+
+  it("view-save keeps the order the page lists cards in, and refuses one it does not know", () => {
+    const saved = reply("view-save", { id: "mine", name: "我的", order: "oldest" });
+    expect(saved.board.hashtags.views["mine"]?.order).toBe("oldest");
   });
 
   it("a split of a topic without hashtags saves only the topic", () => {
