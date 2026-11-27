@@ -42,7 +42,7 @@
 | `POST /api/topics/move` | `{id, queue, before?}`、`{id, queue, after}` 或 `{id, queue, first: true}` | 拖曳的落點；`before`、`after` 與 `first` 都省略就是尾端。`after` 是篩選中的落點：排在那個議題正後面，只有頁面能送，socket 的 `move` 不讀它（[篩選中拖曳](drag-under-filter.markdown)） |
 | `POST /api/topics/rename`、`/goal` | `{id, value}` | 改名、改目標 |
 | `POST /api/topics/archive`、`/reopen` | `{id, queue?}` | 封存、重開 |
-| `POST /api/topics/keep` | `{id}` | 對提議關閉按「先不關」：清掉 `close_proposal` |
+| `POST /api/topics/keep` | `{id, days?}` 或 `{id, later: true}` | 對提議關閉按「先不關」：清掉 `close_proposal`，到 `days` 天後（1 到 90，沒帶是 14）或移到待辦 |
 | `POST /api/topics/merge` | `{from, into, confirm?}` | 議題併議題，兩步 |
 | `POST /api/agents/tag` | `{home, task, topic}` | 歸併 agent |
 | `POST /api/messages` | `{topic, text}` | 給主 first mate |
@@ -69,8 +69,10 @@
 | `POST /api/schedules/pause-all` | `{paused}` | 全部暫停、全部恢復 |
 | `POST /api/schedules/revert` | `{rid}` | 撤回 aggregator 的一筆排程改動 |
 | `POST /api/schedules/seen` | `{}` | 「看過了」：清掉最近改動的清單與「新」，也是 aggregator 建的排程的「啟用」（一次全部） |
+| `POST /api/lifecycle/answer` | `{card: "idle", key: <議題 id>, days?}` 或 `{card: "stall", key: <議題 id 或 "-">, days?}` | 「沒人處理的議題」的先不關（到某天），「沒人接」的延到（[lifecycle](lifecycle.markdown) 第 3 節） |
+| `POST /api/lifecycle/settings` | 要改的期限，例如 `{A3: {remind: 30, raise: 240}}` | 期限設定；任何一項不合法就都不改 |
 
-議題操作和 socket 上的同名操作是同一套伺服器函式。`/api/topics/keep` 是頁面才有的（原型的「先不關」），它只清欄位。hashtag 的路由除了 `add`、`remove`，都是頁面才有的操作，socket 收到就拒絕。排程的 `settings`、`lock`、`pause-all`、`revert`、`seen` 是頁面才有的操作，socket 收到就拒絕；aggregator 的「接下」（`schedule-take`）與時鐘（`schedule-tick`）沒有頁面的路由。瀏覽器這條通道沒有 `propose`、`close-propose`、`summary`、`which`、`stop`、`restart`、`reset-token`。
+議題操作和 socket 上的同名操作是同一套伺服器函式。`/api/topics/keep` 是頁面才有的（原型的「先不關」），一定帶一個選擇。`lifecycle/answer` 與 `lifecycle/settings` 也是頁面才有的。hashtag 的路由除了 `add`、`remove`，都是頁面才有的操作，socket 收到就拒絕。排程的 `settings`、`lock`、`pause-all`、`revert`、`seen` 是頁面才有的操作，socket 收到就拒絕；aggregator 的「接下」（`schedule-take`）與時鐘（`schedule-tick`）沒有頁面的路由。瀏覽器這條通道沒有 `propose`、`close-propose`、`summary`、`which`、`stop`、`restart`、`reset-token`。
 
 錯誤回應：`{"error":"<代碼>","message":"<給人看的一行>"}`。401 是 token 不對：頁面顯示「token 已重置或無效，請在終端機重新跑 `bin/myshape.sh open`」並停止輪詢。
 
@@ -86,10 +88,12 @@
    「hashtag 設定」面板：每一項設定寫出現在的值與預設值（aggregator 可以貼撕、可以開新的、一個議題最多幾個、整個看板最多幾個、aggregator 每小時最多改幾次、預設視圖）；每個 hashtag 一張卡，有幾個議題、誰開的、鎖上或解鎖、顏色，以及「改名…」「併入…」「刪掉…」，這三種走伺服器的兩步確認，第二步寫出會動到幾個議題與它們的名稱；最後是存下來的視圖，每個可以刪掉。
    顏色是 `board.css` 裡固定色票的 class（`tag c1` 到 `tag c8`），不用 `style` 屬性。
    篩選列下面一行排程的：「所有排程暫停中」（打開時）、「<aggregator 的名稱> 最近改了 N 筆排程」（同 hashtag 的那一行：清單、每筆「撤回」、最後「看過了」，沒有就不顯示）、「排程設定」與「全部暫停」或「全部恢復」。「排程設定」面板每一項寫出現在的值與預設值（[contracts](contracts.markdown) 第 3.9 節的十四項），並說明同一筆排程不能同時開著兩場的限制。
-1. 要你動手：每個開著的要你動手項目，跨議題，卡上標議題（沒有議題的標「未分類」）。沒有開著的項目時整段不顯示。
+   下面一行「期限設定」（預設收合）：每一種 aggregator 負責的狀態一列，寫出現在的提醒與交給你的期限、單位與預設值，可以改（[lifecycle](lifecycle.markdown) 第 5 節）。
+1. 要你動手：每個開著的要你動手項目，跨議題，卡上標議題（沒有議題的標「未分類」）。狀態看板不認得的寫出原文，只有「不做了」。沒有開著的項目時整段不顯示。
 2. 沒有議題：沒有議題、已經關掉的要你動手項目，摺成「已關 N」，和議題頁「要你動手」底下的一樣（預設收合，每個項目一行，打開是它的每一步）。沒有這種項目時整段不顯示（C61）。
-3. 等你決定：所有 live 的待決事項，跨議題列在一起，照 [第三段](stage-3-data.markdown)的順序。每張卡標議題名稱與所在的 home。提議關閉的議題也列在這段。
-   aggregator 設了 `decisions_at_once`（[contracts](contracts.markdown) C10）時，只有前面那麼多個是卡片，其他 live 的摺成最後一行「還有 N 個決定排隊，輪到時才顯示」：不寫問題、沒有作答鈕。篩選時 N 只算通過的議題的；提議關閉不受這個上限管。
+3. 等你決定：一條佇列（[lifecycle](lifecycle.markdown) 第 4 節），由上而下：live 的待決事項（照[第三段](stage-3-data.markdown)的順序，每張卡標議題名稱與所在的 home），aggregator 的提議關閉（「關閉並封存」「先不關，到 <日期>」附天數「先不關，移到待辦」），看板的「沒人處理的議題」（一句固定的話，「關閉並封存」「先不關，到 <日期>」「移到待辦」），看板的「沒人接」卡（每個逾期的卡一行，寫出原因與從何時起，「延到 <日期>」「移到待辦」）。
+   只有前面那麼多張是卡片（aggregator 的 `decisions_at_once`，沒有設時待決事項都顯示、其他三種一次一張），其他的摺成最後一行「還有 N 個決定排隊，輪到時才顯示」：不寫內容、沒有按鈕。篩選時只算通過的議題的。
+   下面是「沒送到 N」：每一筆失敗、未送達、結果不明的寫入，不論議題（含已封存與沒有議題的），有「重送」與「忽略」。沒有時不顯示。
 4. 最近的結果：里程碑摘要，四種都列，附議題名稱；`failed` 用卡住的顏色標出（採建議 C11）。
 5. 進行中：燈號是進行中、卡住、未知的 agent，一個一列，附議題與 home。
 6. 排定的：待辦佇列裡沒有排程的議題（有排程的列在左側欄的「排程」，不在這裡），加上暫緩的待決事項與原因。
@@ -119,7 +123,7 @@
 1. 標題列：名稱、所在佇列、右邊一個「⋯」選單。
 2. 一行目標。
    下面一行是這個議題的 hashtag，每個旁邊一個「×」撕掉，最後是一個輸入框與「貼上」；超過上限時寫明減到上限以下之前不能再貼新的。已封存的議題不顯示這一行。
-3. 待決佇列：提議關閉的卡在最上面（「關閉並封存」「先不關」），接著 live 的待決事項（在排隊的照首頁第 3 項摺成一行「還有 N 個決定排隊，輪到時才顯示」），「暫緩」收合在下面，然後是不能作答的 worker 提問，最後是已關的待決事項，摺成「已關 N」，和「要你動手」底下的一樣：預設收合，每個待決事項一行（最後一筆關閉紀錄的時間、home/task 與那一行），打開是它在看板上的每一筆紀錄，新的在上。有一筆 `hold.answered` 或 `hold.closed` 的才算關了；只是從讀到的 `holds[]` 不見了的不算。這些紀錄照樣也在「更新」裡（C61）。
+3. 待決佇列：首頁第 3 項那條佇列裡這個議題的卡，同樣的順序、按鈕與摺疊；先不關到某天時寫出到哪天；「暫緩」收合在下面，然後是不能作答的 worker 提問，最後是已關的待決事項，摺成「已關 N」，和「要你動手」底下的一樣：預設收合，每個待決事項一行（最後一筆關閉紀錄的時間、home/task 與那一行），打開是它在看板上的每一筆紀錄，新的在上。有一筆 `hold.answered` 或 `hold.closed` 的才算關了；只是從讀到的 `holds[]` 不見了的不算。這些紀錄照樣也在「更新」裡（C61）。
 4. 更新：里程碑摘要用底色與左邊線標出、前面有 kind 的小標籤、有 PR 就接連結；系統紀錄用斜體；帳本事件是一般文字。新的在上。
 5. 關聯 agent：燈號、task id、home、最後更新時間、狀態原文、直送的輸入框與按鈕。按鈕上的字是「直送」或「經 <secondmate> 轉達」。
 6. 排隊中：這個議題還沒派出去的 backlog 項目，預設收合成一行「排隊中 N」。展開後每列是 task id、標題、home，以及它在等什麼：「可以派」「等你決定」「決定排隊」（它的待決事項還在排隊）「停著：<hold 原因>」「等 <id> 完成」。沒有排隊的項目時整區不顯示。首頁的議題卡片上同時顯示「排隊 N」。
