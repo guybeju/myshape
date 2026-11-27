@@ -1,6 +1,7 @@
 import { h } from "./dom.js";
 import { agentRow, closedFold, closedTodoEntries, holdCard, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
+import { dropHint } from "./drop.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
 import { filterBar, mergeTagNote, topicChips } from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
@@ -41,8 +42,11 @@ function queueTopics(view, queue, shown) {
     const scheduled = scheduledTopics(view.schedules);
     return view.queues[queue].filter((id) => isShown(shown, id) && !scheduled.has(id));
 }
+/** A queue's box; `data-filtered` says whether a filter is on, which the drop reads. */
 function queueBox(view, actions, queue, shown) {
-    return h("div", { class: "queue", "data-queue": queue }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, queueTopics(view, queue, shown).map((id) => topicCard(view, actions, id, shown)), h("div", { class: "empty" }, "拖到這裡")));
+    const listed = queueTopics(view, queue, shown);
+    const unlisted = view.queues[queue].length - listed.length;
+    return h("div", { class: "queue", "data-queue": queue, "data-filtered": String(shown !== null) }, h("h3", {}, queue === "later" ? "待辦（不自動開工）" : QUEUE_LABEL[queue]), h("div", { class: "list" }, listed.map((id) => topicCard(view, actions, id, shown)), h("div", { class: "empty" }, dropHint(listed.length, unlisted, shown !== null))));
 }
 function archivedBox(view, actions, shown) {
     const archived = Object.entries(view.topics).filter(([id, topic]) => topic.status === "archived" && isShown(shown, id));

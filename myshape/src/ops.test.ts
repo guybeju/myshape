@@ -619,6 +619,21 @@ describe("each operation's arguments", () => {
     expect(before.board.topics.doc.queues.normal).toEqual(["c", "a", "b"]);
   });
 
+  it("move takes after only from the page; the socket's move is as it was", () => {
+    usage("move", { id: "a", queue: "normal", after: "b", before: "c" }, true);
+    usage("move", { id: "a", queue: "normal", after: "b", first: true }, true);
+    usage("move", { id: "a", queue: "normal", after: "b", last: true }, true);
+    usage("move", { id: "a", queue: "normal", after: 3 }, true);
+    reply("move", { id: "c", queue: "normal", last: true });
+    const page = reply("move", { id: "a", queue: "normal", after: "b" }, true);
+    expect(page.board.topics.doc.queues.normal).toEqual(["b", "a", "c"]);
+    reply("move", { id: "a", queue: "high" });
+    const socket = reply("move", { id: "a", queue: "normal", after: "b" });
+    expect(socket.board.topics.doc.queues.normal).toEqual(["b", "c", "a"]);
+    const socketLast = reply("move", { id: "a", queue: "normal", after: 3, last: true });
+    expect(socketLast.board.topics.doc.queues.normal).toEqual(["b", "c", "a"]);
+  });
+
   it("merge, split and reopen check their optional reason, id and queue", () => {
     usage("merge", { from: "b", into: "a", reason: 3 }, true);
     usage("split", { from: "a", name: "P" });

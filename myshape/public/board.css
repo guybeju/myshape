@@ -28,6 +28,7 @@ section{margin-bottom:20px}
 .queue .list{max-height:38vh;overflow-y:auto;min-height:24px}
 .queue .empty{display:none;color:var(--mute);font-size:12px;padding:6px}
 .dragging-now .queue .empty{display:block}
+.dragging-now .queue[data-filtered="true"] .empty{position:sticky;bottom:0;background:#ebe8e1}
 .row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--line);background:#fff}
 .row .grow{flex:1;min-width:0}
 .side{display:grid;grid-template-columns:260px 1fr;gap:16px}

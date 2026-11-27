@@ -31,6 +31,20 @@ function movePosition(args) {
         return undefined;
     return typeof before === "string" ? { before } : null;
 }
+/**
+ * The page's drop under a filter: directly after the card shown above it
+ * (spec/drag-under-filter.markdown), with no other position beside it.
+ */
+function afterPosition(args) {
+    const after = args["after"];
+    const alone = args["before"] === undefined && args["first"] === undefined;
+    return alone && args["last"] === undefined && typeof after === "string" ? { after } : null;
+}
+/** Where a move puts the topic. Only the page may send `after`; the socket's move never reads it. */
+function positionOf(ctx, args) {
+    const fromPage = ctx.by === "captain";
+    return fromPage && args["after"] !== undefined ? afterPosition(args) : movePosition(args);
+}
 /** The `reason` argument: absent, a string, or null when it is something else. */
 function optionalReason(args) {
     const reason = args["reason"];
@@ -178,7 +192,7 @@ function followMerge(ctx, merged, title) {
 function move(ctx, args) {
     const id = stringField(args, "id");
     const queue = optionalQueue(args);
-    const position = movePosition(args);
+    const position = positionOf(ctx, args);
     if (id === null || queue === null || queue === undefined || position === null) {
         return { usage: "move 需要議題 id 與佇列（high、normal、later）。" };
     }

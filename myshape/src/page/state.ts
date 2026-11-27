@@ -3,6 +3,7 @@ import type { HashtagView } from "#board/hashtags.js";
 import type { ScheduleView } from "#board/schedule-view.js";
 import type { Queue } from "#board/topics.js";
 import type { BoardView } from "#board/view.js";
+import type { Anchor } from "./drop.js";
 import type { Filter } from "./filter.js";
 
 export interface WriteView {
@@ -93,7 +94,7 @@ export interface Actions {
   setPanel: (panel: Page["panel"]) => void;
   edit: (key: string, on: boolean) => void;
   topic: (op: string, body: Record<string, unknown>) => void;
-  move: (topic: string, queue: Queue, before: string | null) => void;
+  move: (topic: string, queue: Queue, anchor: Anchor) => void;
   /** Asks the board for a confirmation code; the action runs when `confirm` is called with the same key. */
   ask: (key: string, path: string, body: Record<string, unknown>) => void;
   confirm: (key: string) => void;

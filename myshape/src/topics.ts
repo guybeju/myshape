@@ -454,8 +454,23 @@ export function closePropose(
   ]);
 }
 
-/** Where in the queue a moved topic lands; undefined keeps a topic already in the queue where it is. */
-export type MovePosition = { first: true } | { last: true } | { before: string } | undefined;
+/**
+ * Where in the queue a moved topic lands; undefined keeps a topic already in
+ * the queue where it is. `after` is the page's drop under a filter: directly
+ * after the card shown above it (spec/drag-under-filter.markdown).
+ */
+export type MovePosition =
+  | { first: true }
+  | { last: true }
+  | { before: string }
+  | { after: string }
+  | undefined;
+
+/** Where `anchor` (merges followed) is in `queue`, or -1 when it is not there or is `id` itself. */
+function anchorIndex(queue: readonly string[], id: string, anchor: string, doc: Frozen<TopicsDoc>) {
+  const resolved = resolveTopicId(doc, anchor);
+  return resolved === id ? -1 : queue.indexOf(resolved);
+}
 
 function insertAt(
   queue: readonly string[],
@@ -467,9 +482,14 @@ function insertAt(
   if (position === undefined) return queue.includes(id) ? queue : [...without, id];
   if ("first" in position) return [id, ...without];
   if ("last" in position) return [...without, id];
-  const anchor = resolveTopicId(doc, position.before);
-  const at = without.indexOf(anchor);
-  if (anchor === id || at === -1) return `--before 指的 ${position.before} 不在那個佇列裡。`;
+  if ("after" in position) {
+    const above = anchorIndex(without, id, position.after, doc);
+    if (above === -1)
+      return `落點上面的 ${position.after} 已經不在那個佇列裡；等頁面更新後再拖一次。`;
+    return [...without.slice(0, above + 1), id, ...without.slice(above + 1)];
+  }
+  const at = anchorIndex(without, id, position.before, doc);
+  if (at === -1) return `--before 指的 ${position.before} 不在那個佇列裡。`;
   return [...without.slice(0, at), id, ...without.slice(at)];
 }
 

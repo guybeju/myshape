@@ -42,8 +42,11 @@ const refresh = async (host) => {
     await host.refresh();
     return ok();
 };
-/** A drop with no "before" lands at the end of the queue. */
-const move = (host, body) => fromTopicOp(host.topicOp("move", body["before"] === undefined ? { ...body, last: true } : body));
+/** A drop with neither "before" nor "after" lands at the end of the queue. */
+const move = (host, body) => {
+    const anchored = body["before"] !== undefined || body["after"] !== undefined;
+    return fromTopicOp(host.topicOp("move", anchored ? body : { ...body, last: true }));
+};
 /**
  * Runs `act` only on the second of two requests. The first request, without a
  * code, gets one bound to `binding`; the second must return it for the same

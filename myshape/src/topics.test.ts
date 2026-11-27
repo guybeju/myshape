@@ -197,6 +197,21 @@ describe("move", () => {
     );
   });
 
+  it("places a topic directly after another, following a merge to the topic it went into", () => {
+    const state = fixture();
+    expect(order(done(topics.move(state, "d", "normal", { after: "b" }, NOW)).state)).toBe(
+      "high:a normal:b,d,c later:",
+    );
+    expect(order(done(topics.move(state, "b", "normal", { after: "c" }, NOW)).state)).toBe(
+      "high:a normal:c,b later:d",
+    );
+    const merged = done(topics.merge(state, "c", "b", NOW)).state;
+    expect(order(done(topics.move(merged, "a", "normal", { after: "c" }, NOW)).state)).toBe(
+      "high: normal:b,a later:d",
+    );
+    expect(done(topics.move(state, "c", "normal", { after: "b" }, NOW)).changed).toBe(false);
+  });
+
   it("leaves the order alone when nothing would change", () => {
     const state = fixture();
     for (const position of [undefined, { last: true }, { before: "c" }] as const) {
@@ -224,6 +239,12 @@ describe("move", () => {
     );
     expect(refusal(topics.move(state, "b", "normal", { before: "b" }, NOW))).toContain(
       "不在那個佇列",
+    );
+    expect(refusal(topics.move(state, "b", "normal", { after: "a" }, NOW))).toContain(
+      "已經不在那個佇列裡",
+    );
+    expect(refusal(topics.move(state, "b", "normal", { after: "b" }, NOW))).toContain(
+      "已經不在那個佇列裡",
     );
     expect(refusal(topics.move(state, "nope", "normal", undefined, NOW))).toContain("沒有 nope");
   });
