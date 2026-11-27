@@ -46,10 +46,10 @@ const STALE_TEXT = {
 };
 /** The number as written: a percentage to one decimal, any other value with its unit. */
 export function valueText(item) {
-    const shown = String(Number(item.value.toFixed(1)));
+    const figure = String(Number(item.value.toFixed(1)));
     if (item.unit === "%")
-        return `${shown}%`;
-    return item.unit === "" ? shown : `${shown} ${item.unit}`;
+        return `${figure}%`;
+    return item.unit === "" ? figure : `${figure} ${item.unit}`;
 }
 const GROUP_PILL = {
     ok: null,
@@ -62,37 +62,65 @@ export function itemClass(item) {
         return "usage-item stale";
     return item.severity === "normal" ? "usage-item" : `usage-item sev-${item.severity}`;
 }
-function itemRow(item, nowMs) {
+export function usageRow(item, nowMs) {
     const notes = [resetText(item.resets_at, nowMs), ageText(item, nowMs)];
     if (item.stale !== null)
         notes.push(STALE_TEXT[item.stale]);
-    return h("div", { class: itemClass(item), "data-metric": item.id }, h("div", { class: "usage-line" }, h("span", { class: "grow" }, item.label), h("b", {}, valueText(item))), item.unit === "%" ? h("meter", { min: 0, max: 100, value: item.value }) : null, h("div", { class: "note" }, notes.filter((note) => note !== null).join(" · ")));
+    return {
+        id: item.id,
+        class: itemClass(item),
+        label: item.label,
+        value: valueText(item),
+        meter: item.unit === "%" ? { min: 0, max: 100, value: item.value } : null,
+        note: notes.filter((note) => note !== null).join(" · "),
+    };
 }
-function groupCard(group, nowMs) {
+export function usageCard(group, nowMs) {
     const pill = GROUP_PILL[group.state];
     const next = group.next_reset === null ? null : resetText(group.next_reset, nowMs);
-    return h("div", {
+    return {
+        id: group.id,
         class: group.state === "ok" ? "usage-group" : "usage-group off",
-        "data-group": group.id ?? "",
-    }, group.label === "" && pill === null
-        ? null
-        : h("div", { class: "usage-line" }, h("b", { class: "grow" }, group.label), pill === null ? null : h("span", { class: "pill warn" }, pill)), group.note === "" ? null : h("div", { class: "note" }, group.note), next === null || group.items.length < 2 ? null : h("div", { class: "note" }, `最快：${next}`), group.items.map((item) => itemRow(item, nowMs)));
+        title: group.label === "" && pill === null ? null : { label: group.label, pill },
+        note: group.note === "" ? null : group.note,
+        next: next === null || group.items.length < 2 ? null : `最快：${next}`,
+        rows: group.items.map((item) => usageRow(item, nowMs)),
+    };
 }
-function homeBlock(view, nowMs) {
+/** Every home's part of the panel at `nowMs`, in the board's order. */
+export function usageBlocks(metrics, nowMs) {
+    return metrics.map((view) => ({
+        home: view.home === "main" ? null : `home ${view.home}`,
+        problem: view.problem === null ? null : `看板沒有用這份用量資料：${view.problem}`,
+        cards: view.groups.map((group) => usageCard(group, nowMs)),
+        dropped: view.first_drop === null
+            ? null
+            : `看板略過了 ${view.dropped} 筆不合格式的用量資料（第一筆：${view.first_drop}）`,
+    }));
+}
+/** The list, or null for an empty one. */
+export function nonEmpty(list) {
+    return list.length === 0 ? null : list;
+}
+/** `render(value)`, or nothing for a null value. */
+export function shown(value, render) {
+    return value === null ? null : render(value);
+}
+function rowNode(row) {
+    return h("div", { class: row.class, "data-metric": row.id }, h("div", { class: "usage-line" }, h("span", { class: "grow" }, row.label), h("b", {}, row.value)), shown(row.meter, (meter) => h("meter", meter)), h("div", { class: "note" }, row.note));
+}
+function cardNode(card) {
+    return h("div", { class: card.class, "data-group": card.id }, shown(card.title, (title) => h("div", { class: "usage-line" }, h("b", { class: "grow" }, title.label), shown(title.pill, (pill) => h("span", { class: "pill warn" }, pill)))), shown(card.note, (note) => h("div", { class: "note" }, note)), shown(card.next, (next) => h("div", { class: "note" }, next)), card.rows.map(rowNode));
+}
+function blockNode(block) {
     return [
-        view.home === "main" ? null : h("h3", {}, `home ${view.home}`),
-        view.problem === null
-            ? null
-            : h("p", { class: "note" }, `看板沒有用這份用量資料：${view.problem}`),
-        view.groups.map((group) => groupCard(group, nowMs)),
-        view.dropped === 0
-            ? null
-            : h("p", { class: "note" }, `看板略過了 ${view.dropped} 筆不合格式的用量資料（第一筆：${view.first_drop ?? ""}）`),
+        shown(block.home, (home) => h("h3", {}, home)),
+        shown(block.problem, (problem) => h("p", { class: "note" }, problem)),
+        block.cards.map(cardNode),
+        shown(block.dropped, (dropped) => h("p", { class: "note" }, dropped)),
     ];
 }
 /** The panel, or nothing when no home pushed metrics. */
 export function usagePanel(metrics, nowMs) {
-    if (metrics.length === 0)
-        return null;
-    return h("div", { class: "usage", "data-key": "usage" }, h("h2", {}, "用量"), metrics.map((view) => homeBlock(view, nowMs)));
+    return shown(nonEmpty(usageBlocks(metrics, nowMs)), (blocks) => h("div", { class: "usage", "data-key": "usage" }, h("h2", {}, "用量"), blocks.map(blockNode)));
 }

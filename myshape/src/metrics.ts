@@ -50,8 +50,8 @@ export interface Metric {
   /** When the aggregator measured it; null when it did not say, which never reads as current. */
   measured_at: string | null;
   severity: Severity;
-  /** This metric's own limit in seconds, or null for the block's. */
-  stale_after_s: number | null;
+  /** How long it counts as current, in seconds: its own limit, else the block's. */
+  stale_after_s: number;
 }
 
 /**
@@ -135,9 +135,9 @@ function isNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function staleAfterOf(raw: Record<string, unknown>): number | null {
+function staleAfterOf(raw: Record<string, unknown>, blockS: number): number {
   const value = raw["stale_after_s"];
-  if (value === undefined) return null;
+  if (value === undefined) return blockS;
   need(isNumber(value), "stale_after_s 不是數字");
   return clampSeconds(value as number);
 }
@@ -167,7 +167,7 @@ function groupOf(raw: Record<string, unknown>, groups: Set<string>): string | nu
   return group;
 }
 
-function parseItem(raw: Record<string, unknown>, groups: Set<string>): Metric {
+function parseItem(raw: Record<string, unknown>, groups: Set<string>, blockS: number): Metric {
   const id = idOf(raw, "id");
   const unit = textOf(raw, "unit", UNIT_MAX, true);
   return {
@@ -179,7 +179,7 @@ function parseItem(raw: Record<string, unknown>, groups: Set<string>): Metric {
     resets_at: timeOf(raw, "resets_at"),
     measured_at: timeOf(raw, "measured_at"),
     severity: wordOf(raw, "severity", SEVERITIES, "normal"),
-    stale_after_s: staleAfterOf(raw),
+    stale_after_s: staleAfterOf(raw, blockS),
   };
 }
 
@@ -252,11 +252,13 @@ export function parseMetrics(raw: unknown): Metrics {
   const drops: Drops = { count: 0, first: null };
   const groups = listOf(raw["groups"], "groups", MAX_GROUPS, parseGroup, drops);
   const ids = new Set(groups.map((group) => group.id));
-  const items = listOf(raw["items"], "items", MAX_ITEMS, (entry) => parseItem(entry, ids), drops);
   const limit = raw["stale_after_s"];
+  const blockS = isNumber(limit) ? clampSeconds(limit) : STALE_AFTER_S.fallback;
+  const parse = (entry: Record<string, unknown>): Metric => parseItem(entry, ids, blockS);
+  const items = listOf(raw["items"], "items", MAX_ITEMS, parse, drops);
   return {
     kind: "ok",
-    stale_after_s: isNumber(limit) ? clampSeconds(limit) : STALE_AFTER_S.fallback,
+    stale_after_s: blockS,
     groups,
     items,
     dropped: drops.count,
@@ -305,28 +307,22 @@ function staleWhy(
   state: GroupState,
   ageMs: number | null,
   nowMs: number,
-  limitS: number,
 ): StaleWhy | null {
   if (state !== "ok") return "group";
   if (ageMs === null) return "no-time";
   if (ageMs < -FUTURE_SKEW_S * 1000) return "future";
   if (item.resets_at !== null && Date.parse(item.resets_at) <= nowMs) return "reset";
-  return ageMs > (item.stale_after_s ?? limitS) * 1000 ? "old" : null;
+  return ageMs > item.stale_after_s * 1000 ? "old" : null;
 }
 
-/** How `item` reads at `nowMs` (epoch ms) in a group in `state`, with the block's limit `limitS`. */
-export function readMetric(
-  item: Metric,
-  state: GroupState,
-  limitS: number,
-  nowMs: number,
-): MetricView {
+/** How `item` reads at `nowMs` (epoch ms) in a group in `state`. */
+export function readMetric(item: Metric, state: GroupState, nowMs: number): MetricView {
   const ageMs = item.measured_at === null ? null : nowMs - Date.parse(item.measured_at);
   const known = ageMs !== null && ageMs >= -FUTURE_SKEW_S * 1000;
   return {
     ...item,
     age_s: known ? Math.max(0, Math.floor(ageMs / 1000)) : null,
-    stale: staleWhy(item, state, ageMs, nowMs, limitS),
+    stale: staleWhy(item, state, ageMs, nowMs),
     reset_passed: item.resets_at !== null && Date.parse(item.resets_at) <= nowMs,
   };
 }
@@ -346,15 +342,15 @@ export function nextReset(items: Metric[], nowMs: number): string | null {
   return soonest;
 }
 
-function groupView(group: MetricGroup | null, items: MetricView[], nowMs: number): MetricGroupView {
-  return {
-    id: group?.id ?? null,
-    label: group?.label ?? "",
-    state: group?.state ?? "ok",
-    note: group?.note ?? "",
-    next_reset: nextReset(items, nowMs),
-    items,
-  };
+/** Where the metrics in no group are listed: after the groups, untitled. */
+const NO_GROUP = { id: null, label: "", state: "ok", note: "" } as const;
+
+function groupView(
+  group: MetricGroup | typeof NO_GROUP,
+  items: MetricView[],
+  nowMs: number,
+): MetricGroupView {
+  return { ...group, next_reset: nextReset(items, nowMs), items };
 }
 
 /**
@@ -366,8 +362,7 @@ export function homeMetrics(home: string, metrics: Metrics, nowMs: number): Home
   if (metrics.kind === "none") return null;
   if (metrics.kind === "unreadable")
     return { home, problem: metrics.reason, dropped: 0, first_drop: null, groups: [] };
-  const read = (item: Metric, state: GroupState): MetricView =>
-    readMetric(item, state, metrics.stale_after_s, nowMs);
+  const read = (item: Metric, state: GroupState): MetricView => readMetric(item, state, nowMs);
   const groups = metrics.groups.map((group) =>
     groupView(
       group,
@@ -378,7 +373,7 @@ export function homeMetrics(home: string, metrics: Metrics, nowMs: number): Home
     ),
   );
   const loose = metrics.items.filter((item) => item.group === null).map((item) => read(item, "ok"));
-  if (loose.length > 0) groups.push(groupView(null, loose, nowMs));
+  if (loose.length > 0) groups.push(groupView(NO_GROUP, loose, nowMs));
   return { home, problem: null, dropped: metrics.dropped, first_drop: metrics.first_drop, groups };
 }
 
@@ -403,8 +398,8 @@ export function boardMetrics(
 export function metricFlags(views: HomeMetricsView[]): string[] {
   return views.flatMap((view) =>
     view.groups.flatMap((group) =>
-      group.items.map(
-        (item) => `${view.home}\t${item.id}\t${item.stale ?? ""}\t${item.reset_passed ? 1 : 0}`,
+      group.items.map((item) =>
+        JSON.stringify([view.home, item.id, item.stale, item.reset_passed]),
       ),
     ),
   );

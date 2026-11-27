@@ -99,7 +99,7 @@ describe("parseMetrics", () => {
         resets_at: null,
         measured_at: null,
         severity: "normal",
-        stale_after_s: null,
+        stale_after_s: STALE_AFTER_S.fallback,
       },
     ]);
   });
@@ -285,6 +285,15 @@ describe("parseMetrics", () => {
     expect(withItem({ stale_after_s: 1 }).items[0]?.stale_after_s).toBe(STALE_AFTER_S.min);
     expect(withItem({ stale_after_s: 10 ** 9 }).items[0]?.stale_after_s).toBe(STALE_AFTER_S.max);
     expect(withItem({ stale_after_s: "60" }).first_drop).toBe("items[0]：stale_after_s 不是數字");
+    expect(withItem({ stale_after_s: Number.POSITIVE_INFINITY }).first_drop).toBe(
+      "items[0]：stale_after_s 不是數字",
+    );
+    expect(ok({ v: 1, stale_after_s: Number.POSITIVE_INFINITY }).stale_after_s).toBe(
+      STALE_AFTER_S.fallback,
+    );
+    const block = ok({ v: 1, stale_after_s: 60, items: [{ id: "i", label: "I", value: 1 }] });
+    expect(block.items[0]?.stale_after_s).toBe(60);
+    expect(withItem({ stale_after_s: 30 }).items[0]?.stale_after_s).toBe(30);
   });
 });
 
@@ -298,14 +307,14 @@ function metric(change: Partial<Metric> = {}): Metric {
     resets_at: null,
     measured_at: iso(-30_000),
     severity: "normal",
-    stale_after_s: null,
+    stale_after_s: 900,
     ...change,
   };
 }
 
 describe("readMetric", () => {
   it("reads a recent metric as current, with its age", () => {
-    expect(readMetric(metric(), "ok", 900, NOW)).toMatchObject({
+    expect(readMetric(metric(), "ok", NOW)).toMatchObject({
       age_s: 30,
       stale: null,
       reset_passed: false,
@@ -313,55 +322,51 @@ describe("readMetric", () => {
   });
 
   it("reads a metric past its limit as old, and one at its limit as current", () => {
-    expect(readMetric(metric({ measured_at: iso(-900_000) }), "ok", 900, NOW).stale).toBeNull();
-    expect(readMetric(metric({ measured_at: iso(-900_001) }), "ok", 900, NOW)).toMatchObject({
+    expect(readMetric(metric({ measured_at: iso(-900_000) }), "ok", NOW).stale).toBeNull();
+    expect(readMetric(metric({ measured_at: iso(-900_001) }), "ok", NOW)).toMatchObject({
       stale: "old",
       age_s: 900,
     });
   });
 
-  it("uses a metric's own limit over the block's", () => {
+  it("reads a metric against its own limit", () => {
     const own = metric({ measured_at: iso(-120_000), stale_after_s: 60 });
-    expect(readMetric(own, "ok", 900, NOW).stale).toBe("old");
-    expect(readMetric({ ...own, stale_after_s: 120 }, "ok", 60, NOW).stale).toBeNull();
+    expect(readMetric(own, "ok", NOW).stale).toBe("old");
+    expect(readMetric({ ...own, stale_after_s: 120 }, "ok", NOW).stale).toBeNull();
   });
 
   it("never reads a metric of a group that is not ok as current", () => {
-    expect(readMetric(metric(), "stale", 900, NOW).stale).toBe("group");
-    expect(readMetric(metric(), "unavailable", 900, NOW).stale).toBe("group");
+    expect(readMetric(metric(), "stale", NOW).stale).toBe("group");
+    expect(readMetric(metric(), "unavailable", NOW).stale).toBe("group");
   });
 
   it("never reads a metric with no measured time as current", () => {
-    expect(readMetric(metric({ measured_at: null }), "ok", 900, NOW)).toMatchObject({
+    expect(readMetric(metric({ measured_at: null }), "ok", NOW)).toMatchObject({
       age_s: null,
       stale: "no-time",
     });
   });
 
   it("allows a little clock skew, and no more", () => {
-    const edge = readMetric(metric({ measured_at: iso(FUTURE_SKEW_S * 1000) }), "ok", 900, NOW);
+    const edge = readMetric(metric({ measured_at: iso(FUTURE_SKEW_S * 1000) }), "ok", NOW);
     expect(edge).toMatchObject({ age_s: 0, stale: null });
-    const ahead = readMetric(
-      metric({ measured_at: iso(FUTURE_SKEW_S * 1000 + 1) }),
-      "ok",
-      900,
-      NOW,
-    );
+    const ahead = readMetric(metric({ measured_at: iso(FUTURE_SKEW_S * 1000 + 1) }), "ok", NOW);
     expect(ahead).toMatchObject({ age_s: null, stale: "future" });
   });
 
   it("reads a metric whose reset has passed as passed, not as a countdown", () => {
-    expect(readMetric(metric({ resets_at: iso(0) }), "ok", 900, NOW)).toMatchObject({
+    expect(readMetric(metric({ resets_at: iso(0) }), "ok", NOW)).toMatchObject({
       reset_passed: true,
       stale: "reset",
     });
-    expect(readMetric(metric({ resets_at: iso(1) }), "ok", 900, NOW)).toMatchObject({
+    expect(readMetric(metric({ resets_at: iso(1) }), "ok", NOW)).toMatchObject({
       reset_passed: false,
       stale: null,
     });
-    expect(
-      readMetric(metric({ resets_at: iso(-1), measured_at: null }), "ok", 900, NOW),
-    ).toMatchObject({ reset_passed: true, stale: "no-time" });
+    expect(readMetric(metric({ resets_at: iso(-1), measured_at: null }), "ok", NOW)).toMatchObject({
+      reset_passed: true,
+      stale: "no-time",
+    });
   });
 });
 
@@ -378,6 +383,10 @@ describe("nextReset", () => {
     expect(nextReset(items, NOW)).toBe(iso(3_600_000));
     expect(nextReset([metric({ resets_at: iso(0) }), metric()], NOW)).toBeNull();
     expect(nextReset([], NOW)).toBeNull();
+    const same = new Date(NOW + 3_600_000).toISOString().replace("Z", "+00:00");
+    expect(
+      nextReset([metric({ resets_at: iso(3_600_000) }), metric({ resets_at: same })], NOW),
+    ).toBe(iso(3_600_000));
   });
 });
 
@@ -479,9 +488,9 @@ describe("boardMetrics and metricFlags", () => {
 
   it("flags each metric's staleness and passed reset, so time alone changes the page's version", () => {
     const fresh = boardMetrics([{ id: "main", metrics: ok(BLOCK) }], NOW);
-    expect(metricFlags(fresh)).toEqual(["main\tclaude:default.five_hour\t\t0"]);
+    expect(metricFlags(fresh)).toEqual(['["main","claude:default.five_hour",null,false]']);
     const later = boardMetrics([{ id: "main", metrics: ok(BLOCK) }], Date.parse(ITEM.resets_at));
-    expect(metricFlags(later)).toEqual(["main\tclaude:default.five_hour\treset\t1"]);
+    expect(metricFlags(later)).toEqual(['["main","claude:default.five_hour","reset",true]']);
     expect(metricFlags([])).toEqual([]);
   });
 });
