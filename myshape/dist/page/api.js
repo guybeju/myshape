@@ -1,11 +1,15 @@
 // The page's calls to the board. The token arrives once in the URL fragment,
 // moves to sessionStorage, and is sent as a header from then on.
 const TOKEN_KEY = "myshape-token";
+/** The token a `#t=<token>` fragment carries, or null when `hash` is not one. */
+export function tokenInHash(hash) {
+    return /^#t=([0-9a-f]+)$/.exec(hash)?.[1] ?? null;
+}
 /** Takes the token out of `#t=<token>` so it does not linger in the address bar. */
 export function takeToken() {
-    const match = /^#t=([0-9a-f]+)$/.exec(location.hash);
-    if (match !== null) {
-        sessionStorage.setItem(TOKEN_KEY, match[1]);
+    const token = tokenInHash(location.hash);
+    if (token !== null) {
+        sessionStorage.setItem(TOKEN_KEY, token);
         history.replaceState(null, "", location.pathname);
     }
     return sessionStorage.getItem(TOKEN_KEY) ?? "";

@@ -95,9 +95,10 @@
 #
 # summary stores a one-to-three sentence milestone summary read from stdin (at
 # most 600 characters) and prints the line to start the chat reminder with:
-# "<topic name>：", "未分類：" when the task has no topic, or "議題不明（<task-id>）："
-# when the task's home could not be read. which prints the same line without
-# storing anything. --home names the secondmate home the task lives in.
+# "<topic name>：", "未分類：" when the task has no topic, or "議題待查（<task-id>）："
+# when the task's home could not be read and the board has never seen a tag for it.
+# which prints the same line without storing anything. --home names the
+# secondmate home the task lives in.
 #
 # split makes a new confirmed topic out of part of <topic-id>, right after it
 # in the same queue. It moves no task; a split that names tasks is refused.

@@ -332,13 +332,13 @@ export default async function run(page) {
   topic("open");
   await page.waitFor("the banner to clear", `!${has("看板服務沒有回應")}`, 30000);
 
-  // The token is reset under an open page: it says so, and the new link works in the same tab.
+  // The token is reset under an open page: it says so, and the new link works in the same tab,
+  // although opening it there changes only the fragment.
   topic("reset-token");
   await page.waitFor("the reset-token banner", has("token 已重置或無效"), 30000);
   await page.waitFor("the board still on screen", has("優先順序"));
   const fresh = topic("open").trim();
   await page.evaluate(`void location.assign(${JSON.stringify(fresh)})`);
-  await page.evaluate("void setTimeout(() => location.reload(), 0)");
   await page.waitFor("the page to load with the new token", `${has("優先順序")} && !${has("token 已重置或無效")}`, 30000);
   await page.waitFor("the token gone from the address bar", "location.hash === ''");
 

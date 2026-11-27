@@ -480,7 +480,7 @@ test_fm_summaries() {
   assert_contains "$(f find t1)" "建置" "find t1 must list its topic"
   printf '寫錯了\n' | f retract t1 ready - >/dev/null || fail "retract failed"
   printf 'fail no\n' > "$AGG_FM/control/main"
-  assert_equals "議題不明（t9）：" "$(printf '沒有標記。\n' | f summary t9 ready -)" "with the feed failing, an untagged task's topic is unknown"
+  assert_equals "議題待查（t9）：" "$(printf '沒有標記。\n' | f summary t9 ready -)" "with the feed failing, an untagged task's topic is unknown"
   rm "$AGG_FM/control/main"
   pass "summary, which, find and retract work through the feed, with --home and the fallback (AT2.14)"
 }
@@ -576,7 +576,8 @@ test_plain_second_home() {
   code=0
   printf 'w2 好了。\n' | p summary --home w2 w2-job ready - >/dev/null || code=$?
   assert_equals 0 "$code" "summary --home w2 must be accepted"
-  pass "plain's second home is read and written as itself (AT6.4)"
+  grep -q '^topics w2 w2-job ' "$AGG_PLAIN/calls.log" || fail "summary must ask plain's topics call for the one task"
+  pass "plain's second home is read and written as itself, and answers the topics call (AT6.4)"
 }
 
 # AT6.5: neutral banners for another aggregator.
@@ -862,8 +863,8 @@ test_bind_paths_only() {
     assert_contains "$(agg_b '.unavailable')" "$reason" "a binding that is not paths only must be refused, saying why"
   done
   assert_equals "$before" "$(calls_b)" "a refused binding must run nothing"
-  assert_equals "" "$(awk '$1 != "feed" && $1 != "deliver"' "$AGG_B/calls.log")" \
-    "every run must have feed or deliver as its first argument"
+  assert_equals "" "$(awk '$1 != "feed" && $1 != "topics" && $1 != "deliver"' "$AGG_B/calls.log")" \
+    "every run must have feed, topics or deliver as its first argument"
   # The same bytes the running board started with: no command replaces it,
   # and the next read of the root home hands the waiting writes over.
   bind_to bin/stub-plain plain

@@ -8,11 +8,16 @@ export interface Reply {
   data: Record<string, unknown>;
 }
 
+/** The token a `#t=<token>` fragment carries, or null when `hash` is not one. */
+export function tokenInHash(hash: string): string | null {
+  return /^#t=([0-9a-f]+)$/.exec(hash)?.[1] ?? null;
+}
+
 /** Takes the token out of `#t=<token>` so it does not linger in the address bar. */
 export function takeToken(): string {
-  const match = /^#t=([0-9a-f]+)$/.exec(location.hash);
-  if (match !== null) {
-    sessionStorage.setItem(TOKEN_KEY, match[1] as string);
+  const token = tokenInHash(location.hash);
+  if (token !== null) {
+    sessionStorage.setItem(TOKEN_KEY, token);
     history.replaceState(null, "", location.pathname);
   }
   return sessionStorage.getItem(TOKEN_KEY) ?? "";

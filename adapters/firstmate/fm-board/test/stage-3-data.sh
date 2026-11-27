@@ -327,7 +327,7 @@ test_summary_and_which() {
   assert_equals "Login：" "$(t which ship-a)" "which must print the same prefix without storing"
   assert_equals "Login：" "$(t which --home sm1 sm-work)" "which --home must resolve a local secondmate's task"
   : > "$REMOTE_SM/unreachable"
-  assert_equals "議題不明（never-seen）：" "$(t which --home far1 never-seen)" \
+  assert_equals "議題待查（never-seen）：" "$(t which --home far1 never-seen)" \
     "a home that cannot be read must give 'unknown', not 'unsorted'"
   rm "$REMOTE_SM/unreachable"
   assert_equals "未分類：" "$(t which --home far1 never-seen)" "once the home is readable an untagged task is unsorted"

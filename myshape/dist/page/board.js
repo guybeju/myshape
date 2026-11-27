@@ -1,4 +1,4 @@
-import { getJson, postJson, takeToken } from "./api.js";
+import { getJson, postJson, takeToken, tokenInHash } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
 import { dropAnchor } from "./drop.js";
 import { frame } from "./frame.js";
@@ -358,6 +358,12 @@ app.addEventListener("dragend", () => {
     render();
 });
 window.addEventListener("hashchange", () => {
+    // A link from `open` pasted into this tab changes only the fragment; loading
+    // the page again takes its token the way the first load does.
+    if (tokenInHash(location.hash) !== null) {
+        location.reload();
+        return;
+    }
     page.panel = null;
     const filter = parseFilterHash(location.hash);
     if (filter !== null)

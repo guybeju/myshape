@@ -229,9 +229,9 @@ test_summaries_with_nothing_connected() {
   started=$(date +%s)
   out=$(printf '建好了。\n' | t summary t1 ready -) || fail "summary failed with nothing connected: $out"
   elapsed=$(($(date +%s) - started))
-  assert_equals "議題不明（t1）：" "$out" "summary must fall back to the task id"
+  assert_equals "議題待查（t1）：" "$out" "summary must fall back to the task id"
   [ "$elapsed" -le 15 ] || fail "summary took $elapsed seconds with nothing connected"
-  assert_equals "議題不明（t1）：" "$(t which t1)" "which must fall back the same way"
+  assert_equals "議題待查（t1）：" "$(t which t1)" "which must fall back the same way"
   grep -q '"task":"t1"' "$MAIN/data/myshape/summaries.jsonl" || fail "the summary must be stored"
   printf '寫錯了\n' | t retract t1 ready - >/dev/null || fail "retract failed"
   assert_equals 0 "$(api_state "$MAIN" '[.summaries[]? | select(.task == "t1")] | length')" "retract must take the summary off the board"
