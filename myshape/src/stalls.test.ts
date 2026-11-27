@@ -90,6 +90,14 @@ describe("the 沒人接 card", () => {
     expect(result.records[0].text).toMatch(
       /^「沒人接」議題「High」：延到 \d\d-\d\d，只延現在列出的 2 張$/,
     );
+    expect(deferStall(stalls, "hi", 1, context)).toMatchObject({
+      ok: true,
+      line: "ok hi 延到 11-28",
+    });
+    expect(deferStall(stalls, "hi", 90, context)).toMatchObject({
+      ok: true,
+      line: "ok hi 延到 02-25",
+    });
     for (const days of [0, 91, 1.5, "7"])
       expect(deferStall(stalls, "hi", days, context)).toMatchObject({ ok: false, code: "usage" });
     expect(deferStall(stalls, "nope", 7, context)).toMatchObject({ ok: false, code: "refused" });

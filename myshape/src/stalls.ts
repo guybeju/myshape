@@ -8,13 +8,12 @@
 import { KEEP_MAX_DAYS } from "./lifecycle-settings.js";
 import type { Stall } from "./lifecycle.js";
 import type { Draft, Frozen } from "./records.js";
-import { shortTime } from "./todos.js";
 
 /** The stall key of a topic, and of work with no topic. */
 export const NO_TOPIC = "-";
 
 export function stallKeyOf(topic: string | null): string {
-  return topic ?? NO_TOPIC;
+  return topic === null ? NO_TOPIC : topic;
 }
 
 /** How a 沒人接 card names where it is: a topic, or work with no topic. */
@@ -74,7 +73,7 @@ function nextStall(
   const put = old?.deferred;
   const running = put !== undefined && Date.parse(put.until) > nowMs;
   return {
-    since: old?.since ?? new Date(nowMs).toISOString(),
+    since: old === undefined ? new Date(nowMs).toISOString() : old.since,
     members: [...members],
     ...(running ? { deferred: { until: put.until, members: [...put.members] } } : {}),
   };
@@ -113,7 +112,7 @@ export function deferStall(
   if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > KEEP_MAX_DAYS)
     return { ok: false, code: "usage", line: `延幾天要是 1 到 ${KEEP_MAX_DAYS} 的整數。` };
   const until = new Date(context.nowMs + days * 86_400_000).toISOString();
-  const shown = (shortTime(until) ?? until).slice(0, 5);
+  const shown = until.slice(5, 10);
   return {
     ok: true,
     stall: {
@@ -153,8 +152,9 @@ export function idleStep(
   const idle: Record<string, string> = {};
   const records: Draft[] = [];
   for (const topic of topics) {
-    idle[topic] = previous[topic] ?? now;
-    if (previous[topic] === undefined)
+    const since = previous[topic];
+    idle[topic] = since === undefined ? now : since;
+    if (since === undefined)
       records.push({
         kind: "stall.raised",
         topic,

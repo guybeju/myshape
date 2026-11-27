@@ -861,18 +861,16 @@ function unansweredRun(entries: readonly { outcome: string }[]): number {
   return count;
 }
 
-/** Whether each topic's schedule was last paused by the aggregator, from its records. */
+/** Whether each topic's schedule was last paused by the aggregator, from its pause records. */
 function lastPausedBy(
   topicOf: (id: string) => string,
   records: readonly PauseRecord[],
 ): Map<string, boolean> {
   const pausedBy = new Map<string, boolean>();
-  for (const record of records) {
-    if (typeof record.topic !== "string") continue;
-    if (record.kind === "schedule.paused")
+  // Only a paused schedule asks, and its last pause record says who paused it.
+  for (const record of records)
+    if (record.kind === "schedule.paused" && typeof record.topic === "string")
       pausedBy.set(topicOf(record.topic), record.by === "aggregator");
-    if (record.kind === "schedule.resumed") pausedBy.set(topicOf(record.topic), false);
-  }
   return pausedBy;
 }
 
