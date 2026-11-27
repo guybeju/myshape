@@ -13,6 +13,7 @@
 // write the board.
 
 import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
@@ -34,6 +35,7 @@ import {
   type SummaryKind,
 } from "./commands.js";
 import { dispatchOrder, followMerges, topicEntry, type OrderEntry } from "./dispatch-order.js";
+import { ensurePushRepo, Forge } from "./forge.js";
 import {
   endingOf,
   TEXT,
@@ -86,6 +88,11 @@ export interface Deps {
   isAlive: (pid: number) => boolean;
 }
 
+/** The planner's own empty working directory, in the worktree root. */
+export const PLANNER_DIR = ".claude-agg-planner";
+/** The supervisor's bare push repositories, one per listed repository, in the worktree root. */
+export const PUSH_DIR = ".claude-agg-push";
+
 export const DETAIL = {
   preparing: "準備 worktree",
   started: "worker 在做",
@@ -95,6 +102,7 @@ export const DETAIL = {
   dirty: (reason: string) => `worktree 沒有刪掉：${reason}`,
   noWorktree: (reason: string) => `建不出 worktree：${reason}`,
   noSession: "沒有可以接回的 session",
+  noPushRepo: (reason: string) => `建不出推送用的 repo：${reason}`,
   merged: "已合併",
   closed: "PR 關掉了，沒有合併",
   answered: (label: string) => `接著做：captain 回答了「${label}」`,
@@ -199,6 +207,10 @@ export class Supervisor {
   >();
   private readonly planned = new Set<string>();
   private quota: Quota | null = null;
+  /** Set by stop(): nothing new starts, and a session cut off by it is not ended as failed. */
+  private stopping = false;
+  /** The abort controller of every session running now. */
+  private readonly aborts = new Set<AbortController>();
   /** The inbox as this pass sorted it. */
   private sorted: Sorted = NOTHING_SORTED;
   /** The streaming input of each running worker session. */
@@ -255,6 +267,7 @@ export class Supervisor {
     const supervisor = new Supervisor(checked, deps, release);
     try {
       supervisor.store.setUp();
+      mkdirSync(join(checked.worktreeRoot, PLANNER_DIR), { recursive: true, mode: 0o700 });
       const problem = await supervisor.board.ensureRunning();
       if (problem !== undefined) supervisor.log(`the board is not running: ${problem}`);
       await supervisor.reconcile();
@@ -272,6 +285,27 @@ export class Supervisor {
   /** Gives the lock back. Sessions still running keep running until they end. */
   close(): void {
     this.release();
+  }
+
+  /**
+   * Stops for good: starts nothing more, aborts every running session and
+   * waits for each to wind down, then gives the lock back. A task whose
+   * worker was cut off stays working in tasks.json, so the next start finds
+   * it paused (reconcile), its worktree and session kept.
+   */
+  async stop(): Promise<void> {
+    this.stopping = true;
+    for (const abort of this.aborts) abort.abort();
+    await this.idle();
+    this.release();
+  }
+
+  /** A new session's abort controller, aborted by stop(). */
+  private sessionAbort(): AbortController {
+    const abort = new AbortController();
+    this.aborts.add(abort);
+    if (this.stopping) abort.abort();
+    return abort;
   }
 
   /** Resolves once no session runs and none is left to start. */
@@ -375,6 +409,7 @@ export class Supervisor {
    * actions from the inbox, then starts what may start.
    */
   tick(): void {
+    if (this.stopping) return;
     this.clearQuota();
     let board: Board;
     try {
@@ -865,6 +900,8 @@ export class Supervisor {
       model: this.settings.model,
       env: this.deps.env,
       credential: this.deps.credential,
+      credentialFile: this.settings.credentialFile,
+      readPaths: this.settings.readPaths,
       abortController: abort,
       guard: {
         home: this.settings.home,
@@ -905,15 +942,22 @@ export class Supervisor {
     purpose: PlanFor | undefined,
   ): Promise<void> {
     for (const item of messages) this.offered.add(item.file);
-    const abort = new AbortController();
+    const abort = this.sessionAbort();
     const prompt = new PromptStream(plannerPrompt(this.plannerBrief(entry, messages, purpose)));
-    const options = plannerOptions(this.settings.worktreeRoot, this.sessionContext(null, abort));
+    const repos = Object.values(this.settings.repos).map((repo) => repo.path);
+    const cwd = join(this.settings.worktreeRoot, PLANNER_DIR);
+    const options = plannerOptions(cwd, repos, this.sessionContext(null, abort));
     const run = this.deps.query({ prompt, options });
     const report = await followSession(run, prompt, abort, {
       mode: "dontAsk",
       apiKeySource: this.apiKeySource(),
       onStart: () => {},
     });
+    this.aborts.delete(abort);
+    if (this.stopping) {
+      for (const item of messages) this.offered.delete(item.file);
+      return;
+    }
     this.takePlan(entry.topic, report, purpose?.ref);
     if (report.end.kind === "quota") {
       for (const item of messages) this.offered.delete(item.file);
@@ -1060,7 +1104,12 @@ export class Supervisor {
       await this.end(id, endingFailed(DETAIL.noWorktree(problem)), 0);
       return;
     }
-    const brief = { task: id, branch, topic: { id: topic, name: entry.name, goal: entry.goal } };
+    const brief = {
+      task: id,
+      branch,
+      scout: planned.kind === "scout",
+      topic: { id: topic, name: entry.name, goal: entry.goal },
+    };
     await this.work(id, workerPrompt({ ...brief, title: planned.title, prompt: planned.prompt }));
   }
 
@@ -1083,18 +1132,38 @@ export class Supervisor {
     await this.work(id, resumePrompt(resume.input), session);
   }
 
+  /**
+   * The forge tools of one worker session of `id`, bound to its branch and
+   * repository; null for a scout. A push repository that cannot be made is a
+   * reason, and the session does not start.
+   */
+  private async forgeFor(id: string, task: TaskEntry): Promise<Forge | null | string> {
+    if (task.kind === "scout") return null;
+    const repo = this.repoOf(task);
+    const pushRepo = join(this.settings.worktreeRoot, PUSH_DIR, `${task.repo ?? ""}.git`);
+    const problem = await ensurePushRepo(this.git, pushRepo);
+    if (problem !== undefined) return problem;
+    return new Forge(this.git, this.deps.run, this.deps.env, {
+      task: id,
+      branch: task.branch ?? `agg/${id}`,
+      mainCheckout: repo.path,
+      defaultBranch: repo.defaultBranch,
+      pushRepo,
+    });
+  }
+
   private async work(id: string, text: string, resume?: string): Promise<void> {
     const task = this.task(id);
     const repo = this.repoOf(task);
-    const abort = new AbortController();
+    const forge = await this.forgeFor(id, task);
+    if (typeof forge === "string") {
+      await this.end(id, endingFailed(DETAIL.noPushRepo(forge)), 0);
+      return;
+    }
+    const abort = this.sessionAbort();
     const prompt = new PromptStream(text);
     const options = workerOptions(
-      {
-        worktree: task.worktree ?? "",
-        mainCheckout: repo.path,
-        resume,
-        scout: task.kind === "scout",
-      },
+      { worktree: task.worktree ?? "", mainCheckout: repo.path, resume, forge },
       this.sessionContext(repo.defaultBranch, abort),
     );
     const run = this.deps.query({ prompt, options });
@@ -1109,11 +1178,13 @@ export class Supervisor {
         this.setState(id, "working", `${DETAIL.started}（模型：${init.model ?? "沒寫"}）`);
       },
     });
+    this.aborts.delete(abort);
     this.streams.delete(id);
     this.releasePushed(id);
     if (report.sessionId !== undefined) task.session_id = report.sessionId;
     if (report.model !== undefined) task.model = report.model;
-    await this.end(id, endingOf(report.end), report.costUsd);
+    if (this.stopping) return;
+    await this.end(id, withForge(endingOf(report.end), forge), report.costUsd);
   }
 
   private async end(id: string, ending: Ending, costUsd: number): Promise<void> {
@@ -1347,6 +1418,28 @@ function resumeDetail(input: ResumeInput): string | undefined {
   if (input.directs.length > 0) return DETAIL.directed;
   if (input.todos !== undefined) return DETAIL.verifying;
   return input.quota ? DETAIL.resumed : undefined;
+}
+
+/**
+ * The ending with what the session's forge tools did: a refused push is the
+ * task's summary, whatever the worker wrote, and no PR is ready; a PR open_pr
+ * opened is the one named, from gh's output, over the worker's pr_url.
+ */
+export function withForge(ending: Ending, forge: Forge | null): Ending {
+  if (forge === null) return ending;
+  if (forge.refusal !== undefined) {
+    const failed = ending.state === "done" ? { state: "failed" as const, text: forge.refusal } : {};
+    return {
+      ...ending,
+      ...failed,
+      summary: { kind: "failed", text: forge.refusal },
+      prReady: null,
+    };
+  }
+  if (forge.prUrl !== undefined && ending.prReady !== null) {
+    return { ...ending, prReady: forge.prUrl };
+  }
+  return ending;
 }
 
 function endingFailed(text: string): Ending {

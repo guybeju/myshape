@@ -28,6 +28,13 @@ export interface Settings {
   repos: Readonly<Record<string, RepoSetting>>;
   /** The user's model setting, passed to every session unchanged; undefined passes none. */
   model: string | undefined;
+  /** The credential file, absolute: sessions are denied reading it. */
+  credentialFile: string;
+  /**
+   * Absolute paths a worker's sandboxed commands may read besides its
+   * worktree, such as where its toolchain lives under the home directory.
+   */
+  readPaths: readonly string[];
 }
 
 export class SettingsError extends Error {
@@ -67,6 +74,8 @@ export function checkSettings(settings: Settings, realPath: (path: string) => st
     ["home", settings.home],
     ["worktreeRoot", settings.worktreeRoot],
     ["boardCommand", settings.boardCommand],
+    ["credentialFile", settings.credentialFile],
+    ...settings.readPaths.map((entry) => ["readPaths", entry] as const),
   ] as const) {
     if (!isAbsolute(path)) throw new SettingsError(`${what} must be an absolute path: ${path}`);
   }

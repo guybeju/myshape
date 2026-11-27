@@ -273,7 +273,9 @@ describe("a restart", () => {
     world.commands.closeStatus = 0;
     supervisor = await world.start();
     await pass(supervisor);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     expect(world.schedulesDoc().occurrences[KEY]).toBeUndefined();
     expect(takes(world)).toHaveLength(1);
     supervisor.close();
@@ -305,7 +307,9 @@ describe("a missed occurrence", () => {
     const again = await world.start();
     world.notice("schedule.missed", MISSED, "weekly", { rt: "soft-rt" });
     await pass(again);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     expect(world.logs).toContain(SCHEDULE_LOG.madeUp(MISSED));
     again.close();
   });
@@ -448,7 +452,9 @@ describe("when something goes wrong", () => {
     await pass(supervisor);
     expect(running(world)).toEqual(["a-1", "b-1"]);
     expect(world.commands.scheduleCalls().map((args) => args[1])).toEqual(["take"]);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     for (const gate of gates) gate.open();
     await supervisor.idle();
     supervisor.close();
@@ -471,7 +477,9 @@ describe("when something goes wrong", () => {
     await pass(second);
     expect(world.tasks()[WORK]?.state).toBe("paused");
     expect(world.commands.scheduleCalls().map((args) => args[1])).toEqual(["take"]);
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(1);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      1,
+    );
     second.close();
   });
 

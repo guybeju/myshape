@@ -1,9 +1,15 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
+
+import { Git, type RunCommand } from "./commands.js";
+import { Forge, FORGE_TEXT } from "./forge.js";
 
 import { preToolUseHook, REASONS } from "./guard.js";
 import { CANARY, denyReason, ENV, preToolUseInput } from "./harness.test-helper.js";
 import {
   denyRules,
+  FORGE_SERVER,
   PLANNER_OUTPUT_SCHEMA,
   plannerOptions,
   sessionEnv,
@@ -24,10 +30,26 @@ const CTX: SessionContext = {
   model: undefined,
   env: ENV,
   credential: { mode: "subscription-token", secret: CANARY },
+  credentialFile: "/secrets/credential",
+  readPaths: ["/opt/toolchain"],
   guard,
   abortController: abort,
 };
-const SESSION = { worktree: "/work/t-1", mainCheckout: "/repos/app", resume: undefined };
+/** A runner every command fails in: the forge refuses before it would push. */
+const failing: RunCommand = async () => ({ status: 1, stdout: "", stderr: "no\n" });
+const FORGE = new Forge(new Git(failing, ENV), failing, ENV, {
+  task: "t-1",
+  branch: "agg/t-1",
+  mainCheckout: "/repos/app",
+  defaultBranch: "main",
+  pushRepo: "/work/.claude-agg-push/app.git",
+});
+const SESSION = {
+  worktree: "/work/t-1",
+  mainCheckout: "/repos/app",
+  resume: undefined,
+  forge: FORGE,
+};
 
 const ENV_ALL = {
   PATH: ENV.PATH,
@@ -59,27 +81,125 @@ const RULES = [
   "WebFetch(domain:localhost)",
 ];
 
+const SANDBOX_SETTINGS = {
+  permissions: {
+    blockReadsOutsideWorkingDirectories: true,
+    blockWritesOutsideWorkingDirectories: true,
+    workingDirectoriesExclude: ["/repos/app"],
+  },
+  sandbox: {
+    enabled: true,
+    failIfUnavailable: true,
+    allowUnsandboxedCommands: false,
+    network: {
+      allowedDomains: [
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "crates.io",
+        "index.crates.io",
+        "static.crates.io",
+      ],
+      deniedDomains: ["github.com", "api.github.com"],
+      strictAllowlist: true,
+    },
+    filesystem: {
+      denyRead: [
+        "~/",
+        "~/.config/gh",
+        "~/.ssh",
+        "~/.claude/.credentials.json",
+        "/secrets/credential",
+        "/srv/home",
+      ],
+      allowRead: ["/work/t-1", "/repos/app/.git", "/opt/toolchain"],
+    },
+  },
+};
+
+const CREDENTIAL_RULES = [
+  "Read(~/.config/gh/**)",
+  "Read(~/.ssh/**)",
+  "Read(~/.claude/.credentials.json/**)",
+  "Read(~/.config/gh)",
+  "Read(~/.ssh)",
+  "Read(~/.claude/.credentials.json)",
+  "Read(//secrets/credential)",
+];
+
+/** A forge tool, called the way Claude Code calls it: over MCP, by its name. */
+async function callTool(
+  options: ReturnType<typeof workerOptions>,
+  name: string,
+  args: Record<string, unknown>,
+) {
+  const server = options.mcpServers?.[FORGE_SERVER];
+  if (server === undefined || !("instance" in server)) throw new Error("no forge server");
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.instance.connect(serverSide);
+  const client = new Client({ name: "test", version: "1" });
+  await client.connect(clientSide);
+  try {
+    return await client.callTool({ name, arguments: args });
+  } finally {
+    await client.close();
+  }
+}
+
 describe("workerOptions", () => {
-  it("is exactly the object of plan sections 4.3 and 5.3", () => {
+  it("is exactly the object of plan sections 4.3 and 5.3 and option A", () => {
     const options = workerOptions(SESSION, CTX);
-    const { hooks, ...rest } = options;
+    const { hooks, mcpServers, ...rest } = options;
     expect(rest).toEqual({
       cwd: "/work/t-1",
       permissionMode: "auto",
       permissionPrompts: "none",
-      disallowedTools: RULES,
+      allowedTools: ["mcp__forge__push_branch", "mcp__forge__open_pr"],
+      disallowedTools: [...RULES, ...CREDENTIAL_RULES, "WebFetch", "WebSearch"],
       settingSources: ["project"],
       projectConfigRoot: "/repos/app",
       strictMcpConfig: true,
+      settings: SANDBOX_SETTINGS,
+      sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
       env: ENV_ALL,
       maxTurns: 200,
       outputFormat: { type: "json_schema", schema: WORKER_OUTPUT_SCHEMA },
       persistSession: true,
       abortController: abort,
     });
+    expect(Object.keys(mcpServers ?? {})).toEqual(["forge"]);
     expect(hooks.PreToolUse).toHaveLength(1);
     expect(hooks.PreToolUse[0]?.onFailure).toBe("block");
     expect(hooks.PreToolUse[0]?.hooks).toHaveLength(1);
+  });
+
+  it("gives the worker push_branch and open_pr and no tool that merges", async () => {
+    const options = workerOptions(SESSION, CTX);
+    const server = options.mcpServers?.[FORGE_SERVER];
+    if (server === undefined || !("instance" in server)) throw new Error("no forge server");
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.instance.connect(serverSide);
+    const client = new Client({ name: "test", version: "1" });
+    await client.connect(clientSide);
+    const names = (await client.listTools()).tools.map((each) => each.name).toSorted();
+    await client.close();
+    expect(names).toEqual(["open_pr", "push_branch"]);
+  });
+
+  it("runs the forge's push_branch and open_pr when the worker calls them", async () => {
+    const pushed = await callTool(workerOptions(SESSION, CTX), "push_branch", {});
+    expect(pushed).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: FORGE_TEXT.refused(FORGE_TEXT.remote) }],
+    });
+    const opened = await callTool(workerOptions(SESSION, CTX), "open_pr", {
+      title: "t",
+      body: "b",
+    });
+    expect(opened).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: FORGE_TEXT.notPushed }],
+    });
   });
 
   it("runs the guard as its PreToolUse hook", async () => {
@@ -94,25 +214,35 @@ describe("workerOptions", () => {
     expect(typeof preToolUseHook).toBe("function");
   });
 
-  it("passes the user's model unchanged, and resumes a session", () => {
-    const options = workerOptions(
+  it("passes the user's model unchanged, and resumes a session with the same settings", () => {
+    const resumed = workerOptions(
       { ...SESSION, resume: "sess-1" },
       { ...CTX, model: "users-choice" },
     );
-    expect(options.model).toBe("users-choice");
-    expect(options.resume).toBe("sess-1");
+    expect(resumed.model).toBe("users-choice");
+    expect(resumed.resume).toBe("sess-1");
+    const fresh = workerOptions(SESSION, CTX);
+    for (const key of ["settingSources", "projectConfigRoot", "settings", "sandbox"] as const) {
+      expect(resumed[key]).toEqual(fresh[key]);
+    }
   });
 
-  it("lets a scout push nothing and start no subagent", async () => {
-    const options = workerOptions({ ...SESSION, scout: true }, CTX);
+  it("lets a scout push nothing, start no subagent and have no forge tools", async () => {
+    const options = workerOptions({ ...SESSION, forge: null }, CTX);
     const pushes = RULES.filter((rule) => rule.startsWith("Bash(git push"));
     const rest = RULES.filter((rule) => !pushes.includes(rule));
     expect(options.disallowedTools).toEqual([
       ...rest.slice(0, 5),
       "Bash(git push*)",
       ...rest.slice(5),
+      ...CREDENTIAL_RULES,
+      "WebFetch",
+      "WebSearch",
       "Agent",
     ]);
+    expect(options).not.toHaveProperty("mcpServers");
+    expect(options).not.toHaveProperty("allowedTools");
+    expect(options.settings).toEqual(SANDBOX_SETTINGS);
     const [hook] = options.hooks.PreToolUse[0]?.hooks ?? [];
     const input = preToolUseInput("Bash", { command: "git push origin agg/t-1" }, "/work/t-1");
     const out = await hook?.(input, "u", { signal: abort.signal });
@@ -127,16 +257,16 @@ describe("workerOptions", () => {
 });
 
 describe("plannerOptions", () => {
-  it("is read-only tools in dontAsk, with no push at all", () => {
-    const { hooks, ...rest } = plannerOptions("/work", {
+  it("reads the listed main checkouts only, in dontAsk, with no push at all", () => {
+    const { hooks, ...rest } = plannerOptions("/work/.claude-agg-planner", ["/repos/app", "/r/b"], {
       ...CTX,
       guard: { ...guard, defaultBranch: null },
     });
     expect(rest).toEqual({
-      cwd: "/work",
+      cwd: "/work/.claude-agg-planner",
       permissionMode: "dontAsk",
       tools: ["Read", "Grep", "Glob"],
-      allowedTools: ["Read", "Grep", "Glob"],
+      allowedTools: ["Read(//repos/app/**)", "Read(//r/b/**)"],
       disallowedTools: [
         "Bash(*myshape.sh*)",
         "Read(//srv/home/**)",
@@ -148,6 +278,7 @@ describe("plannerOptions", () => {
         "Bash(*localhost:47829*)",
         "WebFetch(domain:127.0.0.1)",
         "WebFetch(domain:localhost)",
+        ...CREDENTIAL_RULES,
       ],
       settingSources: [],
       strictMcpConfig: true,

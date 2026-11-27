@@ -80,6 +80,16 @@ export function tipOf(stdout: string, branch: string): string | undefined {
   return sha !== undefined && SHA.test(sha) && ref === `refs/heads/${branch}` ? sha : undefined;
 }
 
+/** What a forge tool hands back to the worker: whether it did it, and what to tell the worker. */
+export interface ToolAnswer {
+  ok: boolean;
+  text: string;
+}
+
+function refused(text: string): ToolAnswer {
+  return { ok: false, text };
+}
+
 type Step<T> = { ok: true; value: T } | { ok: false; why: string };
 
 function fail<T>(why: string): Step<T> {
@@ -107,11 +117,11 @@ export class Forge {
   ) {}
 
   /** push_branch: the checks above, then `git push <origin> <sha>:refs/heads/<branch>`. */
-  async pushBranch(): Promise<string> {
+  async pushBranch(): Promise<ToolAnswer> {
     const checked = await this.check();
     if (!checked.ok) {
       this.refusal = FORGE_TEXT.refused(checked.why);
-      return this.refusal;
+      return refused(this.refusal);
     }
     const { url, sha } = checked.value;
     const { branch, pushRepo } = this.target;
@@ -122,10 +132,10 @@ export class Forge {
       url,
       `${sha}:refs/heads/${branch}`,
     );
-    if (push.status !== 0) return FORGE_TEXT.pushFailed(lastLine(push));
+    if (push.status !== 0) return refused(FORGE_TEXT.pushFailed(lastLine(push)));
     this.pushed = sha;
     this.refusal = undefined;
-    return FORGE_TEXT.pushed(sha, branch);
+    return { ok: true, text: FORGE_TEXT.pushed(sha, branch) };
   }
 
   /** Everything push_branch checks; on success the URL to push to and the one commit to push. */
@@ -192,11 +202,11 @@ export class Forge {
   }
 
   /** open_pr: `gh pr create` for the branch this session pushed, into the default branch. */
-  async openPr(title: string, body: string): Promise<string> {
-    if (this.pushed === undefined) return FORGE_TEXT.notPushed;
+  async openPr(title: string, body: string): Promise<ToolAnswer> {
+    if (this.pushed === undefined) return refused(FORGE_TEXT.notPushed);
     const url = await this.git.git(this.target.mainCheckout, "remote", "get-url", "origin");
     const repo = url.status === 0 ? githubRepo(url.stdout.trim()) : undefined;
-    if (repo === undefined) return FORGE_TEXT.notGithub;
+    if (repo === undefined) return refused(FORGE_TEXT.notGithub);
     const { defaultBranch, branch } = this.target;
     const args = ["pr", "create", "--repo", repo, "--base", defaultBranch, "--head", branch];
     const result = await this.run({
@@ -205,9 +215,9 @@ export class Forge {
       env: { ...this.env, GH_PROMPT_DISABLED: "1" },
     });
     const opened = result.status === 0 ? PR_URL.exec(result.stdout)?.[0] : undefined;
-    if (opened === undefined) return FORGE_TEXT.prFailed(lastLine(result));
+    if (opened === undefined) return refused(FORGE_TEXT.prFailed(lastLine(result)));
     this.prUrl = opened;
-    return FORGE_TEXT.opened(opened);
+    return { ok: true, text: FORGE_TEXT.opened(opened) };
   }
 }
 

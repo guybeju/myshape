@@ -69,7 +69,7 @@ function feedHolds(world: World): { id: string; question: string; on_answer: str
 }
 
 function workerCalls(world: World) {
-  return world.query.calls.filter((call) => call.options.cwd !== world.root);
+  return world.query.calls.filter((call) => call.options.cwd !== world.plannerDir);
 }
 
 describe("a worker's question", () => {
@@ -316,7 +316,7 @@ describe("message", () => {
       text: "也改 README",
     });
     await pass(supervisor);
-    const planners = world.query.calls.filter((call) => call.options.cwd === world.root);
+    const planners = world.query.calls.filter((call) => call.options.cwd === world.plannerDir);
     expect(planners).toHaveLength(2);
     expect(planners[1]?.prompts[0]).toContain('"也改 README"');
     expect(planners[1]?.prompts[0]).toContain('"id": "build-1"');
@@ -341,7 +341,9 @@ describe("message", () => {
     } finally {
       chmodSync(join(world.agg, "inbox", "handled"), 0o700);
     }
-    expect(world.query.calls.filter((call) => call.options.cwd === world.root)).toHaveLength(2);
+    expect(world.query.calls.filter((call) => call.options.cwd === world.plannerDir)).toHaveLength(
+      2,
+    );
     expect(world.logs.some((line) => line.includes("was handled but not moved"))).toBe(true);
     expect(world.inbox().waiting).toEqual(["w-1.json"]);
     supervisor.close();

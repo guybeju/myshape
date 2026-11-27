@@ -36,6 +36,8 @@ const SETTINGS: Settings = {
   port: 47_829,
   repos: { app: { path: "/repos/app", base: "origin/main", defaultBranch: "main" } },
   model: undefined,
+  credentialFile: "/secrets/claude-agg/credential",
+  readPaths: ["/opt/toolchain"],
 };
 const same = (path: string): string => path;
 

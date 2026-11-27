@@ -1,16 +1,21 @@
 // Step 3 of the plan: one worker end to end, with a scripted query and the
 // fake commands. No model, no process, no board service.
 
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { runProgram } from "#agg/test-home.js";
 
+import { Git, type RunCommand } from "./commands.js";
+import { endingOf } from "./ending.js";
+import { Forge, FORGE_TEXT } from "./forge.js";
 import {
   CANARY,
   ENV,
   errorResult,
+  Gate,
   init,
   maxTurns,
   plan,
@@ -19,7 +24,7 @@ import {
   workerOutput,
 } from "./harness.test-helper.js";
 import { SettingsError } from "./settings.js";
-import { Supervisor } from "./supervisor.js";
+import { Supervisor, withForge } from "./supervisor.js";
 import { REPO, World } from "./world.test-helper.js";
 
 afterAll(removeScratch);
@@ -113,12 +118,15 @@ describe("one worker end to end", () => {
     await supervisor.idle();
     const [planner, worker] = world.query.calls;
     expect(planner?.options).toMatchObject({
-      cwd: world.root,
+      cwd: world.plannerDir,
       permissionMode: "dontAsk",
       tools: ["Read", "Grep", "Glob"],
+      allowedTools: [`Read(/${REPO}/**)`],
       settingSources: [],
       persistSession: false,
     });
+    expect(existsSync(world.plannerDir)).toBe(true);
+    expect(readdirSync(world.plannerDir)).toEqual([]);
     expect(worker?.options).toMatchObject({
       cwd: join(world.root, "build-1"),
       permissionMode: "auto",
@@ -128,13 +136,27 @@ describe("one worker end to end", () => {
       strictMcpConfig: true,
       maxTurns: 200,
       persistSession: true,
+      allowedTools: ["mcp__forge__push_branch", "mcp__forge__open_pr"],
     });
+    expect(worker?.options.settings).toMatchObject({
+      sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false },
+    });
+    expect(worker?.options.disallowedTools).toEqual(
+      expect.arrayContaining([
+        "WebFetch",
+        "WebSearch",
+        `Read(/${world.settings().credentialFile})`,
+      ]),
+    );
     for (const call of [planner, worker]) {
       expect(call?.options).not.toHaveProperty("model");
       expect(call?.options).not.toHaveProperty("maxBudgetUsd");
       expect(call?.options.env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe(CANARY);
     }
     expect(worker?.prompts[0]).toContain('"goal": "目標 build"');
+    expect(worker?.prompts[0]).toContain("呼叫 push_branch 工具推送");
+    expect(worker?.prompts[0]).toContain("open_pr 工具開 PR");
+    expect(worker?.prompts[0]).not.toContain("git push origin");
     expect(worker?.prompts[0]).toContain('"prompt": "照目標做"');
     supervisor.close();
   });
@@ -367,5 +389,113 @@ describe("start", () => {
     ]);
     expect(world.commands.calls[0]?.env).toEqual({ MYSHAPE_HOME: world.home, ...ENV });
     supervisor.close();
+  });
+});
+
+describe("the forge tools", () => {
+  const PUSH = { mcp: { server: "forge", tool: "push_branch", args: {} } };
+
+  it("reports a refused push as the task's summary, whatever the worker says", async () => {
+    const world = oneTask([init("w1"), PUSH, result(workerOutput("ready", { pr_url: PR }))]);
+    const supervisor = await world.start();
+    supervisor.tick();
+    await supervisor.idle();
+    const [, worker] = world.query.calls;
+    const refusal = FORGE_TEXT.refused(FORGE_TEXT.remote);
+    expect(worker?.mcp).toEqual([
+      expect.objectContaining({
+        tool: "push_branch",
+        answer: expect.objectContaining({ isError: true }),
+      }),
+    ]);
+    expect(world.commands.summaries).toEqual([{ task: "build-1", kind: "failed", text: refusal }]);
+    expect(world.tasks()["build-1"]).toMatchObject({ state: "failed", pr_url: null });
+    expect(world.events("build-1")).not.toContain(`task.pr_ready ${PR}`);
+    supervisor.close();
+  });
+
+  it("gives a scout task no forge server at all", async () => {
+    const world = new World({ normal: ["build"] });
+    const scout = plan([{ title: "看看", repo: "app", kind: "scout", prompt: "只交報告" }]);
+    world.query.planner.push({ messages: [init("p1", "dontAsk"), result(scout)] });
+    world.query.worker.push({ messages: [init("w1"), PUSH, result(workerOutput("report"))] });
+    const supervisor = await world.start();
+    supervisor.tick();
+    await supervisor.idle();
+    const [, worker] = world.query.calls;
+    expect(worker?.options).not.toHaveProperty("mcpServers");
+    expect(worker?.prompts[0]).toContain("這個 task 只交報告：不推任何分支、不開 PR。");
+    expect(worker?.prompts[0]).not.toContain("push_branch");
+    expect(worker?.mcp).toEqual([{ ...PUSH.mcp, answer: undefined }]);
+    supervisor.close();
+  });
+});
+
+describe("withForge", () => {
+  const failing: RunCommand = async () => ({ status: 1, stdout: "", stderr: "" });
+  function forge(): Forge {
+    return new Forge(new Git(failing, ENV), failing, ENV, {
+      task: "t-1",
+      branch: "agg/t-1",
+      mainCheckout: "/r",
+      defaultBranch: "main",
+      pushRepo: "/p",
+    });
+  }
+  const ready = endingOf({ kind: "output", output: workerOutput("ready", { pr_url: PR }) });
+
+  it("names the PR open_pr opened over the worker's pr_url", () => {
+    const tools = forge();
+    tools.prUrl = "https://github.com/owner/app/pull/8";
+    expect(withForge(ready, tools).prReady).toBe("https://github.com/owner/app/pull/8");
+  });
+
+  it("keeps the worker's pr_url when this session opened none (a resumed session)", () => {
+    expect(withForge(ready, forge()).prReady).toBe(PR);
+    expect(withForge(ready, null)).toBe(ready);
+  });
+
+  it("keeps a waiting task waiting, with the refusal as its summary", () => {
+    const tools = forge();
+    tools.refusal = "refused";
+    const asks = endingOf({
+      kind: "output",
+      output: workerOutput("report", {
+        question: { title: "要不要", text: "要不要？", options: ["要", "不要"] },
+      }),
+    });
+    const ending = withForge(asks, tools);
+    expect(ending.state).toBe("blocked");
+    expect(ending.summary).toEqual({ kind: "failed", text: "refused" });
+    expect(ending.hold).not.toBeNull();
+  });
+});
+
+describe("stop", () => {
+  it("aborts the running worker, leaves its task to the next start, and gives the lock back", async () => {
+    const gate = new Gate();
+    const world = new World({ normal: ["build"] });
+    world.query.planner.push({ messages: [init("p1", "dontAsk"), result(BUILD_PLAN, 0.01)] });
+    world.query.worker.push({ messages: [init("w1"), result(workerOutput("report"))], gate });
+    const supervisor = await world.start();
+    supervisor.tick();
+    await vi.waitFor(() => {
+      expect(world.query.calls).toHaveLength(2);
+      expect(world.query.active.size).toBe(1);
+    });
+    await supervisor.stop();
+    expect(world.query.aborted).toBe(1);
+    expect(world.query.active.size).toBe(0);
+    expect(world.tasks()["build-1"]).toMatchObject({
+      state: "working",
+      worktree: join(world.root, "build-1"),
+    });
+    expect(world.commands.summaries).toEqual([]);
+    supervisor.tick();
+    expect(world.query.calls).toHaveLength(2);
+
+    const again = await world.start();
+    expect(world.tasks()["build-1"]?.state).toBe("paused");
+    again.close();
   });
 });

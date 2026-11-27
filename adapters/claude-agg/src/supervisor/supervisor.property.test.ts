@@ -91,7 +91,7 @@ function check(run: Run, context: string): void {
     expect(queued.has(id), `${context}: ${id}`).toBe(false);
   const fresh = new Map<string, number>();
   for (const call of world.query.calls) {
-    if (call.options.cwd === world.root || call.options.resume !== undefined) continue;
+    if (call.options.cwd === world.plannerDir || call.options.resume !== undefined) continue;
     fresh.set(call.options.cwd, (fresh.get(call.options.cwd) ?? 0) + 1);
   }
   for (const [cwd, count] of fresh) expect(count, `${context}: ${cwd} started fresh twice`).toBe(1);

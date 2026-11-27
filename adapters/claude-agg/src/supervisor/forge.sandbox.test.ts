@@ -156,7 +156,10 @@ describe("push_branch", () => {
     const setup = setUp();
     const sha = commit(setup.worktree, { "src/a.txt": "work\n" });
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.pushed(sha, setup.target.branch));
+    expect(await tools.pushBranch()).toEqual({
+      ok: true,
+      text: FORGE_TEXT.pushed(sha, setup.target.branch),
+    });
     expect(tools.pushed).toBe(sha);
     expect(tools.refusal).toBeUndefined();
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe(sha);
@@ -171,7 +174,10 @@ describe("push_branch", () => {
     const setup = setUp();
     commit(setup.worktree, { "src/a.txt": "work\n", ...files });
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.github));
+    expect(await tools.pushBranch()).toEqual({
+      ok: false,
+      text: FORGE_TEXT.refused(FORGE_TEXT.github),
+    });
     expect(tools.refusal).toBe(FORGE_TEXT.refused(FORGE_TEXT.github));
     expect(tools.pushed).toBeUndefined();
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
@@ -186,7 +192,7 @@ describe("push_branch", () => {
     git(setup.worktree, "commit", "-q", "-m", "orphan");
     git(setup.worktree, "branch", "-f", setup.target.branch, "HEAD");
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.noHistory));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.noHistory));
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
   });
 
@@ -195,7 +201,7 @@ describe("push_branch", () => {
     commit(setup.worktree, { "src/a.txt": "work\n" });
     git(setup.main, "remote", "set-url", "origin", join(sandbox, "missing.git"));
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.noTip));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.noTip));
   });
 
   it("refuses when the fetch after ls-remote fails", async () => {
@@ -205,7 +211,7 @@ describe("push_branch", () => {
       setup,
       runner(() => null, "fetch"),
     );
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.noFetch));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.noFetch));
   });
 
   it.each(["merge-base", "diff"])("refuses when %s itself fails", async (step) => {
@@ -215,7 +221,7 @@ describe("push_branch", () => {
       setup,
       runner(() => null, step),
     );
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.compare));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.compare));
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
   });
 
@@ -224,7 +230,7 @@ describe("push_branch", () => {
     const sha = commit(setup.worktree, { ".github/workflows/x.yml": "on: push\n" });
     git(setup.main, "update-ref", "refs/remotes/origin/main", sha);
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.github));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.github));
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
   });
 
@@ -234,7 +240,7 @@ describe("push_branch", () => {
     const dirty = commit(setup.worktree, { ".github/workflows/x.yml": "on: push\n" });
     git(setup.main, "replace", dirty, clean);
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.github));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.github));
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
   });
 
@@ -249,7 +255,7 @@ describe("push_branch", () => {
     const shown = git(setup.main, "diff", "--name-only", "origin/main", dirty, "--", ".github/");
     expect(shown).toBe("");
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.noBranch));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.noBranch));
     expect(remoteBranch(setup.remote, setup.target.branch)).toBe("");
   });
 
@@ -258,7 +264,7 @@ describe("push_branch", () => {
     commit(setup.worktree, { "src/a.txt": "work\n" });
     git(setup.main, "remote", "set-url", "origin", "ext::sh -c touch% /tmp/x");
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.remote));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.remote));
   });
 
   it("refuses a branch that does not exist", async () => {
@@ -266,7 +272,7 @@ describe("push_branch", () => {
     git(setup.main, "worktree", "remove", "--force", setup.worktree);
     git(setup.main, "branch", "-D", setup.target.branch);
     const tools = await forge(setup);
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.refused(FORGE_TEXT.noBranch));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.refused(FORGE_TEXT.noBranch));
   });
 
   it("clears an earlier refusal once a push goes through", async () => {
@@ -276,7 +282,7 @@ describe("push_branch", () => {
     await tools.pushBranch();
     git(setup.worktree, "reset", "-q", "--hard", "origin/main");
     const sha = commit(setup.worktree, { "src/a.txt": "work\n" });
-    expect(await tools.pushBranch()).toBe(FORGE_TEXT.pushed(sha, setup.target.branch));
+    expect((await tools.pushBranch()).text).toBe(FORGE_TEXT.pushed(sha, setup.target.branch));
     expect(tools.refusal).toBeUndefined();
   });
 });
@@ -288,7 +294,7 @@ describe("open_pr", () => {
     const setup = setUp();
     const recorded = runner(() => PR);
     const tools = await forge(setup, recorded);
-    expect(await tools.openPr("t", "b")).toBe(FORGE_TEXT.notPushed);
+    expect((await tools.openPr("t", "b")).text).toBe(FORGE_TEXT.notPushed);
     expect(recorded.calls.filter((call) => call.file === "gh")).toEqual([]);
   });
 
@@ -299,7 +305,7 @@ describe("open_pr", () => {
     const tools = await forge(setup, recorded);
     await tools.pushBranch();
     git(setup.main, "remote", "set-url", "origin", "https://github.com/owner/app.git");
-    expect(await tools.openPr("標題", "內文")).toBe(FORGE_TEXT.opened(PR));
+    expect((await tools.openPr("標題", "內文")).text).toBe(FORGE_TEXT.opened(PR));
     expect(tools.prUrl).toBe(PR);
     const [call] = recorded.calls.filter((each) => each.file === "gh");
     expect(call?.args).toEqual([
@@ -325,7 +331,7 @@ describe("open_pr", () => {
     const recorded = runner(() => PR);
     const tools = await forge(setup, recorded);
     await tools.pushBranch();
-    expect(await tools.openPr("t", "b")).toBe(FORGE_TEXT.notGithub);
+    expect((await tools.openPr("t", "b")).text).toBe(FORGE_TEXT.notGithub);
   });
 
   it("says what gh said when it fails", async () => {
@@ -337,7 +343,7 @@ describe("open_pr", () => {
     );
     await tools.pushBranch();
     git(setup.main, "remote", "set-url", "origin", "git@github.com:owner/app.git");
-    expect(await tools.openPr("t", "b")).toBe(FORGE_TEXT.prFailed("gh: no"));
+    expect((await tools.openPr("t", "b")).text).toBe(FORGE_TEXT.prFailed("gh: no"));
     expect(tools.prUrl).toBeUndefined();
   });
 });

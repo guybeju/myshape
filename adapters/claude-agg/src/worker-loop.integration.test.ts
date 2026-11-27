@@ -321,6 +321,8 @@ function startSupervisor(query: ScriptedQuery, fake: FakeCommands): Promise<Supe
       port: scratch.port,
       repos: { app: { path: scratch.main, base: "origin/main", defaultBranch: "main" } },
       model: undefined,
+      credentialFile: join(scratch.dir, "no-credential"),
+      readPaths: [],
     },
     {
       query: query.query,

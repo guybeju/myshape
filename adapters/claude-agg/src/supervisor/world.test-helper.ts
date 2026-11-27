@@ -21,7 +21,7 @@ import {
 } from "./harness.test-helper.js";
 import type { Settings } from "./settings.js";
 import type { PlannedTask } from "./state-store.js";
-import { Supervisor, type Deps } from "./supervisor.js";
+import { PLANNER_DIR, Supervisor, type Deps } from "./supervisor.js";
 
 export const BOARD_COMMAND = "/opt/board/bin/myshape.sh";
 export const REPO = "/repos/app";
@@ -60,6 +60,11 @@ export class World {
     this.query = new ScriptedQuery(root);
   }
 
+  /** The planner's own working directory. */
+  get plannerDir(): string {
+    return join(this.root, PLANNER_DIR);
+  }
+
   settings(): Settings {
     return {
       home: this.home,
@@ -68,6 +73,8 @@ export class World {
       port: 47_829,
       repos: { app: { path: REPO, base: "origin/main", defaultBranch: "main" } },
       model: this.model,
+      credentialFile: `${this.root}-credential`,
+      readPaths: [],
     };
   }
 
