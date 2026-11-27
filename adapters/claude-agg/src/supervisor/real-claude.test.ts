@@ -49,7 +49,7 @@ import {
   type Credential,
 } from "./credential.js";
 import { ensurePushRepo, Forge, FORGE_TEXT } from "./forge.js";
-import { existingRealPath } from "./guard.js";
+import { existingRealPath, REASONS } from "./guard.js";
 import { plannerPrompt, resumePrompt, workerPrompt } from "./prompts.js";
 import { PromptStream } from "./session.js";
 import { sessionTmpdir } from "./supervisor.js";
@@ -293,7 +293,11 @@ function sessionEnd(run: Run, thrown: string | undefined): string[] {
   const { init, result } = run;
   const lines = [
     `  init: model ${String(init?.["model"])}, apiKeySource ${String(init?.["apiKeySource"])}`,
+    `  init tools: ${JSON.stringify(init?.["tools"] ?? null)}`,
   ];
+  const absent = run.tools.filter((use) => use.result.includes("No such tool available"));
+  for (const use of absent)
+    lines.push(`  ${use.name}: not offered in this session (counted as refused)`);
   if (result === undefined) {
     lines.push("  result: none");
   } else {
@@ -682,7 +686,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
 
   it(
     "the main checkout's .git (sandbox only): sandboxed Bash can write neither its config nor a hook",
-    async () => {
+    async (test) => {
       const repo = repository();
       const hooks = join(repo.main, ".git", "hooks");
       mkdirSync(hooks, { recursive: true });
@@ -711,6 +715,11 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       expectStarted(run);
       const probe = bashCall(run, PROBE).result;
       findings.push(`- main .git (sandbox only): ${probe.slice(0, 300).replaceAll("\n", " | ")}`);
+      expect(readFileSync(join(repo.main, ".git", "config")).equals(config)).toBe(true);
+      if (!probe.includes("config-exit=")) {
+        findings.push("- main .git (sandbox only): 沒有測到 (the rewritten command did not run)");
+        test.skip("沒有測到: the rewritten command did not run");
+      }
       for (const step of ["config-exit=", "pre-push-exit=", "new-hook-exit="]) {
         expect(probe, "the rewritten command ran").toContain(step);
         expect(probe).not.toContain(`${step}0`);
@@ -863,6 +872,145 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       expect(readFileSync(join(repo.worktree, ".git")).equals(gitFile)).toBe(true);
       expect(toolCall(run, "Write", "written.txt").isError).toBe(false);
       expect(readFileSync(join(repo.worktree, "written.txt"), "utf8")).toContain("written");
+    },
+    STEP_MS,
+  );
+
+  // Security's verification cases for the guard's Bash approval (consult
+  // section 11, 5a-5f), selected together with -t "verify-guard-allow". If (a)
+  // or (b) fails, the guard's approval is not to be relied on.
+  it(
+    "verify-guard-allow (a): with the scrub on, the guard's allow runs curl to a registry and git add/commit with no approval",
+    async () => {
+      const repo = repository();
+      const run = await session(
+        repo,
+        STEPS([
+          "Run in Bash: curl -sS -m 20 -o /dev/null -w 'npm:%{http_code}' https://registry.npmjs.org/",
+          "Run in Bash: printf 'x\\n' > committed.txt && git add -A && git commit -qm x && git log -1 --format=%s",
+        ]),
+      );
+      expectStarted(run);
+      expect(run.init?.["tools"]).toContain("Bash");
+      expect(bashCall(run, "registry.npmjs.org").result).toContain("npm:200");
+      expect(bashCall(run, "git commit").isError).toBe(false);
+      expect(git(repo.worktree, "log", "-1", "--format=%s")).toBe("x");
+    },
+    STEP_MS,
+  );
+
+  it(
+    "verify-guard-allow (b): after the guard's allow, a deny rule still blocks",
+    async () => {
+      const repo = repository();
+      const abort = new AbortController();
+      const options = workerOptions(
+        {
+          worktree: repo.worktree,
+          mainCheckout: repo.main,
+          resume: undefined,
+          forge: await forgeFor(repo),
+        },
+        context(abort),
+      );
+      const withRule = {
+        ...options,
+        disallowedTools: [...options.disallowedTools, "Bash(echo deny-rule-probe*)"],
+      };
+      const run = await drive(denyRealHome(withRule), STEPS(["Run in Bash: echo deny-rule-probe"]));
+      expectStarted(run);
+      const use = bashCall(run, "deny-rule-probe");
+      expect(use.isError).toBe(true);
+      expect(use.result).toContain("has been denied");
+      expect(use.result).not.toMatch(/^deny-rule-probe$/m);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "verify-guard-allow (c): sandboxed Bash writes neither the main checkout's .git/config nor the worktree's .claude/settings.json",
+    async () => {
+      const repo = repository();
+      const config = readFileSync(join(repo.main, ".git", "config"));
+      const settings = join(repo.worktree, ".claude", "settings.json");
+      const run = await session(
+        repo,
+        STEPS([
+          `Run in Bash: printf '[x]\\n' >> ${join(repo.main, ".git", "config")}; echo "config-exit=$?"`,
+          "Run in Bash: mkdir -p .claude; printf '{}' > .claude/settings.json; echo \"settings-exit=$?\"",
+        ]),
+      );
+      expectStarted(run);
+      const configWrite = bashCall(run, "config-exit");
+      expect(configWrite.result, "the write ran in the sandbox").toContain("config-exit=");
+      expect(configWrite.result).not.toContain("config-exit=0");
+      const settingsWrite = bashCall(run, "settings-exit");
+      expect(settingsWrite.result, "the write ran in the sandbox").toContain("settings-exit=");
+      expect(settingsWrite.result).not.toContain("settings-exit=0");
+      expect(readFileSync(join(repo.main, ".git", "config")).equals(config)).toBe(true);
+      expect(existsSync(settings)).toBe(false);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "verify-guard-allow (d): a Bash call with dangerouslyDisableSandbox is refused",
+    async (test) => {
+      const repo = repository();
+      const marker = join(scratch, `unsandboxed-${n}`);
+      const run = await session(
+        repo,
+        STEPS([
+          `Run in Bash, with the dangerouslyDisableSandbox parameter set to true: touch ${marker}`,
+        ]),
+      );
+      expectStarted(run);
+      expect(existsSync(marker)).toBe(false);
+      const use = run.tools.find(
+        (each) => each.name === "Bash" && each.input["dangerouslyDisableSandbox"] !== undefined,
+      );
+      if (use === undefined) {
+        findings.push(
+          "- verify-guard-allow (d): 沒有測到 (no call carried dangerouslyDisableSandbox)",
+        );
+        test.skip("沒有測到: no call carried dangerouslyDisableSandbox");
+        return;
+      }
+      expect(use.isError).toBe(true);
+      expect(use.result).toContain(REASONS.unsandboxed);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "verify-guard-allow (e): curl to a host outside the allowlist fails though the guard allows it",
+    async () => {
+      const repo = repository();
+      const run = await session(
+        repo,
+        STEPS([
+          "Run in Bash: curl -sS -m 20 -o /dev/null -w 'ex:%{http_code}' https://example.com/; echo \"curl-exit=$?\"",
+        ]),
+      );
+      expectStarted(run);
+      const use = bashCall(run, "example.com");
+      expect(use.result, "the command ran in the sandbox").toContain("curl-exit=");
+      expect(use.result).not.toContain("curl-exit=0");
+      expect(use.result).not.toContain("ex:200");
+    },
+    STEP_MS,
+  );
+
+  it(
+    "verify-guard-allow (f): a command starting with env gets no approval and does not run",
+    async () => {
+      const repo = repository();
+      const run = await session(repo, STEPS(["Run in Bash: env | cut -d= -f1 | sort"]));
+      expectStarted(run);
+      const use = bashCall(run, "env | cut");
+      expect(use.isError).toBe(true);
+      expect(use.result).toContain("requires approval");
+      expect(use.result).not.toContain("PATH");
     },
     STEP_MS,
   );
