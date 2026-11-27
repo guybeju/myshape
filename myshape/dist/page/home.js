@@ -1,11 +1,12 @@
 import { h } from "./dom.js";
-import { agentRow, closedFold, closedTodoEntries, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, turnFold, untaggedQueued, } from "./parts.js";
-import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL, agentName } from "./state.js";
+import { agentRow, closedFold, closedTodoEntries, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
+import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
 import { dropHint } from "./drop.js";
 import { isShown, resolveFilter, shownTopics } from "./filter.js";
 import { filterBar, mergeTagNote, topicChips } from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
+import { lifecycleSettings, queueCards, undelivered } from "./cards.js";
 function shownOf(page, view) {
     return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
 }
@@ -57,11 +58,6 @@ function archivedBox(view, actions, shown) {
 export function sidebar(page, view, actions) {
     const shown = shownOf(page, view);
     return h("div", { id: "sidebar" }, h("h2", {}, "優先順序"), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
-}
-function closeProposals(view, actions, shown) {
-    return Object.entries(view.topics)
-        .filter(([id, topic]) => topic.close_reason !== null && isShown(shown, id))
-        .map(([id, topic]) => h("div", { class: "card" }, h("div", { class: "meta" }, topicLink(view, id, actions), h("span", { class: "pill warn" }, "提議關閉")), h("div", {}, `${agentName()} 認為這個議題可以關了：${topic.close_reason ?? ""}`), h("div", { class: "btns" }, h("button", { onclick: () => actions.topic("archive", { id }) }, "關閉並封存"), h("button", { onclick: () => actions.topic("keep", { id }) }, "先不關"))));
 }
 function section(title, ...children) {
     const content = children
@@ -156,13 +152,13 @@ export function home(page, view, actions) {
     return [
         filterBar(page, view, actions, shown),
         scheduleBar(page, view, actions),
+        lifecycleSettings(page, actions, view),
         todos.length === 0
             ? null
             : section("要你動手", todos.map((todo) => todoCard(page, view, actions, todo, true))),
         shown === null ? noTopic(view) : null,
-        section("等你決定", closeProposals(view, actions, shown), mine(view.holds)
-            .filter(inFront)
-            .map((hold) => holdCard(page, view, actions, hold, true)), turnFold(mine(view.holds))),
+        section("等你決定", queueCards(page, view, actions, (topic) => isShown(shown, topic))),
+        undelivered(page, actions),
         section("最近的結果", mine(view.summaries)
             .slice(0, RECENT_SUMMARIES)
             .map((summary) => summaryRow(view, actions, summary, true))),

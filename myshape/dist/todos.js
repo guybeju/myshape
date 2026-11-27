@@ -132,7 +132,9 @@ export function addItem(store, topics, input, now, agent) {
 }
 function withState(store, id, state, now, reason) {
     const next = structuredClone(store);
-    next.items[id] = { ...next.items[id], state, reason, at: now };
+    const { unknown_state: _word, ...item } = next.items[id];
+    void _word;
+    next.items[id] = { ...item, state, reason, at: now };
     return next;
 }
 /** The store without the item. */
@@ -281,7 +283,7 @@ export function withProjection(topics, store) {
 export function projectMarks(store) {
     const marks = { ...store.marks };
     for (const [id, item] of Object.entries(store.items)) {
-        if (item.state === "open")
+        if (item.state === "open" || item.state === "unknown")
             continue;
         marks[id] =
             item.reason === null

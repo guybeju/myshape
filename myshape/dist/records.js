@@ -27,6 +27,7 @@ export const RECORD_KINDS = [
     "hold.opened",
     "hold.answered",
     "hold.closed",
+    "hold.vanished",
     "agent.tagged",
     "program.confirmed",
     "writes.released",
@@ -62,6 +63,10 @@ export const RECORD_KINDS = [
     "occurrence.taken",
     "occurrence.closed",
     "occurrence.missed",
+    "stall.raised",
+    "stall.settled",
+    "lifecycle.answered",
+    "lifecycle.settings_changed",
 ];
 /** The optional text fields a record may carry, in the order they are saved. */
 export const OPTIONAL_TEXT_FIELDS = [

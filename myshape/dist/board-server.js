@@ -31,7 +31,9 @@ import { localLabel, machineTimeZone } from "./schedule-time.js";
 import { TICK_MS, endedNotices, tick } from "./schedule-clock.js";
 import { commitChange, loadBoard } from "./store.js";
 import * as topics from "./topics.js";
-import { buildView, placeTask, turnNoticeText, turnsTaken } from "./view.js";
+import { buildView, evaluateBoard, placeTask, turnNoticeText, turnsTaken } from "./view.js";
+import { scheduleLines } from "./lifecycle.js";
+import { DEFAULT_DEADLINES, STATE_LABEL, TIMED_STATES } from "./lifecycle-settings.js";
 import { findLines } from "./lineage.js";
 import { checkName, hashtagView, nameOfKey, topicsWith } from "./hashtags.js";
 import { openKeys, scheduleView } from "./schedule-view.js";
@@ -382,7 +384,23 @@ function boardView(service) {
         version: viewVersion(service),
         polling: service.poller.active,
         writes: visibleWrites(service),
+        lifecycle: lifecycleView(service),
         ...buildView(viewInput(service)),
+    };
+}
+/** The deadline settings as the page's 期限設定 panel shows them, each with its default. */
+function lifecycleView(service) {
+    const { settings } = service.board.lifecycle;
+    return {
+        settings: TIMED_STATES.map((state) => ({
+            state,
+            label: STATE_LABEL[state],
+            unit: state === "S6" ? "連續第幾場" : "分鐘",
+            remind: settings[state].remind,
+            raise: settings[state].raise,
+            default_remind: DEFAULT_DEADLINES[state].remind,
+            default_raise: DEFAULT_DEADLINES[state].raise,
+        })),
     };
 }
 function viewInput(service) {
@@ -396,31 +414,114 @@ function viewInput(service) {
         staleMs: service.timings.staleMs,
         label: labelOf(service),
         decisionsAtOnce: service.aggregator?.decisions_at_once ?? null,
+        lifecycle: lifecycleContext(service),
+    };
+}
+function sha256Hex(text) {
+    return crypto.createHash("sha256").update(text).digest("hex");
+}
+/** What every card's lifecycle reads besides the view: the board's files, its writes and its reads. */
+function lifecycleContext(service) {
+    const nowMs = Date.now();
+    const homes = service.poller.snapshots();
+    const fresh = homes.filter((home) => home.report !== null &&
+        home.lastOkAt !== null &&
+        nowMs - home.lastOkAt <= service.timings.staleMs);
+    const resolve = (id) => topics.resolveTopicId(service.board.topics.doc, id);
+    const writes = [...service.writes.records.values()].map((write) => ({
+        kind: write.action.kind,
+        home: write.home,
+        task: write.task,
+        topic: write.topic === null ? null : resolve(write.topic),
+        state: write.state,
+        question_sha256: write.action.kind === "answer" ? write.action.question_sha256 : null,
+    }));
+    const questions = homes.flatMap((home) => (home.report?.holds ?? []).map((hold) => [
+        `${home.id}\t${hold.id}`,
+        sha256Hex(hold.question),
+    ]));
+    return {
+        store: service.board.lifecycle,
+        schedules: scheduleLines(service.board.schedules, resolve, boardRecords(service)),
+        allPaused: service.board.schedules.settings.all_paused,
+        writes,
+        fresh: new Set(fresh.map((home) => home.id)),
+        present: new Set(homes.map((home) => home.id)),
+        questions: new Map(questions),
+        label: labelOf(service),
+        nowMs,
     };
 }
 /**
- * Tells the aggregator once about each decision whose turn came: one it saw
- * waiting behind the cap that is now among the decisions shown. The fixed id
- * keeps it to one notice per decision, across restarts too. With no cap
- * nothing waits, so nothing is sent.
+ * One lifecycle look (lifecycle.ts evaluate): saves what the board saw and the
+ * transitions it made, by the board, through commitChange, and tells the page
+ * when what is in front of the captain changed. It waits for a good read of
+ * the root home. A failure is logged; the next read or clock check looks again.
+ */
+function lifecycleTick(service) {
+    try {
+        const input = viewInput(service);
+        // Before the root home's first good read the board knows no home's cards: nothing to save.
+        if (input.lifecycle?.fresh.has(MAIN_HOME) !== true)
+            return;
+        const { view, evaluation } = evaluateBoard(input);
+        const { clocks, homes, stalls, idle } = service.board.lifecycle;
+        const same = JSON.stringify({ clocks, homes, stalls, idle }) === JSON.stringify(evaluation.memory);
+        if (!same || evaluation.records.length > 0) {
+            const change = {
+                file: "memory",
+                memory: evaluation.memory,
+                records: evaluation.records,
+            };
+            const saved = commitChange(commitTarget(service), service.board, change, {
+                by: "board",
+                label: labelOf(service),
+            });
+            if (!saved.ok)
+                return log(`lifecycle could not save: ${saved.line}`);
+            service.board = saved.board;
+            if (saved.appendError !== null)
+                log(`records wait in the outbox: ${saved.appendError}`);
+        }
+        const shown = JSON.stringify([view.turns, view.stalls, view.idle]);
+        if (shown !== service.lifecycleShown || evaluation.records.length > 0)
+            service.version += 1;
+        service.lifecycleShown = shown;
+    }
+    catch (error) {
+        log(`lifecycle look failed: ${error.stack ?? String(error)}`);
+    }
+}
+/**
+ * What a card of the queue's fixed notice id is made from: a decision's home,
+ * task and question as before, and for the board's own cards and close
+ * proposals their kind, key and when they came, so each comes to the front once.
+ */
+function turnIdentity(view, turn) {
+    if (turn.kind === "hold") {
+        const hold = view.holds.find((entry) => `${entry.home}\t${entry.task}` === turn.key);
+        return `${hold?.home ?? ""}\n${hold?.task ?? ""}\n${hold?.question ?? ""}`;
+    }
+    if (turn.kind === "close")
+        return `close\n${turn.key}\n${view.topics[turn.key]?.close_at ?? ""}`;
+    if (turn.kind === "idle")
+        return `idle\n${turn.key}\n${view.idle.find((card) => card.topic === turn.key)?.since ?? ""}`;
+    return `stall\n${turn.key}\n${view.stalls.find((card) => card.key === turn.key)?.since ?? ""}`;
+}
+/**
+ * Tells the aggregator once about each card of the queue whose turn came: one
+ * it saw waiting behind the cap that is now shown. The fixed id keeps it to
+ * one notice per card, across restarts too. A card that never waited sends nothing.
  */
 function noticeTurns(service) {
-    const input = viewInput(service);
-    if (input.decisionsAtOnce === null) {
-        service.waitingTurns.clear();
-        return;
-    }
-    const view = buildView(input);
-    const step = turnsTaken(service.waitingTurns, view.holds);
+    const view = buildView(viewInput(service));
+    const step = turnsTaken(service.waitingTurns, view.turns);
     service.waitingTurns = step.waiting;
-    for (const hold of step.taken) {
-        const text = turnNoticeText(view, hold, step.waiting.size);
-        const topic = hold.topic === null ? {} : { topic: topicRef(service, hold.topic) };
-        const digest = crypto
-            .createHash("sha256")
-            .update(`${hold.home}\n${hold.task}\n${hold.question}`)
-            .digest("hex");
-        submitNotice(service, { kind: "notice", event: "decision.front", text, ...topic }, hold.topic, {
+    for (const turn of step.taken) {
+        const text = turnNoticeText(view, turn, step.waiting.size);
+        const topic = turn.topic === null ? {} : { topic: topicRef(service, turn.topic) };
+        const digest = sha256Hex(turnIdentity(view, turn));
+        submitNotice(service, { kind: "notice", event: "decision.front", text, ...topic }, turn.topic, {
             id: `w-d-${digest.slice(0, 16)}`,
         });
     }
@@ -641,6 +742,7 @@ function runClock(service) {
         if (saved.appendError !== null)
             log(`records wait in the outbox: ${saved.appendError}`);
     }
+    lifecycleTick(service);
     voidEndedNotices(service);
     service.writes.expireOverdue();
     for (const notice of result.notices)
@@ -852,6 +954,7 @@ function loadService(boot) {
         ipc: null,
         clock: null,
         waitingTurns: new Set(),
+        lifecycleShown: "",
         aggregator,
         poller: new Poller(run, journal, new Offsets(paths), timings, {
             onChange: bump,
@@ -859,6 +962,7 @@ function loadService(boot) {
             closedCursor: (home) => decisions.get(home)?.cursor ?? null,
             onReport: (home, report, startedAt) => {
                 recordDecisions(service, home, report, startedAt);
+                lifecycleTick(service);
                 noticeTurns(service);
                 // A deliverer that may run again without a start or a confirmation
                 // (a binding put back as it was) hands its waiting writes over here.
