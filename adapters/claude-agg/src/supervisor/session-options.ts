@@ -247,7 +247,8 @@ export interface SessionContext {
   tmpdir: string;
   /** The platform the sessions run on, which decides the system paths denied to them. */
   platform: NodeJS.Platform;
-  guard: GuardContext;
+  /** The guard's context; each kind of session decides whether the guard approves Bash. */
+  guard: Omit<GuardContext, "approvesSandboxedBash">;
   abortController: AbortController;
 }
 
@@ -353,10 +354,43 @@ export function worktreeGitRules(worktree: string): string[] {
   return [`Edit(${git})`, `Edit(${git}/**)`, `Write(${git})`, `Write(${git}/**)`];
 }
 
+/** The project settings files of a main checkout that could hold sandbox settings. */
+const PROJECT_SETTINGS = [".claude/settings.json", ".claude/settings.local.json"];
+
+/**
+ * Why a worker may not start in this main checkout, or undefined: one of its
+ * project settings files sets anything under `sandbox` (such as
+ * excludedCommands, which would run commands outside the sandbox the guard
+ * approves Bash for), or cannot be read as JSON. A missing file is fine.
+ */
+export function projectSandboxProblem(
+  mainCheckout: string,
+  read: (path: string) => string | undefined,
+): string | undefined {
+  for (const name of PROJECT_SETTINGS) {
+    const text = read(`${mainCheckout}/${name}`);
+    if (text === undefined) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return `主 checkout 的 ${name} 不是 JSON，worker 不啟動。`;
+    }
+    if (typeof parsed === "object" && parsed !== null && "sandbox" in parsed) {
+      return `主 checkout 的 ${name} 設了 sandbox，worker 不啟動。`;
+    }
+  }
+  return undefined;
+}
+
 /** The options of one worker's `query()` (plan sections 4.3 and 5.3). */
 export function workerOptions(session: WorkerSession, ctx: SessionContext): QueryOptions {
   const scout = session.forge === null;
-  const guard = scout ? { ...ctx.guard, defaultBranch: null } : ctx.guard;
+  const guard: GuardContext = {
+    ...ctx.guard,
+    ...(scout ? { defaultBranch: null } : {}),
+    approvesSandboxedBash: true,
+  };
   const deny = [
     ...denyRules(guard.home, guard.port, guard.defaultBranch),
     ...credentialReadRules(ctx.credentialFile),
@@ -415,7 +449,14 @@ export function plannerOptions(
       ...denyRules(ctx.guard.home, ctx.guard.port, ctx.guard.defaultBranch),
       ...credentialReadRules(ctx.credentialFile),
     ],
-    hooks: { PreToolUse: [{ hooks: [preToolUseHook(ctx.guard)], onFailure: "block" }] },
+    hooks: {
+      PreToolUse: [
+        {
+          hooks: [preToolUseHook({ ...ctx.guard, approvesSandboxedBash: false })],
+          onFailure: "block",
+        },
+      ],
+    },
     settingSources: [],
     strictMcpConfig: true,
     verbatimPrompts: true,

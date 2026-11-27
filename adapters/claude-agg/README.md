@@ -37,9 +37,18 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set, which it always is, Claude Code
   starts every session in `default` whatever is asked), so only what is
   listed runs: file edits and writes inside the worktree, the two forge
-  tools, and Bash commands the sandbox runs (`autoAllowBashIfSandboxed`; no
-  Bash allow rule). Everything else is denied, as are edits of the
-  worktree's `.git`. Also the deny rules and the PreToolUse guard of
+  tools, and Bash commands the supervisor's own PreToolUse guard approves.
+  Claude Code's sandbox auto-allow is off while the scrub is set, so the guard
+  answers `allow` for a Bash call that passes all its checks, does not ask to
+  leave the sandbox (`dangerouslyDisableSandbox` is denied), and is not a
+  shape that auto-allow never covers (a leading `VAR=`, a here-document,
+  command substitution, a background `&`, a first word `env`, `time`,
+  `nohup`, `timeout`, `nice`, `stdbuf`, `command`, `builtin`, `noglob`,
+  `eval` or the awk family, `rm` of anything but plain relative paths). There
+  is no Bash allow rule. Everything else is denied, as are edits of the
+  worktree's `.git`. A worker does not start when the main checkout's
+  `.claude/settings.json` or `.claude/settings.local.json` sets anything
+  under `sandbox`. Also the deny rules and the PreToolUse guard of
   `guard.ts`, the target repository's project settings from its main
   checkout, no MCP but its own, 200 turns, a structured output. It stops a
   session whose start message is not `default` or names another credential

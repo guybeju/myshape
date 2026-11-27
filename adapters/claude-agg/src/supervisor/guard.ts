@@ -8,9 +8,18 @@
 //     merge mutation),
 //   - pushing to the repository's default branch, or a push that does not
 //     name its branch (HEAD and @ alike),
-//   - requests to the board's port.
+//   - requests to the board's port,
+//   - a Bash call that asks to run outside the sandbox (dangerouslyDisableSandbox).
 // A shell command can be written in more ways than any check can follow, so
 // this is a guard rail, not a boundary. Anything it cannot read is refused.
+//
+// In a worker session it also approves Bash (`approvesSandboxedBash`):
+// Claude Code's own sandbox auto-allow is off whenever the subprocess scrub is
+// set, so the guard answers `allow` for a Bash call that passes every check
+// above and is not one of the shapes that auto-allow never covers
+// (sandboxApprovable). Such a call runs in the sandbox, which is mandatory.
+// Everything else gets no decision, so the session's rules decide and, with no
+// approval surface, deny what would need approval.
 
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -33,6 +42,12 @@ export interface GuardContext {
   realPath: (path: string) => string;
   /** The session's HOME, which `~` and `$HOME` stand for in a command or path. */
   userHome: string;
+  /**
+   * Whether the guard approves a sandbox-approvable Bash call (a worker, whose
+   * Bash always runs in the sandbox); false where there is no sandbox (the
+   * planner).
+   */
+  approvesSandboxedBash: boolean;
 }
 
 export type GuardDecision = { allow: true } | { allow: false; reason: string };
@@ -48,7 +63,67 @@ export const REASONS = {
   pushUnnamed: "worker 不自己推送：用 push_branch 工具推自己的 agg/<task> 分支。",
   port: "worker 不連看板的埠。",
   noPush: "這個 session 不推任何東西。",
+  unsandboxed: "Bash 只在 sandbox 裡跑：不接受 dangerouslyDisableSandbox。",
+  sandboxed: "在 sandbox 裡跑，supervisor 的 guard 核准。",
 } as const;
+
+/**
+ * First words that Claude Code 2.1.332's sandbox auto-allow never covers:
+ * programs that run another program, and the awk family.
+ */
+const NEVER_APPROVED = new Set([
+  "env",
+  "time",
+  "nohup",
+  "timeout",
+  "nice",
+  "stdbuf",
+  "command",
+  "builtin",
+  "noglob",
+  "eval",
+  "awk",
+  "gawk",
+  "mawk",
+  "nawk",
+]);
+
+/** An `rm`/`rmdir` operand the guard approves: a plain relative path below the cwd. */
+function plainRemovable(operand: string): boolean {
+  if (operand.startsWith("-")) return true;
+  if (operand.startsWith("/") || operand.startsWith("~") || operand.includes("$")) return false;
+  const parts = operand.split("/").filter((part) => part !== "");
+  return parts.length > 0 && parts.every((part) => part !== ".." && part !== "." && part !== "*");
+}
+
+/** Whether one simple command's words are a shape the guard may approve. */
+function approvableWords(words: readonly string[]): boolean {
+  const [first = "", ...rest] = words;
+  if (/^[A-Za-z_]\w*\+?=/.test(first)) return false;
+  const name = first.replace(/^.*\//, "");
+  if (NEVER_APPROVED.has(name)) return false;
+  if (name === "rm" || name === "rmdir") {
+    return rest.some((word) => !word.startsWith("-")) && rest.every(plainRemovable);
+  }
+  return true;
+}
+
+/**
+ * Whether a Bash command is a shape the guard may approve: never wider than
+ * Claude Code's own sandbox auto-allow. Refused shapes: a first word in
+ * NEVER_APPROVED, a leading VAR=, a here-document, ${!…} or ${ |…}, anything
+ * naming /proc/…/environ or /dev/tcp|udp, command substitution, a background
+ * `&`, and rm/rmdir of anything but plain relative paths.
+ */
+export function sandboxApprovable(command: string): boolean {
+  if (/<</.test(command)) return false;
+  if (/\$\{[!\s|]/.test(command)) return false;
+  if (/\/proc\/\S*environ/.test(command) || /\/dev\/(tcp|udp)\//.test(command)) return false;
+  if (/`|\$\(/.test(command)) return false;
+  const withoutRedirects = command.replaceAll(/&&|\d*>&\d*-?|&>>?|<&\d*-?/g, "");
+  if (withoutRedirects.includes("&")) return false;
+  return segments(command).every(approvableWords);
+}
 
 const PATH_TOOLS: Readonly<Record<string, readonly string[]>> = {
   Read: ["file_path"],
@@ -252,7 +327,8 @@ export function guardToolUse(
   const where = checkPaths(tool, input, cwd, ctx);
   if (!where.allow) return where;
   if (tool === "Bash") {
-    const { command } = input;
+    const { command, dangerouslyDisableSandbox: unsandboxed } = input;
+    if (unsandboxed === true || unsandboxed === "true") return deny(REASONS.unsandboxed);
     return typeof command === "string" ? checkCommand(command, ctx) : deny(REASONS.unreadable);
   }
   if (tool === "WebFetch") return checkUrl(input["url"], ctx);
@@ -274,13 +350,25 @@ export function preToolUseHook(
       typeof tool === "string" && typeof cwd === "string" && isAbsolute(cwd)
         ? guardToolUse(tool, toolInput, cwd, ctx)
         : deny(REASONS.unreadable);
-    if (decision.allow) return {};
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: decision.reason,
-      },
-    };
+    if (!decision.allow) return answer("deny", decision.reason);
+    if (approvesBash(tool, toolInput, ctx)) return answer("allow", REASONS.sandboxed);
+    return {};
+  };
+}
+
+/** Whether the guard approves this call: a worker's sandbox-approvable Bash command. */
+function approvesBash(tool: unknown, input: unknown, ctx: GuardContext): boolean {
+  if (!ctx.approvesSandboxedBash || tool !== "Bash" || !isRecord(input)) return false;
+  const { command } = input;
+  return typeof command === "string" && sandboxApprovable(command);
+}
+
+function answer(decision: "allow" | "deny", reason: string): PreToolUseOutput {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: decision,
+      permissionDecisionReason: reason,
+    },
   };
 }

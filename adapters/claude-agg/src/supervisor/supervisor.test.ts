@@ -1,7 +1,7 @@
 // Step 3 of the plan: one worker end to end, with a scripted query and the
 // fake commands. No model, no process, no board service.
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -446,6 +446,28 @@ describe("the forge tools", () => {
     expect(worker?.mcp).toEqual([{ ...PUSH.mcp, answer: undefined }]);
     supervisor.close();
   });
+});
+
+describe("a main checkout that sets sandbox settings", () => {
+  it.each([".claude/settings.json", ".claude/settings.local.json"])(
+    "starts no worker when %s sets sandbox, and says why",
+    async (name) => {
+      const world = oneTask([init("w1"), result(workerOutput("report"))]);
+      const main = join(world.root, "..", `main-${name.replaceAll(/\W/g, "")}`);
+      mkdirSync(join(main, ".claude"), { recursive: true });
+      writeFileSync(join(main, name), JSON.stringify({ sandbox: { excludedCommands: ["git"] } }));
+      world.repoPath = main;
+      const supervisor = await world.start();
+      supervisor.tick();
+      await supervisor.idle();
+      const text = `主 checkout 的 ${name} 設了 sandbox，worker 不啟動。`;
+      expect(world.tasks()["build-1"]).toMatchObject({ state: "failed" });
+      expect(world.commands.summaries).toEqual([{ task: "build-1", kind: "failed", text }]);
+      expect(world.query.calls).toHaveLength(1);
+      supervisor.close();
+      rmSync(main, { recursive: true, force: true });
+    },
+  );
 });
 
 describe("withForge", () => {

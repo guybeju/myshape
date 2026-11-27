@@ -10,6 +10,7 @@ import {
   existingRealPath,
   guardToolUse,
   preToolUseHook,
+  sandboxApprovable,
   REASONS,
   type GuardContext,
 } from "./guard.js";
@@ -22,6 +23,7 @@ const CTX: GuardContext = {
   defaultBranch: "main",
   realPath: (path) => path,
   userHome: "/srv",
+  approvesSandboxedBash: true,
 };
 
 function bash(command: string, ctx = CTX) {
@@ -215,9 +217,37 @@ describe("the hook", () => {
     });
   });
 
-  it("gives no decision for an allowed call, so the permission mode decides", async () => {
-    const input = preToolUseInput("Bash", { command: "npm test" }, CWD);
+  it("approves a worker's sandbox-approvable Bash call, which runs in the sandbox", async () => {
+    const input = preToolUseInput("Bash", { command: "npm test 2>&1 | tail -5" }, CWD);
+    expect(await hook(input, "u1")).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: REASONS.sandboxed,
+      },
+    });
+  });
+
+  it("gives no decision for a shape the sandbox auto-allow never covers", async () => {
+    const input = preToolUseInput("Bash", { command: "env | sort" }, CWD);
     expect(await hook(input, "u1")).toEqual({});
+  });
+
+  it("gives no decision for Bash where it approves nothing (the planner), nor for other tools", async () => {
+    const planner = preToolUseHook({ ...CTX, approvesSandboxedBash: false });
+    expect(await planner(preToolUseInput("Bash", { command: "npm test" }, CWD), "u1")).toEqual({});
+    expect(await hook(preToolUseInput("Read", { file_path: `${CWD}/a` }, CWD), "u1")).toEqual({});
+  });
+
+  it.each([true, "true"])("denies dangerouslyDisableSandbox %j, approving or not", async (flag) => {
+    for (const ctx of [CTX, { ...CTX, approvesSandboxedBash: false }]) {
+      const input = preToolUseInput(
+        "Bash",
+        { command: "ls", dangerouslyDisableSandbox: flag },
+        CWD,
+      );
+      expect(denyReason(await preToolUseHook(ctx)(input, "u1"))).toBe(REASONS.unsandboxed);
+    }
   });
 
   it("refuses a call whose cwd it cannot read", async () => {
@@ -232,6 +262,61 @@ describe("the hook", () => {
       tool_response: "",
     };
     expect(await hook(input, undefined)).toEqual({});
+  });
+});
+
+describe("sandboxApprovable", () => {
+  it.each([
+    "npm test",
+    "pnpm install --frozen-lockfile && pnpm test",
+    "printenv | cut -d= -f1 | sort",
+    "git add -A && git commit -qm 'fix the parser'",
+    "curl -sS -o /dev/null -w '%{http_code}' https://registry.npmjs.org/",
+    "npm test 2>&1 | tee test.log",
+    "cargo build >out.log 2>&1",
+    "rm -rf node_modules dist/old",
+    'echo "$HOME" > note.txt',
+    "/usr/bin/git status",
+  ])("approves %s", (command) => {
+    expect(sandboxApprovable(command)).toBe(true);
+  });
+
+  it.each([
+    ["env first", "env | cut -d= -f1"],
+    ["env after a pipe", "ls | env"],
+    ["time", "time npm test"],
+    ["nohup", "nohup npm start"],
+    ["timeout", "timeout 10 npm test"],
+    ["nice", "nice -n 5 make"],
+    ["stdbuf", "stdbuf -oL npm test"],
+    ["command", "command -v git"],
+    ["builtin", "builtin cd .."],
+    ["noglob", "noglob ls *"],
+    ["eval", 'eval "ls"'],
+    ["awk", "awk '{print $1}' file"],
+    ["gawk by path", "/usr/bin/gawk 1 file"],
+    ["a leading assignment", "FOO=bar npm test"],
+    ["an assignment after &&", "cd app && CI=1 npm test"],
+    ["a here-document", "git commit -F - <<EOF\nmsg\nEOF"],
+    ["a here-string", "cat <<< hi"],
+    ["${!…}", "echo ${!PATH}"],
+    ["${ |…}", "echo ${ |x}"],
+    ["/proc/…/environ", "cat /proc/1/environ"],
+    ["/dev/tcp", "echo x > /dev/tcp/1.2.3.4/80"],
+    ["command substitution", 'git commit -m "$(cat msg)"'],
+    ["backticks", "echo `id`"],
+    ["a background &", "npm start & sleep 1"],
+    ["a trailing &", "npm start &"],
+    ["rm of /", "rm -rf /"],
+    ["rm of ~", "rm -rf ~"],
+    ["rm of ..", "rm -rf ../x"],
+    ["rm of .", "rm -rf ."],
+    ["rm of *", "rm -rf *"],
+    ["rm with a variable", "rm -rf $DIR"],
+    ["rm with no operand", "rm -rf"],
+    ["rmdir of an absolute path", "rmdir /tmp/x"],
+  ])("does not approve %s", (_what, command) => {
+    expect(sandboxApprovable(command)).toBe(false);
   });
 });
 

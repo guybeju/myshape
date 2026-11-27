@@ -13,7 +13,7 @@
 // write the board.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { HoldEntry, TaskEntry } from "#agg/state-files.js";
@@ -71,6 +71,7 @@ import type { QueryFn } from "./sdk.js";
 import { followSession, PromptStream, type SessionReport } from "./session.js";
 import {
   plannerOptions,
+  projectSandboxProblem,
   SESSION_MODE,
   workerOptions,
   type SessionContext,
@@ -1175,6 +1176,11 @@ export class Supervisor {
   private async work(id: string, text: string, resume?: string): Promise<void> {
     const task = this.task(id);
     const repo = this.repoOf(task);
+    const problem = projectSandboxProblem(repo.path, readIfThere);
+    if (problem !== undefined) {
+      await this.end(id, endingFailed(problem), 0);
+      return;
+    }
     const forge = await this.forgeFor(id, task);
     if (typeof forge === "string") {
       await this.end(id, endingFailed(DETAIL.noPushRepo(forge)), 0);
@@ -1440,6 +1446,16 @@ function resumeDetail(input: ResumeInput): string | undefined {
   if (input.directs.length > 0) return DETAIL.directed;
   if (input.todos !== undefined) return DETAIL.verifying;
   return input.quota ? DETAIL.resumed : undefined;
+}
+
+/** A file's text, or undefined when there is no such file; any other failure is thrown. */
+function readIfThere(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 /**

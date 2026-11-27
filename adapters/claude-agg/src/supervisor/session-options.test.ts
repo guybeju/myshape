@@ -12,6 +12,7 @@ import {
   FORGE_SERVER,
   PLANNER_OUTPUT_SCHEMA,
   plannerOptions,
+  projectSandboxProblem,
   sessionEnv,
   WORKER_OUTPUT_SCHEMA,
   workerOptions,
@@ -319,6 +320,24 @@ describe("workerOptions", () => {
     expect(Object.keys(planner.hooks)).toEqual(["PreToolUse"]);
   });
 
+  it("lets the worker's guard approve sandboxed Bash, and the planner's approve nothing", async () => {
+    const bash = preToolUseInput("Bash", { command: "npm test" }, "/work/t-1");
+    const [worker] = workerOptions(SESSION, CTX).hooks.PreToolUse[0]?.hooks ?? [];
+    expect(await worker?.(bash, "u", { signal: abort.signal })).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: "allow",
+        permissionDecisionReason: REASONS.sandboxed,
+      },
+    });
+    const [scout] =
+      workerOptions({ ...SESSION, forge: null }, CTX).hooks.PreToolUse[0]?.hooks ?? [];
+    expect(await scout?.(bash, "u", { signal: abort.signal })).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "allow" },
+    });
+    const [planner] = plannerOptions("/w/p", ["/repos/app"], CTX).hooks.PreToolUse[0]?.hooks ?? [];
+    expect(await planner?.(bash, "u", { signal: abort.signal })).toEqual({});
+  });
+
   it("names no model when the user set none", () => {
     expect(workerOptions(SESSION, CTX)).not.toHaveProperty("model");
     expect(workerOptions(SESSION, CTX)).not.toHaveProperty("resume");
@@ -361,6 +380,29 @@ describe("plannerOptions", () => {
     });
     expect(hooks.PreToolUse[0]?.onFailure).toBe("block");
   });
+});
+
+describe("projectSandboxProblem", () => {
+  const files = (map: Record<string, string>) => (path: string) => map[path];
+
+  it("lets a main checkout with no sandbox setting through", () => {
+    expect(projectSandboxProblem("/r", files({}))).toBeUndefined();
+    expect(
+      projectSandboxProblem("/r", files({ "/r/.claude/settings.json": '{"hooks":{}}' })),
+    ).toBeUndefined();
+  });
+
+  it.each([".claude/settings.json", ".claude/settings.local.json"])(
+    "refuses a %s that sets sandbox, or that is not JSON",
+    (name) => {
+      expect(projectSandboxProblem("/r", files({ [`/r/${name}`]: '{"sandbox":{}}' }))).toBe(
+        `主 checkout 的 ${name} 設了 sandbox，worker 不啟動。`,
+      );
+      expect(projectSandboxProblem("/r", files({ [`/r/${name}`]: "{" }))).toBe(
+        `主 checkout 的 ${name} 不是 JSON，worker 不啟動。`,
+      );
+    },
+  );
 });
 
 describe("sessionEnv", () => {

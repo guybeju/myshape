@@ -49,6 +49,8 @@ export class World {
   readonly logs: string[] = [];
   nowMs = START_MS;
   model: string | undefined = undefined;
+  /** The listed repository's main checkout. */
+  repoPath = REPO;
   alive = new Set<number>();
   pid = 4242;
 
@@ -71,7 +73,7 @@ export class World {
       worktreeRoot: this.root,
       boardCommand: BOARD_COMMAND,
       port: 47_829,
-      repos: { app: { path: REPO, base: "origin/main", defaultBranch: "main" } },
+      repos: { app: { path: this.repoPath, base: "origin/main", defaultBranch: "main" } },
       model: this.model,
       credentialFile: `${this.root}-credential`,
       readPaths: [],
