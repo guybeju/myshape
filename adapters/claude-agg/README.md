@@ -278,7 +278,12 @@ Ubuntu); without them no worker session starts.
      With none, sessions use the SDK's own default.
    - `readPaths` (optional) are absolute paths a worker's commands may read
      besides its worktree, such as a toolchain installed under the home
-     directory or the git configuration that names its author.
+     directory or the git configuration that names its author. The
+     supervisor refuses an entry that is your home directory or one above it,
+     or that holds the credential file, the board home, `~/.config/gh`,
+     `~/.ssh` or `~/.claude/.credentials.json`. Before you list
+     `~/.gitconfig`, check that it holds no credential: no `[credential]`
+     helper line, and no `url.*.insteadOf` with a token in it.
    - `credentialFile` is the absolute path of the credential file: a regular
      file (not a symbolic link), owned by you, mode 0600 or stricter, holding
      exactly one line `ANTHROPIC_API_KEY=<key>`, with nothing else in the file
@@ -317,7 +322,9 @@ worker, on code the worker wrote. So list a repository only if:
 - it is yours;
 - you have read its main checkout's `.claude/`;
 - every workflow that a push or a pull request triggers in it is read-only
-  (its token's permissions are read) and uses no secrets.
+  (its token's permissions are read) and uses no secrets;
+- its main checkout's `.git/config` holds no credential (no token in a remote
+  URL, no `http.extraheader`): a worker's commands can read that `.git`.
 
 ## Running the checks
 

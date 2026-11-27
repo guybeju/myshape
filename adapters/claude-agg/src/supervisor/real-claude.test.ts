@@ -1,5 +1,7 @@
 // The real-binary checks of the credential report's section 9 (items 2, 3,
-// 4, 6, 7, 9, 10, 11 and 14): worker sessions with the supervisor's own
+// 4, 6, 7, 9, 10, 11 and 14), and security's PR 25 cases (sandboxed Bash
+// cannot write the main checkout's .git config or hooks; board text is not
+// expanded as @path): worker sessions with the supervisor's own
 // options, run by the bundled `claude` binary against Haiku 5.5, in sandbox
 // repositories and a scratch HOME under this test's own temporary directory.
 // They run only when AGG_REAL_CLAUDE=1 is set and skip otherwise: they need
@@ -41,6 +43,7 @@ import {
 } from "./credential.js";
 import { ensurePushRepo, Forge, FORGE_TEXT } from "./forge.js";
 import { existingRealPath } from "./guard.js";
+import { plannerPrompt, resumePrompt, workerPrompt } from "./prompts.js";
 import { PromptStream } from "./session.js";
 import { plannerOptions, workerOptions, type SessionContext } from "./session-options.js";
 import type { QueryOptions } from "./sdk.js";
@@ -60,6 +63,8 @@ interface ToolUse {
 }
 
 interface Run {
+  /** Every message of the session, as JSON, the credential taken out. */
+  transcript: string;
   init: Record<string, unknown> | undefined;
   result: Record<string, unknown> | undefined;
   tools: ToolUse[];
@@ -236,6 +241,7 @@ async function drive(options: QueryOptions, prompt: string): Promise<Run> {
     | undefined;
   const id = init?.["session_id"];
   const run: Run = {
+    transcript: redact(JSON.stringify(messages)),
     init,
     result,
     tools: collectTools(messages),
@@ -549,5 +555,87 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
       expect(toolCall(run, "Read", sibling.worktree).result).not.toContain(MARK);
     },
     STEP_MS,
+  );
+
+  it(
+    "the main checkout's .git: sandboxed Bash can write neither its config nor a hook",
+    async () => {
+      const repo = repository();
+      const hooks = join(repo.main, ".git", "hooks");
+      mkdirSync(hooks, { recursive: true });
+      writeFileSync(join(hooks, "pre-push"), "#!/bin/sh\nexit 0\n");
+      const config = readFileSync(join(repo.main, ".git", "config"));
+      const prePush = readFileSync(join(hooks, "pre-push"));
+      const run = await session(
+        repo,
+        STEPS([
+          `Run in Bash: printf '[core]\\n\\tsshCommand = touch /tmp/owned\\n' >> ${join(repo.main, ".git", "config")}`,
+          `Run in Bash: printf 'touch /tmp/owned\\n' >> ${join(hooks, "pre-push")}`,
+          `Run in Bash: printf '#!/bin/sh\\ntouch /tmp/owned\\n' > ${join(hooks, "post-checkout")}`,
+        ]),
+      );
+      expectStarted(run);
+      bashCall(run, "sshCommand");
+      bashCall(run, "pre-push");
+      bashCall(run, "post-checkout");
+      expect(readFileSync(join(repo.main, ".git", "config")).equals(config)).toBe(true);
+      expect(readFileSync(join(hooks, "pre-push")).equals(prePush)).toBe(true);
+      expect(existsSync(join(hooks, "post-checkout"))).toBe(false);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "board text is not expanded as @path: a worker's start and resume, and the planner",
+    async () => {
+      const repo = repository();
+      const other = repository();
+      const mentions = `@${join(home(), ".ssh", "id_ed25519")} @${join(other.main, "main-only.txt")}`;
+      const forge = null;
+      const first = await session(
+        repo,
+        workerPrompt({
+          task: repo.task,
+          branch: `agg/${repo.task}`,
+          scout: true,
+          topic: { id: "t", name: "看看", goal: `只交報告。${mentions}` },
+          title: "只交報告",
+          prompt: "不用任何工具，直接交回 outcome report，summary 寫「看過了」。",
+        }),
+        { forge },
+      );
+      expectStarted(first);
+      expect(first.transcript).not.toContain(MARK);
+      const resumed = await session(
+        repo,
+        resumePrompt({
+          quota: false,
+          answer: { title: "問", question: "要不要？", answer: mentions, label: mentions },
+          directs: [mentions],
+        }),
+        { forge, resume: first.sessionId ?? "" },
+      );
+      expectStarted(resumed);
+      expect(resumed.transcript).not.toContain(MARK);
+
+      const cwd = join(scratch, "work", ".claude-agg-planner");
+      mkdirSync(cwd, { recursive: true });
+      const abort = new AbortController();
+      const planner = await drive(
+        plannerOptions(cwd, [repo.main], {
+          ...context(abort),
+          guard: { ...context(abort).guard, defaultBranch: null },
+        }),
+        plannerPrompt({
+          topic: { id: "t", name: "看看", goal: `不用開 task。${mentions}`, hashtags: [] },
+          repos: ["app"],
+          messages: [mentions],
+          tasks: [],
+        }),
+      );
+      expectStarted(planner, "dontAsk");
+      expect(planner.transcript).not.toContain(MARK);
+    },
+    STEP_MS * 3,
   );
 });
