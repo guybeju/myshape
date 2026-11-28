@@ -54,6 +54,8 @@ export interface BoardPaths {
   decisions: string;
   /** The aggregator's binding (config/myshape-aggregator.json). */
   binding: string;
+  /** The captain's one remote name for the browser (config/myshape-remote.json). */
+  remote: string;
   /** The captain's confirmations of programs the board runs. */
   confirmations: string;
   /** The hashtags on topics, the captain's saved views and hashtag settings. */
@@ -87,6 +89,7 @@ export function boardPaths(config: Pick<BoardConfig, "state" | "data" | "config"
     todos: path.join(boardDataDir, "todos.json"),
     decisions: path.join(boardDataDir, "decisions.json"),
     binding: path.join(config.config, BINDING_NAME),
+    remote: path.join(config.config, "myshape-remote.json"),
     confirmations: path.join(boardDataDir, "confirmations.json"),
     hashtags: path.join(boardDataDir, "hashtags.json"),
     schedules: path.join(boardDataDir, "schedules.json"),

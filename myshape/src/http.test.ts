@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { serveBoard } from "./http.js";
-import type { ApiReply } from "./http.js";
+import type { ApiReply, HttpOptions } from "./http.js";
+import type { RemoteAccess } from "./remote.js";
 
 const TOKEN = "a".repeat(64);
 let dir: string;
@@ -67,6 +68,22 @@ const change = (extra: Record<string, string> = {}): Record<string, string> => (
 const post = (path_: string, body: string | Buffer, headers = change()): Promise<Reply> =>
   request({ method: "POST", path: path_, headers, body });
 
+function boardOptions(remote: RemoteAccess | null): HttpOptions {
+  return {
+    port,
+    tokenFile: path.join(dir, "token"),
+    assetDirs: [path.join(dir, "public"), path.join(dir, "page"), path.join(dir, "missing")],
+    indexFile: path.join(dir, "public", "index.html"),
+    remote,
+    api: async (method, route, query, body) => {
+      apiCalls.push({ method, route, query: query.toString(), body });
+      if (apiReply instanceof Error) throw apiReply;
+      return apiReply;
+    },
+    onRejected: (reason, req) => rejected.push({ reason, url: req.url }),
+  };
+}
+
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "tb-http-"));
   fs.mkdirSync(path.join(dir, "public"));
@@ -81,18 +98,7 @@ beforeAll(async () => {
   server = http.createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as net.AddressInfo).port;
-  serveBoard(server, {
-    port,
-    tokenFile: path.join(dir, "token"),
-    assetDirs: [path.join(dir, "public"), path.join(dir, "page"), path.join(dir, "missing")],
-    indexFile: path.join(dir, "public", "index.html"),
-    api: async (method, route, query, body) => {
-      apiCalls.push({ method, route, query: query.toString(), body });
-      if (apiReply instanceof Error) throw apiReply;
-      return apiReply;
-    },
-    onRejected: (reason, req) => rejected.push({ reason, url: req.url }),
-  });
+  serveBoard(server, boardOptions(null));
 });
 afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
@@ -381,5 +387,200 @@ describe("the API", () => {
     expect(rejected).toEqual([{ reason: "internal error", url: "/api/state" }]);
     apiReply = { status: 200, body: {} };
     expect((await request({ path: "/api/state", headers: auth })).status).toBe(200);
+  });
+});
+
+const REMOTE = "board-pc.example-tailnet.ts.net";
+const LOGIN = "captain@example.com";
+
+/** The headers tailscale serve sends for the captain's own phone on the tailnet. */
+const phone = (extra: Record<string, string> = {}): Record<string, string> => ({
+  "X-Forwarded-Host": REMOTE,
+  "X-Forwarded-Proto": "https",
+  "Tailscale-User-Login": LOGIN,
+  ...extra,
+});
+const phoneChange = (extra: Record<string, string> = {}): Record<string, string> =>
+  phone({ ...auth, Origin: `https://${REMOTE}`, "Content-Type": "application/json", ...extra });
+const phoneRequest = (
+  options: { method?: string; path?: string; headers?: Record<string, string>; host?: string },
+  body?: string,
+): Promise<Reply> =>
+  request({ host: REMOTE, headers: phone(), ...options, ...(body === undefined ? {} : { body }) });
+const phonePost = (path_: string, headers = phoneChange(), body = "{}"): Promise<Reply> =>
+  phoneRequest({ method: "POST", path: path_, headers }, body);
+
+describe("the remote name, without a settings file", () => {
+  it("refuses the ts.net name and anything forwarded, exactly as before", async () => {
+    expect((await phoneRequest({})).status).toBe(403);
+    expect((await phonePost("/api/messages")).status).toBe(403);
+    const local = `127.0.0.1:${port}`;
+    const forwarded = phone({ ...auth, "X-Forwarded-Host": local });
+    expect((await request({ host: local, path: "/api/state", headers: forwarded })).status).toBe(
+      403,
+    );
+    expect(rejected.map((entry) => entry.reason)).toEqual([
+      "host is not this board",
+      "host is not this board",
+      "forwarded request names a local host",
+    ]);
+    expect(apiCalls).toEqual([]);
+  });
+});
+
+describe("the remote name, with a settings file", () => {
+  beforeAll(() => serveBoard(server, boardOptions({ host: REMOTE, login: LOGIN })));
+  afterAll(() => serveBoard(server, boardOptions(null)));
+
+  it("serves the page, reads and changes for the captain's own Tailscale login", async () => {
+    expect((await phoneRequest({})).status).toBe(200);
+    expect((await phoneRequest({ headers: phone({ Origin: `https://${REMOTE}` }) })).status).toBe(
+      200,
+    );
+    const read = await phoneRequest({ path: "/api/state?v=x", headers: phone(auth) });
+    expect(read.status).toBe(200);
+    for (const route of ["messages", "direct", "holds/answer"]) {
+      expect((await phonePost(`/api/${route}`, phoneChange(), '{"a":1}')).status).toBe(200);
+    }
+    expect(apiCalls.map((call) => `${call.method} ${call.route}`)).toEqual([
+      "GET state",
+      "POST messages",
+      "POST direct",
+      "POST holds/answer",
+    ]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("keeps the token check: no token or a wrong one is 401", async () => {
+    expect((await phoneRequest({ path: "/api/state" })).status).toBe(401);
+    const wrong = phone({ Authorization: `Bearer ${"b".repeat(64)}` });
+    expect((await phoneRequest({ path: "/api/state", headers: wrong })).status).toBe(401);
+    expect(rejected.every((entry) => entry.reason === "missing or wrong token")).toBe(true);
+    expect(apiCalls).toEqual([]);
+  });
+
+  it("refuses any other name, a port on the name, or a forwarded request under a local name", async () => {
+    for (const host of [
+      `${REMOTE}:8443`,
+      `${REMOTE}:443`,
+      "other.example-tailnet.ts.net",
+      "Board-PC.example-tailnet.ts.net",
+      `${REMOTE}.`,
+      `x.${REMOTE}`,
+    ]) {
+      expect(`${host} ${(await phoneRequest({ host })).status}`).toBe(`${host} 403`);
+    }
+    expect(rejected.every((entry) => entry.reason === "host is not this board")).toBe(true);
+    rejected = [];
+    // tailscale serve picks its target by the TLS name and passes the client's Host
+    // through, so a client on the tailnet can claim a local name; X-Forwarded-Host gives it away.
+    for (const host of [`127.0.0.1:${port}`, `localhost:${port}`]) {
+      const headers = phone({ ...auth, "X-Forwarded-Host": host });
+      expect((await request({ host, path: "/api/state", headers })).status).toBe(403);
+      const confirm = phoneChange({ "X-Forwarded-Host": host, Origin: `http://${host}` });
+      expect(
+        (
+          await request({
+            host,
+            method: "POST",
+            path: "/api/programs/confirm",
+            headers: confirm,
+            body: "{}",
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect(rejected.map((entry) => entry.reason)).toEqual(
+      Array(4).fill("forwarded request names a local host"),
+    );
+    expect(apiCalls).toEqual([]);
+  });
+
+  it("pairs each name with its own origin only", async () => {
+    const origins = [
+      `http://${REMOTE}`,
+      `https://${REMOTE}:8443`,
+      `https://${REMOTE}/`,
+      "https://other.example-tailnet.ts.net",
+      `http://127.0.0.1:${port}`,
+      `http://localhost:${port}`,
+      "null",
+    ];
+    for (const origin of origins) {
+      expect((await phonePost("/api/messages", phoneChange({ Origin: origin }))).status).toBe(403);
+      expect((await phoneRequest({ headers: phone({ Origin: origin }) })).status).toBe(403);
+    }
+    const noOrigin = phoneChange();
+    delete noOrigin["Origin"];
+    expect((await phonePost("/api/messages", noOrigin)).status).toBe(403);
+    expect(
+      (await post("/api/messages", "{}", change({ Origin: `https://${REMOTE}` }))).status,
+    ).toBe(403);
+    expect(rejected.every((entry) => entry.reason === "origin is not this board")).toBe(true);
+    expect(rejected).toHaveLength(origins.length * 2 + 2);
+    expect(apiCalls).toEqual([]);
+  });
+
+  it("refuses a request without the captain's Tailscale login", async () => {
+    const noLogin = phone();
+    delete noLogin["Tailscale-User-Login"];
+    expect((await phoneRequest({ headers: noLogin })).status).toBe(403);
+    for (const login of ["someone@example.com", "Captain@example.com", "", `${LOGIN}, ${LOGIN}`]) {
+      const headers = phone({ "Tailscale-User-Login": login });
+      expect(`${login} ${(await phoneRequest({ headers })).status}`).toBe(`${login} 403`);
+    }
+    const copies = await new Promise<string>((resolve) => {
+      const socket = net.connect(port, "127.0.0.1", () =>
+        socket.write(
+          `GET / HTTP/1.1\r\nHost: ${REMOTE}\r\nTailscale-User-Login: ${LOGIN}\r\n` +
+            `Tailscale-User-Login: ${LOGIN}\r\nConnection: close\r\n\r\n`,
+        ),
+      );
+      let received = "";
+      socket.on("data", (chunk) => (received += chunk.toString("utf8")));
+      socket.on("close", () => resolve(received));
+    });
+    expect(copies.startsWith("HTTP/1.1 403")).toBe(true);
+    expect(rejected.map((entry) => entry.reason)).toEqual([
+      "no Tailscale login",
+      ...Array(5).fill("Tailscale login is not the captain's"),
+    ]);
+    expect(apiCalls).toEqual([]);
+  });
+
+  it("refuses a request that came through Funnel, whatever else it carries", async () => {
+    for (const value of ["?1", "", "?0"]) {
+      const headers = phone({ ...auth, "Tailscale-Funnel-Request": value });
+      expect((await phoneRequest({ path: "/api/state", headers })).status).toBe(403);
+    }
+    expect(
+      (await phoneRequest({ headers: phone({ "Tailscale-Funnel-Request": "?1" }) })).status,
+    ).toBe(403);
+    expect(rejected.map((entry) => entry.reason)).toEqual(Array(4).fill("Funnel request"));
+    expect(apiCalls).toEqual([]);
+  });
+
+  it("keeps the program confirmation on the PC: both steps under the remote name are 403", async () => {
+    expect(
+      (await phonePost("/api/programs/confirm", phoneChange(), '{"role":"feed"}')).status,
+    ).toBe(403);
+    const second = '{"role":"feed","confirm":"c-1"}';
+    expect((await phonePost("/api/programs/confirm", phoneChange(), second)).status).toBe(403);
+    expect((await phonePost("/api/./programs/confirm", phoneChange(), second)).status).toBe(403);
+    expect(rejected.map((entry) => entry.reason)).toEqual(
+      Array(3).fill("program confirmation is only on the PC"),
+    );
+    expect(apiCalls).toEqual([]);
+    expect((await post("/api/programs/confirm", '{"role":"feed"}')).status).toBe(200);
+    expect(apiCalls.map((call) => call.route)).toEqual(["programs/confirm"]);
+  });
+
+  it("leaves the PC's own names as they were", async () => {
+    expect((await request({})).status).toBe(200);
+    expect((await post("/api/messages", "{}")).status).toBe(200);
+    expect(
+      (await post("/api/messages", "{}", change({ Origin: `http://localhost:${port}` }))).status,
+    ).toBe(200);
+    expect(rejected).toEqual([]);
   });
 });

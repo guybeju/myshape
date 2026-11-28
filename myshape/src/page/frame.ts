@@ -65,6 +65,11 @@ function notConnectedNote(view: View): Child {
 
 const ROLE_WORD: Record<ProgramView["roles"][number], string> = { feed: "讀取", deliver: "送出" };
 
+/** Whether the page was opened by one of the PC's own names: the board confirms programs only there. */
+function onThePc(): boolean {
+  return location.hostname === "127.0.0.1" || location.hostname === "localhost";
+}
+
 /**
  * A program the board may run only once the captain confirms it, in two
  * steps that show its full path; the board checks both steps against the
@@ -82,7 +87,9 @@ function programConfirm(page: Page, actions: Actions, program: ProgramView): Chi
       `要接上 ${name}，看板得在${roles}時執行 `,
       h("code", {}, program.path),
       "。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。",
-      h("button", { onclick: () => actions.ask(key, "programs/confirm", { role }) }, "確認…"),
+      onThePc()
+        ? h("button", { onclick: () => actions.ask(key, "programs/confirm", { role }) }, "確認…")
+        : "只能在 PC 上確認：在 PC 的瀏覽器打開看板再按「確認…」。",
     );
   }
   return h(

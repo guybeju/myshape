@@ -25,6 +25,7 @@ import { MAX_REQUEST_BYTES } from "./protocol.js";
 import { DispatchNotifier, fileStore } from "./notifier.js";
 import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import { parseAggregator } from "./report.js";
+import { remoteAccess } from "./remote.js";
 import { DecisionStore, decisionStep } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
 import { localLabel, machineTimeZone } from "./schedule-time.js";
@@ -1109,6 +1110,7 @@ function serveBrowser(service) {
         tokenFile: service.paths.token,
         assetDirs: [publicDir, path.join(dist, "page")],
         indexFile: path.join(publicDir, "index.html"),
+        remote: remoteAccess(service.paths.remote, log),
         api: createApi({
             bootId: service.bootId,
             version: () => viewVersion(service),
