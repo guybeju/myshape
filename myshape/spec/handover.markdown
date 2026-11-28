@@ -86,7 +86,7 @@ trash "$H"                                        # 再把暫時的 home 丟進�
 | C39 | 完成 | guybeju/firstmate#14 |
 | C40 | 完成 | guybeju/firstmate#15 |
 | C41 | 完成 | guybeju/firstmate#16 |
-| C42 | 完成，只有截圖驗過，沒有自動測試 | guybeju/firstmate#17 |
+| C42 | 完成；390 px 的自動測試在 2026-11-28 補上（`stage-7-layout.mjs`） | guybeju/firstmate#17 |
 | C43 | 完成 | guybeju/firstmate#18 |
 | C44 | 完成，真的 home 上實測過（回報） | guybeju/firstmate#19 |
 | C45 | 完成 | guybeju/firstmate#25 |
@@ -159,6 +159,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 | 服務活過 Claude Code session 結束（2-1） | 沒有單獨驗過；真的看板已經連續跑了超過一天 |
 | `tsc` 的輸出跨機器逐位元組相同（2-3） | `check-dist.sh` 只在這台 Linux 上跑過 |
 | 原生拖放在 Chrome 上；真的滑鼠拖曳（5-1） | 這台沒有 Chrome，測試用 headless Firefox 與合成的拖放事件 |
+| 真的手機上：觸控尺寸、iOS 聚焦時不放大、底部安全區、深色的 `theme-color` | 手機存取還沒上線；只在 headless Chrome 的手機模擬（390 px、觸控、深色）看過 |
 | 壓縮後 Claude Code 重印摘要（6-3） | 沒驗 |
 
 ## 4. 已知限制
@@ -170,7 +171,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 看板給程式的環境只有五個名稱（contracts 第 7 節）；框架的指令改成需要別的環境變數時，測試裡的替身拿不到也看不出來，真的 home 上那個指令才會壞。要加名稱就加在 `myshape/src/commands.ts` 的那張表。
 - `fm-board.sh deliver` 跑的四支框架指令（`fm-inbox.sh`、`fm-send.sh`、`fm-on.sh`、`fm-captain-hold.sh answers`）在測試裡是替身。框架改了它們的輸出或 exit code，測試不會失敗。細節與每一項對應的測試在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。
 - 進入點 `board-server.ts`、`board-client.ts` 與 `src/page/` 沒有單元測試，由 Bash 與瀏覽器的整合測試覆蓋；CRAP 與 mutation 的關卡只管函式庫模組（C28）。
-- 窄視窗的版面沒有自動測試（C42）。
+- 窄視窗與深色的版面，`stage-7-page.sh` 只量東西有沒有超出 390 px 的視窗、深色的背景是不是深的、有沒有留著白底，看不出好不好看；觸控尺寸（`pointer: coarse`）沒有自動測試。
 - 頁面在佇列裡有上百個項目時的速度沒有量過。
 
 行為上的：
