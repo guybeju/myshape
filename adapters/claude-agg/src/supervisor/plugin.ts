@@ -174,16 +174,15 @@ export function checkPluginPlace(
 
 /**
  * What a worker's start message does not show loaded: the plugin by its name
- * at `path`, and each of its skills by its full name; and the plugin's load
+ * at `path`, and the worker skill by its full name (the status skill is not
+ * the worker's: its `skills` leaves that one out); and the plugin's load
  * errors, by type. Empty when everything is there.
  */
 export function missingFromInit(init: InitMessage, path: string): string[] {
   const missing: string[] = [];
   const row = init.plugins.some((plugin) => plugin.name === PLUGIN_NAME && plugin.path === path);
   if (!row) missing.push(`plugin ${PLUGIN_NAME}（${path}）`);
-  for (const skill of [WORKER_SKILL, STATUS_SKILL]) {
-    if (!init.skills.includes(skill)) missing.push(`skill ${skill}`);
-  }
+  if (!init.skills.includes(WORKER_SKILL)) missing.push(`skill ${WORKER_SKILL}`);
   const errors = init.pluginErrors.filter(
     (error) =>
       error.path === path ||

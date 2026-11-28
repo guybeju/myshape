@@ -215,7 +215,7 @@ describe("a worker's start message and its plugin", () => {
     );
     return { report, aborted: abort.signal.aborted, starts };
   }
-  const ALL_MISSING = `session 開始時沒有載入 plugin claude-agg（${LOADED_PLUGIN.path}）、skill ${WORKER_SKILL}、skill ${STATUS_SKILL}，已停下。`;
+  const ALL_MISSING = `session 開始時沒有載入 plugin claude-agg（${LOADED_PLUGIN.path}）、skill ${WORKER_SKILL}，已停下。`;
 
   it("goes on when the start lists the plugin at its path and both skills", async () => {
     const { report, starts, aborted } = await start(init("w"));
@@ -223,6 +223,19 @@ describe("a worker's start message and its plugin", () => {
     expect(starts[0]?.plugins).toEqual([LOADED_PLUGIN]);
     expect(starts[0]?.skills).toContain(WORKER_SKILL);
     expect(aborted).toBe(false);
+  });
+
+  it("goes on without the status skill, and stops a start without the worker skill", async () => {
+    expect((await start({ ...init("w"), skills: [WORKER_SKILL] })).report.end).toEqual({
+      kind: "output",
+      output: { ok: 1 },
+    });
+    const { report, aborted } = await start({ ...init("w"), skills: [STATUS_SKILL] });
+    expect(report.end).toEqual({
+      kind: "refused",
+      reason: `session 開始時沒有載入 skill ${WORKER_SKILL}，已停下。`,
+    });
+    expect(aborted).toBe(true);
   });
 
   it("stops and aborts a start that lists no plugin, saying what was missing", async () => {

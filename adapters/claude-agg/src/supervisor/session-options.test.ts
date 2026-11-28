@@ -170,6 +170,18 @@ async function callTool(
   }
 }
 
+/** The built-in tools a worker has, written out: every other one is withheld. */
+const WORKER_BUILTINS = [
+  "Bash",
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+  "Skill",
+  "StructuredOutput",
+];
+
 describe("workerOptions", () => {
   it("is exactly the object of plan sections 4.3 and 5.3 and option A", () => {
     const options = workerOptions(SESSION, CTX);
@@ -178,6 +190,8 @@ describe("workerOptions", () => {
       cwd: "/work/t-1",
       permissionMode: "default",
       permissionPrompts: "none",
+      tools: WORKER_BUILTINS,
+      skills: ["claude-agg:claude-agg-worker"],
       allowedTools: [
         "Edit(//work/t-1/**)",
         "Write(//work/t-1/**)",
@@ -340,7 +354,15 @@ describe("workerOptions", () => {
     expect(await planner?.(bash, "u", { signal: abort.signal })).toEqual({});
   });
 
-  it("loads exactly one plugin, the supervisor's own, with no Skill rule, for scouts too; the planner none", () => {
+  it("gives ship and scout the same built-in tools and only the worker skill", () => {
+    for (const forge of [FORGE, null]) {
+      const options = workerOptions({ ...SESSION, forge }, CTX);
+      expect(options.tools).toEqual(WORKER_BUILTINS);
+      expect(options.skills).toEqual(["claude-agg:claude-agg-worker"]);
+    }
+  });
+
+  it("loads exactly one plugin, the supervisor's own, for scouts too, its Skill rule left to the SDK; the planner none", () => {
     for (const forge of [FORGE, null]) {
       const options = workerOptions({ ...SESSION, forge }, CTX);
       expect(options.plugins).toEqual([
@@ -351,6 +373,7 @@ describe("workerOptions", () => {
     }
     const planner = plannerOptions("/w/p", ["/repos/app"], CTX);
     expect(planner).not.toHaveProperty("plugins");
+    expect(planner).not.toHaveProperty("skills");
     expect(planner.allowedTools?.filter((rule) => rule.startsWith("Skill"))).toEqual([]);
   });
 

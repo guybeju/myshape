@@ -249,8 +249,9 @@ describe("missingFromInit", () => {
     };
   }
 
-  it("finds nothing missing when the plugin and both skills are listed", () => {
+  it("finds nothing missing when the plugin and the worker skill are listed", () => {
     expect(missingFromInit(started(), PATH)).toEqual([]);
+    expect(missingFromInit(started({ skills: [WORKER_SKILL] }), PATH)).toEqual([]);
   });
 
   it("wants the plugin at the path the supervisor resolved, not only its name", () => {
@@ -263,14 +264,11 @@ describe("missingFromInit", () => {
     expect(missingFromInit(started(renamed), PATH)).toHaveLength(1);
   });
 
-  it("wants each skill by its full name, not a bare one", () => {
+  it("wants the worker skill by its full name, not a bare one, and not the status skill", () => {
     const bare = { skills: ["claude-agg-worker", "claude-agg-status"] };
-    expect(missingFromInit(started(bare), PATH)).toEqual([
+    expect(missingFromInit(started(bare), PATH)).toEqual([`skill ${WORKER_SKILL}`]);
+    expect(missingFromInit(started({ skills: [STATUS_SKILL] }), PATH)).toEqual([
       `skill ${WORKER_SKILL}`,
-      `skill ${STATUS_SKILL}`,
-    ]);
-    expect(missingFromInit(started({ skills: [WORKER_SKILL] }), PATH)).toEqual([
-      `skill ${STATUS_SKILL}`,
     ]);
   });
 

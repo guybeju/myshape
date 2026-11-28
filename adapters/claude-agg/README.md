@@ -48,7 +48,10 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   `nohup`, `timeout`, `nice`, `stdbuf`, `command`, `builtin`, `noglob`,
   `eval` or the awk family, `rm` of anything but plain relative paths). There
   is no Bash allow rule. Everything else is denied, as are edits of the
-  worktree's `.git`. A worker does not start when the main checkout's
+  worktree's `.git`. A worker has only the built-in tools `Bash`, `Read`,
+  `Edit`, `Write`, `Glob`, `Grep`, `Skill` and `StructuredOutput` (the SDK's
+  `tools`; every other built-in tool is withheld), plus the two forge tools
+  for a ship worker. A worker does not start when the main checkout's
   `.claude/settings.json` or `.claude/settings.local.json` sets anything
   under `sandbox`. Also the deny rules and the PreToolUse guard of
   `guard.ts`, the target repository's project settings from its main
@@ -57,7 +60,7 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   skill holds the worker's rules (the prompt has the worker load it first).
   It stops a session whose start message is not `default` or names another
   credential source than the settings select, and a worker session whose
-  start message does not list that plugin at that path and both its skills,
+  start message does not list that plugin at that path and its worker skill,
   or lists a load error of it, logging what was missing;
 - **sandboxes** each worker: its Bash commands run in the SDK's sandbox
   (bubblewrap and socat on Linux; on macOS the system's own sandbox), which
@@ -370,10 +373,15 @@ nothing else: no hooks, MCP servers, agents, commands or settings.
   the plugin through the SDK's `plugins` option. What the workers must not
   do is enforced by the supervisor's own code (the sandbox, the permission
   rules, the guard and the forge tools), not by this text.
-  - With this Claude Code version a Skill call needs no allow rule. That
-    holds for both skills here and for any other skill a worker session
-    can see. The worker skill loads because it carries only a name and a
-    description.
+  - A worker may use only the worker skill: its options set the SDK's
+    `skills` to `["claude-agg:claude-agg-worker"]`, so the Skill tool
+    refuses every other skill (the status skill, Claude Code's own, the
+    target repository's), and the SDK adds the allow rule
+    `Skill(claude-agg:claude-agg-worker)`.
+  - With this Claude Code version a skill that carries only safe properties
+    needs no allow rule; the worker skill carries only a name and a
+    description. A skill with `allowed-tools` or `hooks` would wait for an
+    approval nobody gives.
   - A skill brings text only, and every tool it leads to is held to the
     same rules as the rest of the session.
 - `skills/claude-agg-status/SKILL.md` is for you: in your own Claude Code
@@ -450,7 +458,10 @@ page's API, a few minutes ahead.
 (the sandbox starting, what a worker can and cannot reach, resume not loading
 a worktree's `.claude/`, a worker loading the plugin and its skill), so it
 runs only when `AGG_REAL_CLAUDE=1` is set and skips otherwise; see that file
-for what it needs. Its plugin cases alone run with `-t "plugin skill"`.
+for what it needs. Its plugin cases alone run with `-t "plugin skill"`, and
+the cases for a worker's tools and skills (exactly the listed tools, the
+forge tools called directly, the status skill refused) with
+`-t "explicit tools"`.
 
 The `Claude aggregator` job in `.github/workflows/tests.yml` runs the same
 checks, plus the guards on the top-level `bin/`, the vendor lists and imports.
