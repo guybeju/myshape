@@ -225,7 +225,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 ```
 
 - 另開一個檔，不放在 `topics.json`：看板讀 `topics.json` 時只照已知的欄位重建議題，退回舊版時下一次存檔會丟掉新欄位；舊版不讀這個檔，也不會去動它。
-- `hashtags` 的鍵是 hashtag 第一次建立時的寫法，就是顯示的寫法。名稱是文字（任何文字，含中文與組合記號）、數字與底線，1 到 32 個碼位，開頭的 `#` 不算；沒有保留字。`key` 是名稱先做 NFKC 再轉小寫，用來判斷是不是同一個 hashtag，所以 `AI_INFRA`、`ai_infra`、全形的 `ＡＩ_INFRA` 是同一個，顯示 `AI_INFRA`。讀的一方沒有 NFKC 時比對 `key` 就好。同一個 `key` 出現兩次時留建立得最早的那一個。
+- `hashtags` 的鍵是 hashtag 第一次建立時的寫法，就是顯示的寫法。名稱是文字（任何文字，含中文與組合記號）、數字與底線，1 到 32 個碼位，開頭的 `#` 不算。名稱或它的 `key`（見下）是 JavaScript 一般物件本來就有的屬性名時拒絕，就是 `constructor`、`__proto__`、`toString`、`toLocaleString`、`valueOf`、`hasOwnProperty`、`isPrototypeOf`、`propertyIsEnumerable`、`__defineGetter__`、`__defineSetter__`、`__lookupGetter__`、`__lookupSetter__`；因為也比對 `key`，`constructor` 與 `__proto__` 不分大小寫與全形都拒絕（`#Constructor` 也拒絕），其餘只拒絕這個寫法（`#toString` 拒絕，`#tostring` 可以）。只有完全相同才算：`#constructor` 拒絕，`#constructors` 可以。`key` 是名稱先做 NFKC 再轉小寫，用來判斷是不是同一個 hashtag，所以 `AI_INFRA`、`ai_infra`、全形的 `ＡＩ_INFRA` 是同一個，顯示 `AI_INFRA`。讀的一方沒有 NFKC 時比對 `key` 就好。同一個 `key` 出現兩次時留建立得最早的那一個。
   `created_by` 是 `captain` 或 `aggregator`；`color` 是 `c1` 到 `c8`，頁面上是固定色票的 class（第 6.2 節的 CSP 擋 `style` 屬性）；`locked` 的 hashtag 只有使用者能在頁面上貼撕。
 - `topics` 是議題 id 到它貼的 hashtag（顯示的寫法，照貼上的順序）。合併掉的議題 id 的 hashtag 算在它併進去的議題上（較舊的看板合併時就是這樣留下的），看板不認得的議題 id 讀的時候就丟掉，所以沒有貼在不存在的議題上的 hashtag；封存的議題留著它的 hashtag，重開時還在。
 - `views` 是使用者存下的命名視圖，鍵是視圖 id（議題 id 的文法，`all` 留給「全部」）：`any` 是有其中任何一個（空的是不限），`none` 是一個都沒有，`text` 是關鍵字，`untagged` 是只要沒有任何 hashtag 的議題；四者用「而且」合起來。`order` 是選了這個視圖時頁面怎麼列佇列裡的卡片：`priority`（佇列的順序）、`newest`、`oldest`（照議題的 `created_at`），沒有或不認得的當成 `priority`；只是顯示，不改佇列（[卡片排列](card-sort.markdown)）。
