@@ -3,8 +3,9 @@
 # board-interface test plan, as it stands for B4): a headless Firefox walks
 # the page of a board-only root whose other side is stub-plain, bound outside
 # the root and confirmed on the page, and of a root with nothing on the other
-# side (stage-7-page.mjs). Both run in the hardened
-# environment of stage-7-standalone.sh.
+# side (stage-7-page.mjs); then the page at 390 and 1300 px in light and in
+# dark (stage-7-layout.mjs). All run in the hardened environment of
+# stage-7-standalone.sh.
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
 
@@ -117,10 +118,32 @@ test_the_page_with_nothing_connected() {
   pass "with nothing connected the page shows one plain note and no red mark (AT10.6)"
 }
 
+test_the_page_narrow_and_dark() {
+  local home scheme out rc
+  SA_ROOT=$TMP_ROOT/root/layout
+  tb_make_board_root "$SA_ROOT" >/dev/null
+  SA_ENV=("${BASE_ENV[@]}")
+  home=$(sa_home layout)
+  sa "$home" open >/dev/null || fail "the board did not start"
+  sa "$home" create "窄螢幕" --goal "在 390 px 寬的視窗裡也要放得下的目標，寫長一點才看得出會不會換行" --id narrow --new-hashtag 版面 >/dev/null
+  sa "$home" create "排程的議題" --goal "g" --id timed --queue later >/dev/null
+  sa "$home" schedule add timed --daily --at 09:00 --tz UTC >/dev/null
+  sa "$home" todo add k1 "登入 VPN" --topic narrow --do "用公司帳號登入" \
+    --cmd "sudo openconnect --protocol=anyconnect --user=someone-with-a-long-name vpn.example.com" >/dev/null
+  for scheme in light dark; do
+    rc=0
+    out=$(TB_COLOR_SCHEME=$scheme node "$ROOT/myshape/test/kit/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-layout.mjs" 2>&1) || rc=$?
+    assert_equals 0 "$rc" "the $scheme walk at 390 and 1300 px failed: $out"
+  done
+  sa "$home" stop >/dev/null
+  pass "at 390 px the page fits the window with every settings panel open and on the topic page, one column below 640 px and two at 1300; in dark nothing stays white (C42, G5)"
+}
+
 test_nothing_is_left() {
   sa_assert_no_boards
   sa_assert_no_trips
   pass "no board is left running and no Firstmate file was reached"
 }
 
-fm_test_run test_the_page_with_an_aggregator test_the_page_with_nothing_connected test_nothing_is_left
+fm_test_run test_the_page_with_an_aggregator test_the_page_with_nothing_connected test_the_page_narrow_and_dark \
+  test_nothing_is_left
