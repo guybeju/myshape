@@ -473,13 +473,19 @@ function hashtagRequest(args) {
     const [id, change, ...rest] = parsed.positional;
     const remove = parsed.flags.get("remove");
     const said = parsed.flags.has("new");
-    const name = remove === undefined ? addedName(change) : change === undefined ? remove : null;
-    if (id === undefined || rest.length > 0 || typeof name !== "string")
+    if (id === undefined || rest.length > 0)
         throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
-    if (remove !== undefined && said)
+    if (remove === undefined)
+        return addRequest(id, change, said);
+    if (change !== undefined || said || typeof remove !== "string")
         throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
-    if (remove !== undefined)
-        return request("hashtag-remove", { id, name });
+    return request("hashtag-remove", { id, name: remove });
+}
+/** `hashtag <topic> +NAME [--new]`. */
+function addRequest(id, change, said) {
+    const name = addedName(change);
+    if (name === null)
+        throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
     return request("hashtag-add", { id, name, ...(said ? { new: true } : {}) });
 }
 async function topicCommand(config, paths, sub, args) {
