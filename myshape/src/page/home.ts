@@ -84,6 +84,8 @@ function topicCard(view: View, actions: Actions, id: string, shown: Shown): Chil
   return h(
     "div",
     { class: "card topic", draggable: "true", "data-topic": id },
+    // Shown on a touch screen only: a long press on it drags the card (board.ts, touch.ts).
+    h("span", { class: "handle", role: "img", "aria-label": "按住拖曳" }, "⠿"),
     h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name),
     h(
       "div",

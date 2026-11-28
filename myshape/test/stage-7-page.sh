@@ -112,11 +112,11 @@ test_the_page_with_nothing_connected() {
   sa "$home" open >/dev/null || fail "the board did not start"
   sa "$home" create "一" --goal "g" --id one >/dev/null
   sa "$home" create "二" --goal "g" --id two --queue later >/dev/null
-  out=$(TB_TOPIC="$TMP_ROOT/topic-alone" TB_PAGE_MODE=alone \
+  out=$(TB_TOPIC="$TMP_ROOT/topic-alone" TB_PAGE_MODE=alone TB_POINTER=coarse \
     node "$ROOT/myshape/test/kit/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
   assert_equals 0 "$rc" "the browser walk with nothing connected failed: $out"
   sa "$home" stop >/dev/null
-  pass "with nothing connected, on a phone's width, the tabs work and the page shows one plain note and no red mark (AT10.6)"
+  pass "with nothing connected, on a phone's width, the tabs work, a finger's long press on ⠿ reorders and drops on a segment button as the mouse does, and the page shows one plain note and no red mark (AT10.6)"
 }
 
 test_the_page_by_its_remote_name() {

@@ -37,7 +37,9 @@ function topicCard(view, actions, id, shown) {
     const doing = liveTodos(view, id).filter(needsCaptain).length;
     const waiting = view.queued.filter((item) => item.topic === id).length;
     const unsent = view.writes.filter((write) => write.topic === id && BAD_WRITES.includes(write.state)).length;
-    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, turns > 0 ? h("span", { class: "pill" }, `決定排隊 ${turns}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), topicChips(view, id), matchedFields(shown, id));
+    return h("div", { class: "card topic", draggable: "true", "data-topic": id }, 
+    // Shown on a touch screen only: a long press on it drags the card (board.ts, touch.ts).
+    h("span", { class: "handle", role: "img", "aria-label": "按住拖曳" }, "⠿"), h("button", { class: "link name", onclick: () => actions.open(id) }, topic.name), h("div", { class: "meta" }, h("span", {}, `${agents.length} 個 agent`), lightCounts(agents), waiting > 0 ? h("span", {}, `排隊 ${waiting}`) : null, doing > 0 ? h("span", { class: "pill red" }, `要你動手 ${doing}`) : null, deciding > 0 ? h("span", { class: "pill red" }, `待你決定 ${deciding}`) : null, turns > 0 ? h("span", { class: "pill" }, `決定排隊 ${turns}`) : null, topic.close_reason === null ? null : h("span", { class: "pill warn" }, "提議關閉"), unsent > 0 ? h("span", { class: "pill red" }, `沒送到 ${unsent}`) : null), topicChips(view, id), matchedFields(shown, id));
 }
 /**
  * The topics a queue box lists: those the filter shows, without the scheduled
