@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { serveBoard } from "./http.js";
 import type { ApiReply, HttpOptions } from "./http.js";
+import { remoteAccess } from "./remote.js";
 import type { RemoteAccess } from "./remote.js";
 
 const TOKEN = "a".repeat(64);
@@ -425,6 +426,21 @@ describe("the remote name, without a settings file", () => {
       "forwarded request names a local host",
     ]);
     expect(apiCalls).toEqual([]);
+  });
+});
+
+describe("the remote name, with a malformed settings file", () => {
+  afterAll(() => serveBoard(server, boardOptions(null)));
+
+  it("refuses the remote name and keeps the PC's own names", async () => {
+    const file = path.join(dir, "myshape-remote.json");
+    fs.writeFileSync(file, JSON.stringify({ host: `https://${REMOTE}`, login: LOGIN }));
+    const lines: string[] = [];
+    serveBoard(server, boardOptions(remoteAccess(file, (line) => lines.push(line))));
+    expect(lines).toHaveLength(1);
+    expect((await phoneRequest({})).status).toBe(403);
+    expect((await request({})).status).toBe(200);
+    expect(rejected.map((entry) => entry.reason)).toEqual(["host is not this board"]);
   });
 });
 

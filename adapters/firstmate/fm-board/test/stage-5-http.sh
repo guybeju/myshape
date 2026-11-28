@@ -565,6 +565,48 @@ test_a_second_decision_waits_its_turn() {
   pass "a second decision waits its turn in the page's state, and its queued item says so"
 }
 
+# The one remote name for the phone (contracts 6.2), from no settings file to a
+# good one, a malformed one and an empty one, restarting the board each time.
+test_remote_name() {
+  local name=board-pc.example-tailnet.ts.net login=captain@example.com
+  local settings="$MAIN/config/myshape-remote.json" log="$MAIN/state/myshape/service.log"
+  local audit="$MAIN/state/myshape/audit.jsonl" phone change
+  phone=(-H "Host: $name" -H "X-Forwarded-Host: $name" -H "Tailscale-User-Login: $login")
+  change=(-H "$AUTH" -H "$JSON" -H "Origin: https://$name" -d '{}')
+  assert_equals 403 "$(status "${phone[@]}" "$BASE/")" "without a settings file the remote name is not this board"
+  assert_equals 403 "$(status -H "$AUTH" -H "X-Forwarded-Host: 127.0.0.1:$PORT" "$BASE/api/state")" \
+    "a forwarded request under a local name must be refused"
+  printf '{"host":"%s","login":"%s"}\n' "$name" "$login" > "$settings"
+  t restart >/dev/null
+  grep -q "remote access on for $name" "$log" || fail "the service log must say the remote name is on"
+  assert_equals 200 "$(status "${phone[@]}" "$BASE/")" "the remote name serves the page to the captain's login"
+  assert_equals 200 "$(status "${phone[@]}" -H "$AUTH" "$BASE/api/state")" "the remote name reads the board with the token"
+  assert_equals 401 "$(status "${phone[@]}" "$BASE/api/state")" "the remote name still needs the token"
+  assert_equals 200 "$(status "${phone[@]}" "${change[@]}" "$BASE/api/refresh")" "the remote name changes with its https origin"
+  assert_equals 403 "$(status -H "Host: $name" "$BASE/")" "a request without a Tailscale login must be refused"
+  assert_equals 403 "$(status -H "Host: $name" -H 'Tailscale-User-Login: someone@example.com' "$BASE/")" \
+    "another Tailscale login must be refused"
+  assert_equals 403 "$(status "${phone[@]}" -H 'Tailscale-Funnel-Request: ?1' "$BASE/")" "a Funnel request must be refused"
+  assert_equals 403 "$(status "${phone[@]}" -H "$AUTH" -H "$JSON" -H "Origin: http://$name" -d '{}' "$BASE/api/refresh")" \
+    "the remote name takes only its https origin"
+  assert_equals 403 "$(status -H "Host: $name:8443" -H "Tailscale-User-Login: $login" "$BASE/")" "the remote name with a port is not this board"
+  assert_equals 403 "$(status "${phone[@]}" "${change[@]}" "$BASE/api/programs/confirm")" \
+    "a program is never confirmed under the remote name"
+  assert_not_equals 403 "$(status -H "$AUTH" -H "$ORIGIN" -H "$JSON" -d '{"role":"feed"}' "$BASE/api/programs/confirm")" \
+    "the PC's own name still reaches the program confirmation"
+  grep -q '"rejected":"program confirmation is only on the PC"' "$audit" || fail "the refused confirmation must be recorded"
+  printf '{"host":"https://%s","login":"%s"}\n' "$name" "$login" > "$settings"
+  t restart >/dev/null
+  grep -q "remote access off: .*/config/myshape-remote.json host" "$log" || fail "the service log must say why a malformed file is off"
+  assert_equals 403 "$(status "${phone[@]}" "$BASE/")" "a malformed settings file must refuse the remote name"
+  : > "$settings"
+  t restart >/dev/null
+  assert_equals 403 "$(status "${phone[@]}" "$BASE/")" "an empty settings file must refuse the remote name"
+  assert_equals 200 "$(status -H "$AUTH" "$BASE/api/state")" "the PC's own name works as before"
+  grep -q "$TOKEN" "$audit" && fail "the audit log must never contain the token"
+  pass "the remote name needs the settings file, the captain's login and no Funnel, and never confirms a program"
+}
+
 test_reset_token() {
   t reset-token >/dev/null
   assert_equals 401 "$(status -H "$AUTH" "$BASE/api/state")" "the old token must stop working after a reset"
@@ -575,5 +617,5 @@ test_reset_token() {
 fm_test_run test_request_checks test_response_headers_and_exposure test_topic_routes test_merge_takes_two_steps \
   test_answer_takes_two_steps test_messages_and_writes test_quiet_polling_is_not_a_change \
   test_every_change_leaves_a_record test_decisions_open_and_close_once test_a_second_decision_waits_its_turn \
-  test_reset_token
+  test_remote_name test_reset_token
 t stop >/dev/null
