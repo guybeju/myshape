@@ -61,7 +61,7 @@ setup_machine() {
 EOF
   mkdir -p "$MAIN/data/h1"
   printf 'billing 2026-07-01T00:00:00Z\n' > "$MAIN/data/h1/topic"
-  printf '## In flight\n\n## Queued\n- [ ] s1 - Mate work (repo: sample) (kind: ship)\n  topic: t2\n\n## Done\n' \
+  printf '## In flight\n\n## Queued\n- [ ] s1 - Mate work (repo: sample) (kind: ship)\n  topic: t2\n  needs: os=linux\n\n## Done\n' \
     > "$MATE/data/backlog.md"
 }
 
@@ -93,6 +93,8 @@ test_record_describes_the_machine() {
   assert_equals "true" "$(jq .workers_complete <<< "$out")" "a full walk must say it is complete"
   assert_equals "main:dispatch:h1 sm1:dispatch:s1" "$(jq -r '[.ready[] | "\(.home):\(.section):\(.id)"] | join(" ")' <<< "$out")" \
     "every home's work under 可派 must be listed, and no answered decision"
+  assert_equals '[] [{"kind":"os","value":"linux"}]' "$(jq -r '[.ready[] | .needs | tojson] | join(" ")' <<< "$out")" \
+    "each ready item must carry its needs lines"
   assert_not_contains "$out" "$TMP_ROOT" "the record must carry no path"
   pass "machine --json describes the host, homes, workers, places and ready work"
 }

@@ -54,8 +54,9 @@
 #        --tsv prints the same items for a program, one tab-separated line
 #        each and no other line: section (dispatch, machine-wait, hold,
 #        release, parked, not-yet), id, topic id, topic name, queue (high,
-#        normal, later, archived, none), place in the queue, repo, and work or
-#        decision. The hands-on items under 等你驗證 are not listed there.
+#        normal, later, archived, none), place in the queue, repo, work or
+#        decision, and the item's needs: body lines as a JSON array (see
+#        machines). The hands-on items under 等你驗證 are not listed there.
 #
 # machine [--json]
 #        This machine's record, fm-dispatch-machine.v1, built when asked and
@@ -67,7 +68,8 @@
 #        (fm-project-capacity-lib.sh), each home's commit and role
 #        (fm-role.sh report), the clone directory names, and the version of
 #        each tool on dispatch-plan/common-tools.tsv. --json prints it, with
-#        each local home's work under 可派 and 等機器 (order --tsv) as ready[];
+#        each local home's work under 可派 and 等機器 (order --tsv), with its
+#        needs, as ready[];
 #        without --json it prints the machines view of this machine alone.
 #        Labels and numbers only, never paths. Read-only. Written for bash
 #        3.2 and BSD tools: the main home runs it on the far machine.
@@ -86,7 +88,18 @@
 #        captain) and 環境差異 (setup gaps: tools against the common list, a
 #        home's commit or role against the main home's, a next item's repo
 #        with no clone there). A machine that cannot be reached is 不知道 and
-#        counts for nothing. --json prints the records and verdicts instead.
+#        counts for nothing.
+#        Between 該通知 and 環境差異, 放到別台 places each ready item of a
+#        machine that waits for it (its load, or its project's places), or
+#        that its own declared needs rule out, on every other machine with a
+#        record: 可以; 補齊後可以 with each gap, who adds it and its cost; or 不行,
+#        only from a declared need. An item's needs are its body lines
+#        "needs: os=<macos|linux>", "needs: machine=<name> (<reason>)",
+#        "needs: tool=<name>", "needs: project=<name>" and "needs: login=<name>",
+#        one per line; an item with none can run anywhere the common list is
+#        installed. Logins and tools off the common list are not measured, so
+#        they show as 待查, never as missing.
+#        --json prints the records, verdicts and placements[] instead.
 #        Read-only: it never spawns, sends or holds.
 #
 # queues-in -
@@ -331,11 +344,31 @@ cmd_order() {
     --slurpfile hashtags "$hashtags" --arg hashtag "$ORDER_HASHTAG" --argjson filtered "$filtered" \
     --argjson verdict "$verdict" --argjson tsv "$ORDER_TSV" "$(tb_hashtag_fold_jq)
 $(tb_hashtag_topics_jq)
+$NEEDS_JQ
 $ORDER_JQ" || {
     [ "$ORDER_TSV" = true ] || printf '%s\n' "讀不到 backlog，照平常的方式派工。"
     return 0
   }
 }
+
+# needs_line: one "needs: <kind>=<value>" body line as {kind, value}, the
+# kind os, tool, project or login, os in lower case; a machine pin also keeps
+# its "(<reason>)", control characters blanked and cut at 80 characters, or
+# null when the line gives none. Values are labels ([A-Za-z0-9._+-], at most
+# 64), so no path or command crosses machines; any other needs: line is
+# {kind: "unreadable"}, which placements show as to check. One need per line.
+# shellcheck disable=SC2016 # jq, not the shell, expands these $names.
+NEEDS_JQ='
+  def needs_line:
+    (capture("^needs: *(?<kind>os|machine|tool|project|login)=(?<value>[A-Za-z0-9._+-]{1,64})(?<rest>.*)$") // null) as $m
+    | ($m.rest // "" | capture("^ *[(（](?<why>.*)[)）] *$") // null) as $why
+    | if $m == null then {kind: "unreadable"}
+      elif $m.kind == "machine" and $why != null
+      then {kind: "machine", value: $m.value, reason: ($why.why | gsub("[[:cntrl:]]"; " ") | .[0:80])}
+      elif ($m.rest | test("^ *$")) | not then {kind: "unreadable"}
+      elif $m.kind == "machine" then {kind: "machine", value: $m.value, reason: null}
+      elif $m.kind == "os" then {kind: "os", value: ($m.value | ascii_downcase)}
+      else {kind: $m.kind, value: $m.value} end;'
 
 # The jq program of order: it ranks the snapshot's queued records by the
 # board's queues and prints the sections, or with $tsv the tab-separated lines.
@@ -360,6 +393,7 @@ ORDER_JQ='
                // {queue: "none"} )
         end;
       def queue_name: {high: "高", normal: "一般", later: "待辦", archived: "已封存", none: "-"}[.];
+      def needs_of($lines): [ $lines[] | strings | select(startswith("needs:")) | needs_line ];
       [ .backlog.records | to_entries[]
         | select(.value.structured == true and .value.state == "queued")
         | .key as $index | .value as $r
@@ -369,7 +403,7 @@ ORDER_JQ='
         | place($topic) as $p
         | {id: $r.id, index: $index, topic: $topic, queue: $p.queue, at: ($p.at // 0),
            name: ($p.name // "（未分類）"), repo: ($r.repo // ""),
-           decision: ($r.kind == "captain"),
+           decision: ($r.kind == "captain"), needs: needs_of($r.body_lines // []),
            own_hold: (($r.hold_reason // "") | startswith($own)),
            other_hold: ($r.hold_reason != null and ((($r.hold_reason // "") | startswith($own)) | not)),
            captain_hold: ($r.hold_kind == "captain"),
@@ -402,7 +436,7 @@ ORDER_JQ='
     | def held_mark: if .own_hold then "\t← 還被看板的 hold 擋著，先照「該解除」解除" else "" end;
       def row($section):
         [$section, .id, (.topic // ""), .name, .queue, (.at | tostring), .repo,
-         (if .decision then "decision" else "work" end)]
+         (if .decision then "decision" else "work" end), (.needs | tojson)]
         | map(tostring | gsub("[\t\n]"; " ")) | join("\t");
       if $tsv then
         ($dispatch[] | row("dispatch")), ($waiting[] | row("machine-wait")), ($to_hold[] | row("hold")),
@@ -493,6 +527,68 @@ RULE_V1_JQ='
                                 elif $machine == "unknown" then "unknown" else "room" end),
                       why: (if $free == 0 then "上限 \(.limit) 都佔了" elif $machine == "wait" then "機器先等"
                             elif $machine == "unknown" then "機器不知道" else "還能派 \($free)" end)} ]};'
+
+# place($it; $list): a stateless function beside rule-v1, of one machine of
+# the view (its record, rule-v1 verdict and label) and one ready item of any
+# machine ({home, id, repo, needs}; needs null when the item's machine sent
+# none). state is cannot only when a declared os= or machine= need does not
+# match what the record measured; after-setup when anything the item needs is
+# missing there (a common-list tool or a declared listed one missing or older,
+# a clone of its repo or a declared project, or needs that could not be read),
+# each gap with who adds it and its cost class (minutes, consent, captain);
+# else now. load is rule-v1's answer for that machine and the item's project.
+# Whatever was not measured (logins, a tool off the list, an unreadable
+# version, os or needs: line) goes in to_check and never makes a gap or
+# cannot. The rule's own verdict is not changed.
+# shellcheck disable=SC2016 # jq, not the shell, expands these $names.
+PLACE_JQ='
+  def os_named: {macos: "Darwin", darwin: "Darwin", linux: "Linux"}[.] // null;
+  def version_key: split(".") | map(tonumber? // 0);
+  def place($it; $list):
+    . as $m | $m.record as $r
+    | ($r.homes // [] | map(.home)) as $homes
+    | ($homes[0] // $m.label) as $who
+    | ($it.needs // []) as $needs
+    | ($r.platform.os // null) as $os
+    | ($list | map(.name)) as $listed
+    | [ ($needs[] | select(.kind == "os") | (.value | os_named) as $want
+         | select($want != null and $os != null and $want != $os)
+         | "項目宣告 needs: os=\(.value)，\($m.label) 量到的是 \($os)"),
+        ($needs[] | select(.kind == "machine") | . as $pin
+         | select($pin.value != $r.machine and ($homes | index($pin.value)) == null)
+         | "項目宣告 needs: machine=\($pin.value)（\($pin.reason // "沒寫原因")），\($m.label) 不是那台") ] as $why
+    | [ (if $it.needs == null
+         then {kind: "needs", name: null, what: "讀不到這個項目的 needs（\($it.home) 那台的程式比這一版舊）：更新那個 home 的程式",
+               who: $it.home, cost: "minutes"} else empty end),
+        (if ($r.tools | type) != "array" then empty
+         else ($list[] | . as $e | ([$r.tools[] | select(.name == $e.name)][0]) as $t
+           | if $t == null then empty
+             elif ($t.found | not) then {kind: "tool", name: $e.name, what: "裝 \($e.name)", who: $who, cost: "consent"}
+             elif $e.floor != null and $t.version != null and ($t.version | version_key) < ($e.floor | version_key)
+             then {kind: "tool", name: $e.name, what: "把 \($e.name) 從 \($t.version) 升到 \($e.floor) 以上", who: $who, cost: "consent"}
+             else empty end) end),
+        ([$it.repo, ($needs[] | select(.kind == "project") | .value)] | map(select(. != null and . != "")) | unique[]
+         | . as $name | select(($r.projects_cloned | type) == "array" and ($r.projects_cloned | index([$name])) == null)
+         | {kind: "clone", name: ., what: "clone \(.)（那台的 home 本身就是它的 clone 時不用）", who: $who, cost: "minutes"}) ] as $gaps
+    | [ ($needs[] | select(.kind == "os") | select((.value | os_named) == null) | "看不懂 needs: os=\(.value)"),
+        (if $os == null and any($needs[]; .kind == "os") then "\($m.label) 的作業系統讀不到" else empty end),
+        (if any($needs[]; .kind == "unreadable") then "有 needs: 行看不懂（每行一個 os=、machine=、tool=、project=、login=）" else empty end),
+        ($needs[] | select(.kind == "tool" and (.value as $v | $listed | index([$v])) == null)
+         | "\(.value) 不在共用工具清單，\($m.label) 沒量"),
+        (if ($r.tools | type) != "array" then "\($m.label) 沒有工具的紀錄"
+         else ($list[] | . as $e | ([$r.tools[] | select(.name == $e.name)][0]) as $t
+           | if $t == null then "\($e.name)（那台的清單沒有它）"
+             elif $t.found and $e.floor != null and $t.version == null then "\($e.name) 的版本"
+             else empty end) end),
+        (if ($r.projects_cloned | type) != "array" then "\($m.label) 的 clone" else empty end),
+        ($needs[] | select(.kind == "login") | "\(.value) 的登入（沒有就由 captain 登入，要 captain 在場）") ] as $check
+    | ([($m.verdict.projects // [])[] | select(.name == $it.repo)][0]) as $project
+    | {home: $it.home, id: $it.id, via: $m.via, machine: $m.label,
+       state: (if ($why | length) > 0 then "cannot" elif ($gaps | length) > 0 then "after-setup" else "now" end),
+       load: (if $m.verdict.machine != "room" then $m.verdict.machine elif $project != null and $project.free == 0 then "wait" else "room" end),
+       load_why: (if $m.verdict.machine != "room" then $m.verdict.reasons
+                  elif $project != null and $project.free == 0 then ["\($project.name) 上限 \($project.limit) 都佔了"] else [] end),
+       why: $why, gaps: $gaps, to_check: $check};'
 
 # host_load5: the 5-minute load average from upstream's vitals probe, empty
 # when it cannot be read. The libraries load in a subshell, so none of their
@@ -744,7 +840,8 @@ RECORD_JQ='
      tools: (if [rows("tools-listed")] | length > 0
              then [rows("tool") | {name: .[1], found: (.[2] == "1"), version: (.[3] | text)}] else null end),
      ready: [rows("ready") | {home: .[1], section: .[2], id: .[3], topic: (.[4] | text), topic_name: .[5],
-       queue: .[6], at: (.[7] | count // 0), repo: (.[8] | text)}],
+       queue: .[6], at: (.[7] | count // 0), repo: (.[8] | text),
+       needs: (.[10] // "" | try fromjson catch null | if type == "array" then . else null end)}],
      notes: ($host.notes + [rows("note") | .[1]])}'
 
 # machine_record: this machine's fm-dispatch-machine.v1 record, on one line.
@@ -773,7 +870,6 @@ MACHINES_VIEW_JQ='
   def qrank: {high: 0, normal: 1}[.] // 2;
   def shown: if type == "number" then ((. * 100 | round) / 100 | tostring) else "不知道" end;
   def word: {room: "可以加", wait: "先等", unknown: "不知道"}[.];
-  def version_key: split(".") | map(tonumber? // 0);
   def item_text:
     "\(.home)/\(.id)（\(if .queue == "none" then "未分類" else "\(.queue | qname)，\(.topic_name)" end)"
     + (if .section == "machine-wait" then "，等機器" else "" end) + "）";
@@ -879,16 +975,48 @@ MACHINES_VIEW_JQ='
       ( [$m.items[] | select(.repo != null and (.repo as $x | ($r.projects_cloned // []) | index($x) | not))]
         | group_by(.repo) | .[] | .[0]
         | "  \($m.label) 沒有 \(.repo) 的 clone，\(.home)/\(.id) 要用（補齊：那台的 second mate clone \(.repo)，幾分鐘）。" );
+  def cost_word: {minutes: "幾分鐘，不用人", consent: "要 captain 同意", captain: "要 captain 在場"}[.] // .;
+  def load_note:
+    if .load == "wait" then "，但那台先等（\(.load_why | join("；"))）"
+    elif .load == "unknown" then "，但看不出那台能不能再加" else "" end;
+  def placement_text:
+    .machine
+    + (if .state == "cannot" then " 不行（\(.why | join("；"))）"
+       elif .state == "after-setup"
+       then " 補齊後可以（" + (.gaps | map("\(.what)：\(.who)，\(.cost | cost_word)") | join("；")) + "）" + load_note
+       elif .load == "room" then " 可以" else " 什麼都不缺" + load_note end)
+    + (if .state != "cannot" and (.to_check | length) > 0 then "，待查：\(.to_check | join("、"))" else "" end);
+  def placements($ms; $list):
+    [$ms[] | select(.record != null)] as $targets
+    | [$ms[] | .via as $from | .items[] | . as $it | $targets[]
+       | place($it; $list) + {from: $from}];
+  def move_lines($ms; $placements):
+    $ms[] | .via as $from | .items[] | . as $it
+    | [$placements[] | select(.from == $from and .home == $it.home and .id == $it.id)] as $mine
+    | ([$mine[] | select(.via == $from)][0]) as $own
+    | [$mine[] | select(.via != $from)] as $others
+    | select($own != null and ($own.state == "cannot" or ($own.load == "wait" and any($others[]; .state != "cannot"))))
+    | [$others[] | select(.state != "cannot" and .via != "here") | .via][0] as $to
+    | "  \($it | item_text)在 \($own.machine) "
+      + (if $own.state == "cannot" then "不行（\($own.why | join("；"))）" else "先等（\($own.load_why | join("；"))）" end)
+      + "：" + (if ($others | length) == 0 then "沒有別台的紀錄" else $others | map(placement_text) | join("；") end)
+      + (if all($others[]; .state == "cannot") then "。"
+         elif $it.home != "main" then "。要轉過去，先請 \($it.home) 把 \($it.id) 交回主 home（dispatch-plan 規格第 12 節）。"
+         elif $to != null then "。要轉過去：bin/fm-backlog-handoff.sh \($to) \($it.id)。"
+         else "。" end);
   def view:
   .now as $now | .fresh as $fresh | .list as $list
   | [.machines[] | entry($now; $fresh)] as $ms
+  | placements($ms; $list) as $placements
   | ([$ms[] | select(.via == "here") | (.record.homes // [])[] | select(.home == "main")][0] // {}) as $main
   | [$ms[] | select(.record != null) | {label, p: "\(.record.platform.os // "?") \(.record.platform.arch // "?")"}] as $platforms
-  | if $json then {schema: "fm-dispatch-machines.v1", at: $now, machines: [$ms[] | {via, record, verdict, error}]}
+  | if $json then {schema: "fm-dispatch-machines.v1", at: $now, machines: [$ms[] | {via, record, verdict, error}],
+                   placements: $placements}
     else
       ($ms[] | (header, (select(.record != null) | workers_line, project_lines))),
       "該轉告：", ($ms[] | tell_lines),
       "該通知（同一件事只說一次）：", ($ms[] | notify_lines),
+      "放到別台（補不補齊、轉不轉過去，由主 first mate 判斷）：", move_lines($ms; $placements),
       "環境差異：", ($ms[] | env_lines($list; $main)),
       (if ($platforms | map(.p) | unique | length) > 1
        then "  作業系統：" + ($platforms | map("\(.label) 是 \(.p)") | join("，")) + "。" else empty end),
@@ -911,7 +1039,7 @@ tools_list_json() {
 machines_view() {
   jq -nr --argjson json "$1" --argjson machines "$2" --argjson list "$(tools_list_json)" \
     --argjson now "$(date +%s)" --argjson fresh "$RECORD_FRESH_SECONDS" \
-    "$RULE_V1_JQ$MACHINES_VIEW_JQ"'
+    "$RULE_V1_JQ$PLACE_JQ$MACHINES_VIEW_JQ"'
     {now: $now, fresh: $fresh, list: $list, machines: $machines} | view
     | if type == "string" then . else tojson end' 2>/dev/null ||
     tb_die 1 "machines：做不出機器的檢視。"
