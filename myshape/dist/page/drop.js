@@ -28,6 +28,24 @@ export function timeDropAnchor(from, to) {
     return from === to ? null : { last: true };
 }
 /**
+ * The move a card that started at `start` asks for when let go on `target`;
+ * null when it sends nothing. A segment button is the end of its queue's
+ * list, so it follows the same rules as a drop there; 排程 takes no drop.
+ */
+export function dropPlace(start, target, listing) {
+    const slot = target.kind === "list"
+        ? target.slot
+        : target.segment === "schedules"
+            ? null
+            : { queue: target.segment, above: target.last, below: null };
+    if (slot === null)
+        return null;
+    const anchor = listing.byTime
+        ? timeDropAnchor(start.queue, slot.queue)
+        : dropAnchor(start, slot, listing.filtered);
+    return anchor === null ? null : { queue: slot.queue, anchor };
+}
+/**
  * The hint a queue shows while a card is dragged: `shown` cards listed,
  * `unlisted` not; `byTime` when the cards are listed by creation time.
  */

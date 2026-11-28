@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { generator } from "#board/seeded-random.test-helper.js";
 import * as topics from "#board/topics.js";
 import type { MovePosition, Queue, TopicState } from "#board/topics.js";
-import { dropAnchor, dropHint, timeDropAnchor } from "./drop.js";
-import type { Anchor, Slot } from "./drop.js";
+import { dropAnchor, dropHint, dropPlace, timeDropAnchor } from "./drop.js";
+import type { Anchor, Listing, Slot } from "./drop.js";
 
 const NOW = "2026-11-27T00:00:00Z";
 
@@ -125,6 +125,82 @@ describe("where a drop puts the topic while the cards are listed by creation tim
   it("puts it last in an empty queue too", () => {
     const empty = board({ ...EMPTY, normal: ["a", "b"] });
     expect(dropped(empty, "b", "high", timeDropAnchor("normal", "high")).high).toEqual(["b"]);
+  });
+});
+
+describe("where a released card lands, in a list or on a segment button", () => {
+  const BY_PRIORITY: Listing = { filtered: false, byTime: false };
+  const FILTERED: Listing = { filtered: true, byTime: false };
+  const BY_TIME: Listing = { filtered: false, byTime: true };
+  const start = slot("normal", "a", "c");
+  const segment = (queue: "high" | "normal" | "later" | "schedules", last: string | null) =>
+    ({ kind: "segment", segment: queue, last }) as const;
+
+  it("reorders within the list the way the mouse's drop does", () => {
+    const list = { kind: "list", slot: slot("normal", null, "a") } as const;
+    expect(dropPlace(start, list, BY_PRIORITY)).toEqual({
+      queue: "normal",
+      anchor: { before: "a" },
+    });
+    expect(dropPlace(start, list, BY_PRIORITY)?.anchor).toEqual(
+      dropAnchor(start, list.slot, false),
+    );
+    const under = { kind: "list", slot: slot("normal", "c", null) } as const;
+    expect(dropPlace(start, under, FILTERED)).toEqual({
+      queue: "normal",
+      anchor: { after: "c" },
+    });
+  });
+
+  it("sends nothing for a filtered card dropped back where it started", () => {
+    expect(dropPlace(start, { kind: "list", slot: start }, FILTERED)).toBeNull();
+  });
+
+  it("puts the card last in the queue whose segment button it is dropped on", () => {
+    const later = board({ ...EMPTY, normal: ["a", "b", "c"], later: ["s", "l"] });
+    const place = dropPlace(start, segment("later", "l"), BY_PRIORITY);
+    expect(place).toEqual({ queue: "later", anchor: { last: true } });
+    expect(dropped(later, "b", "later", place?.anchor ?? null).later).toEqual(["s", "l", "b"]);
+    expect(dropPlace(start, segment("normal", "c"), BY_PRIORITY)).toEqual({
+      queue: "normal",
+      anchor: { last: true },
+    });
+  });
+
+  it("puts it after the last card listed there under a filter, or last when none is listed", () => {
+    const hidden = board({ ...EMPTY, normal: ["a", "b", "c"], later: ["l", "h"] });
+    const place = dropPlace(start, segment("later", "l"), FILTERED);
+    expect(place).toEqual({ queue: "later", anchor: { after: "l" } });
+    expect(dropped(hidden, "b", "later", place?.anchor ?? null).later).toEqual(["l", "b", "h"]);
+    expect(dropPlace(start, segment("later", null), FILTERED)).toEqual({
+      queue: "later",
+      anchor: { last: true },
+    });
+  });
+
+  it("sends nothing for a filtered card already last where its own button sends it", () => {
+    expect(dropPlace(slot("normal", "c", null), segment("normal", "c"), FILTERED)).toBeNull();
+    expect(dropPlace(slot("normal", null, null), segment("normal", null), FILTERED)).toBeNull();
+  });
+
+  it("listed by creation time, takes only a move to another queue", () => {
+    const inList = { kind: "list", slot: slot("normal", null, "a") } as const;
+    expect(dropPlace(start, inList, BY_TIME)).toBeNull();
+    expect(dropPlace(start, segment("normal", "c"), BY_TIME)).toBeNull();
+    expect(dropPlace(start, segment("high", "x"), BY_TIME)).toEqual({
+      queue: "high",
+      anchor: { last: true },
+    });
+    const filtered = { filtered: true, byTime: true };
+    expect(dropPlace(start, segment("later", "l"), filtered)).toEqual({
+      queue: "later",
+      anchor: { last: true },
+    });
+  });
+
+  it("refuses the 排程 button, whatever the listing", () => {
+    for (const listing of [BY_PRIORITY, FILTERED, BY_TIME])
+      expect(dropPlace(start, segment("schedules", null), listing)).toBeNull();
   });
 });
 
