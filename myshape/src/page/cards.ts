@@ -2,12 +2,12 @@
 // aggregator's decisions and close proposals, the board's 沒人處理的議題 and
 // 沒人接 cards, the writes that never arrived, and the deadline settings.
 import type { StallMember, StallView } from "#board/lifecycle.js";
-import type { TurnView } from "#board/view.js";
+import type { TodoView, TurnView } from "#board/view.js";
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
-import { fileMenu, holdCard, topicLink, when, writeRows } from "./parts.js";
+import { fileMenu, holdCard, needsCaptain, topicLink, when, writeRows } from "./parts.js";
 import { BAD_WRITES, agentName } from "./state.js";
-import type { Actions, Page, View } from "./state.js";
+import type { Actions, Page, View, WriteView } from "./state.js";
 
 /** The days 先不關 or 延到 is shown with by default (KEEP_DEFAULT_DAYS; page scripts cannot load lifecycle-settings.ts). */
 const DEFAULT_DAYS = 14;
@@ -236,6 +236,32 @@ function turnCard(page: Page, view: View, actions: Actions, turn: TurnView): Chi
   return hold === undefined ? null : holdCard(page, view, actions, hold, true);
 }
 
+/** The turns shown as cards; the rest wait their turn. */
+function inFront(turns: TurnView[]): TurnView[] {
+  return turns.filter((turn) => !turn.waits_turn);
+}
+
+function badWrites(writes: WriteView[]): WriteView[] {
+  return writes.filter((write) => BAD_WRITES.includes(write.state));
+}
+
+/**
+ * What waits on the captain, whatever the filter shows: the hands-on items
+ * still to do, the decisions in front, and the writes that did not arrive.
+ * The 等你 tab's button carries it.
+ */
+export function waitingCount(view: {
+  todos: TodoView[];
+  turns: TurnView[];
+  writes: WriteView[];
+}): number {
+  return (
+    view.todos.filter(needsCaptain).length +
+    inFront(view.turns).length +
+    badWrites(view.writes).length
+  );
+}
+
 /**
  * The cards of the one queue that `shows` lets through, in its order: the
  * ones in front, then one line for how many wait their turn.
@@ -249,7 +275,7 @@ export function queueCards(
   const turns = view.turns.filter((turn) => shows(turn.topic));
   const waiting = turns.filter((turn) => turn.waits_turn).length;
   return [
-    turns.filter((turn) => !turn.waits_turn).map((turn) => turnCard(page, view, actions, turn)),
+    inFront(turns).map((turn) => turnCard(page, view, actions, turn)),
     waiting === 0
       ? null
       : h("p", { class: "note turns" }, `還有 ${waiting} 個決定排隊，輪到時才顯示`),
@@ -258,7 +284,7 @@ export function queueCards(
 
 /** Every write that did not arrive, with or without a topic, archived ones too, with 重送 and 忽略. */
 export function undelivered(page: Page, actions: Actions): Child {
-  const bad = (page.view?.writes ?? []).filter((write) => BAD_WRITES.includes(write.state));
+  const bad = badWrites(page.view?.writes ?? []);
   if (bad.length === 0) return null;
   return h(
     "section",

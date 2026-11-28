@@ -85,8 +85,8 @@ function keywordRow(page, view, actions) {
         ]
         : null);
 }
-/** The line that never lets a filter hide what waits on the captain. */
-function owedLine(view, actions, shown) {
+/** The line that never lets a filter hide what waits on the captain; it stays when the panel is closed. */
+export function owedLine(view, actions, shown) {
     if (shown === null)
         return null;
     const owed = owedOutside(view, shown);
@@ -97,6 +97,12 @@ function owedLine(view, actions, shown) {
     ];
     return h("p", { class: owed.decide + owed.handsOn > 0 ? "owed red" : "owed" }, h("button", { class: "link", onclick: () => actions.setFilter(NO_FILTER) }, `這個篩選之外還有：${parts.join("、")}`));
 }
+/** The key the filter panel is open under, in `page.open`; the header's 篩選 opens it. */
+export const FILTER_PANEL = "filter-panel";
+/** The filter panel the header's 篩選 opens: views, hashtag buttons and the keyword. */
+export function filterPanel(page, view, actions) {
+    return h("section", { class: "filterbar filterpanel", "data-panel": "filter" }, viewButtons(page, view, actions), hashtagButtons(page, view, actions), keywordRow(page, view, actions), h("div", { class: "btns" }, h("button", { onclick: () => actions.toggle(FILTER_PANEL) }, "收起")));
+}
 function panelButtons(page, view, actions) {
     const recent = view.hashtags.recent.length;
     const toggle = (panel) => actions.setTagPanel(page.tagPanel === panel ? null : panel);
@@ -104,9 +110,9 @@ function panelButtons(page, view, actions) {
         ? h("button", { class: "link", onclick: () => toggle("recent") }, `${agentName()} 最近改了 ${recent} 個 hashtag`)
         : null, h("button", { class: "link", onclick: () => toggle("settings") }, "hashtag 設定"));
 }
-/** The filter bar above the home page. */
-export function filterBar(page, view, actions, shown) {
-    return h("section", { class: "filterbar" }, viewButtons(page, view, actions), hashtagButtons(page, view, actions), keywordRow(page, view, actions), owedLine(view, actions, shown), panelButtons(page, view, actions), page.tagPanel === "recent"
+/** The agent's recent hashtag changes and the hashtag settings, under 更多. */
+export function hashtagBar(page, view, actions) {
+    return h("section", { class: "filterbar", "data-bar": "hashtags" }, panelButtons(page, view, actions), page.tagPanel === "recent"
         ? recentCard(view, actions, {
             title: `${agentName()} 最近的 hashtag 改動`,
             changes: view.hashtags.recent,

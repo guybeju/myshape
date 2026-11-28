@@ -7,6 +7,9 @@
 // The window starts at 1300 x 950; setViewport(width, height) changes it.
 // TB_COLOR_SCHEME=dark or light makes the page see that colour scheme
 // (prefers-color-scheme); unset, Firefox's own default applies.
+// With TB_PROXY_PORT set, Firefox sends every request for a name other than
+// 127.0.0.1 or localhost through the HTTP proxy on that port, such as
+// serve-stand-in.mjs.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,10 +51,20 @@ if (scheme !== undefined && !Object.hasOwn(COLOR_SCHEMES, scheme)) {
 
 sweepStaleProfiles();
 const profile = fs.mkdtempSync(path.join(os.homedir(), `${PROFILE_PREFIX}${process.pid}-`));
-if (scheme !== undefined) {
-  fs.writeFileSync(path.join(profile, "user.js"),
-    `user_pref("layout.css.prefers-color-scheme.content-override", ${COLOR_SCHEMES[scheme]});\n`);
+const prefs = {};
+if (scheme !== undefined) prefs["layout.css.prefers-color-scheme.content-override"] = COLOR_SCHEMES[scheme];
+if (process.env.TB_PROXY_PORT !== undefined) {
+  Object.assign(prefs, {
+    "network.proxy.type": 1,
+    "network.proxy.http": "127.0.0.1",
+    "network.proxy.http_port": Number(process.env.TB_PROXY_PORT),
+    // The stand-in speaks plain HTTP only, so the page is not first tried over HTTPS.
+    "dom.security.https_first": false,
+    "dom.security.https_first_schemeless": false,
+  });
 }
+const prefLines = Object.entries(prefs).map(([name, value]) => `user_pref(${JSON.stringify(name)}, ${JSON.stringify(value)});\n`);
+if (prefLines.length > 0) fs.writeFileSync(path.join(profile, "user.js"), prefLines.join(""));
 const port = 20000 + Math.floor(Math.random() * 20000);
 const firefoxArgs = ["--headless", "--no-remote", "--profile", profile];
 firefoxArgs.push(`--remote-debugging-port=${port}`, "about:blank");

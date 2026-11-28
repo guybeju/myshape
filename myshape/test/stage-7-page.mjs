@@ -1,18 +1,46 @@
 // The page with an aggregator on the other side, run by browser.mjs in a
 // headless Firefox for stage-7-page.sh. TB_PAGE_MODE=connected walks a board
 // fed by stub-plain, bound outside the root as TB_PROGRAM and confirmed on the
-// page first; TB_PAGE_MODE=alone walks a board with nothing connected.
+// page first, on a PC's 1300 px; TB_PAGE_MODE=alone walks a board with nothing
+// connected on a phone's 390 px; TB_PAGE_MODE=remote opens a board whose
+// program waits for confirmation by its remote name, through
+// serve-stand-in.mjs, on a phone's 390 px.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { serveStandIn } from "./kit/serve-stand-in.mjs";
 
 const topic = (...args) => execFileSync(process.env.TB_TOPIC, args, { encoding: "utf8" });
 const has = (text) => `document.body.innerText.includes(${JSON.stringify(text)})`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** True when the first element `css` matches is on screen, not only in the page. */
+const visible = (css) =>
+  `(() => { const el = document.querySelector(${JSON.stringify(css)}); return el !== null && el.getClientRects().length > 0; })()`;
+const TABS = ["等你", "佇列", "動態", "更多"];
+
+/** Shows a part of the home page by its tab, as the captain does. */
+async function showTab(page, label) {
+  await page.click(".tabs button", label);
+  await page.waitFor(`the ${label} tab`, `document.querySelector(".tabs button.on")?.textContent.startsWith(${JSON.stringify(label)}) === true`);
+}
 
 /** The page must never call the agent side by Firstmate's name. */
 async function noFirstmate(page, where) {
   const text = await page.text();
   if (/first mate|firstmate/i.test(text)) throw new Error(`the page names Firstmate on ${where}:\n${text}`);
+}
+
+/**
+ * Every tab of the home page: the 等你 count is on screen on each, and none
+ * names Firstmate (only the tab on screen is in the page's text). Ends on 等你.
+ */
+async function everyTab(page, where) {
+  for (const label of TABS) {
+    await showTab(page, label);
+    if (!(await page.evaluate(`${visible('.tabs button[data-tab="wait"] .count')} && /^\\d+$/.test(document.querySelector('.tabs button[data-tab="wait"] .count').textContent)`)))
+      throw new Error(`the 等你 count must be on screen on the ${label} tab`);
+    await noFirstmate(page, `${where}, ${label} tab`);
+  }
+  await showTab(page, "等你");
 }
 
 function received() {
@@ -98,7 +126,9 @@ async function handsOn(page) {
  */
 async function confirmTheProgram(page) {
   const program = process.env.TB_PROGRAM;
-  await page.waitFor("the offer to confirm the program", `document.querySelector(".program-confirm") !== null`, 15000);
+  await page.waitFor("the dot on 更多", visible('.tabs button[data-tab="more"] .dot-new'), 15000);
+  await showTab(page, "更多");
+  await page.waitFor("the offer to confirm the program, first under 更多", `${visible(".program-confirm")} && document.querySelector('.pane[data-pane="more"]').firstElementChild.classList.contains("program-confirm")`, 15000);
   const offer = await page.evaluate(`document.querySelector(".program-confirm").innerText`);
   const expected = `要接上 plain，看板得在讀取與送出時執行 ${program}。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。`;
   if (!offer.startsWith(expected)) throw new Error(`the first step must read:\n${expected}\ngot:\n${offer}`);
@@ -111,13 +141,18 @@ async function confirmTheProgram(page) {
   await noFirstmate(page, "the confirmation's two steps");
   await page.click(".confirm button", "確定執行");
   await page.waitFor("the offer gone", `document.querySelector(".program-confirm") === null`, 15000);
+  await page.waitFor("the dot gone from 更多", `document.querySelector(".tabs .dot-new") === null`);
+  await showTab(page, "等你");
 }
 
 async function connected(page) {
   await confirmTheProgram(page);
   await page.waitFor("the fed work", has("建置"));
+  await page.waitFor("the two decisions", has("選一個") + " && " + has("沒有議題的決定"), 15000);
+  await page.waitFor("the 等你 count of the two decisions", `document.querySelector('.tabs button[data-tab="wait"] .count').textContent === "2"`);
+  await showTab(page, "動態");
   await page.waitFor("the fed workers", has("j1 working"), 15000);
-  await noFirstmate(page, "the home page");
+  await everyTab(page, "the home page");
 
   // The 用量 panel shows what the aggregator pushed, as it pushed it, and says what it left out.
   const usage = `(document.querySelector("#sidebar .usage")?.innerText ?? "")`;
@@ -125,7 +160,8 @@ async function connected(page) {
   for (const text of ["用量", "帳號 A", "五小時", "後重置", "量的", "帳號 B", "讀不到", "這個帳號讀不到", "今天的花費", "3.25 USD", "看板略過了 1 筆"]) {
     if (!(await page.evaluate(`${usage}.includes(${JSON.stringify(text)})`))) throw new Error(`the 用量 panel must show ${text}`);
   }
-  const marks = await page.evaluate(`[".usage-item.sev-warn", ".usage-item.stale", ".usage meter"].map((css) => document.querySelectorAll(css).length).join(",")`);
+  if (!(await page.evaluate(visible("#sidebar .usage")))) throw new Error("on a PC the 用量 panel heads the left column");
+  const marks = await page.evaluate(`["#sidebar .usage-item.sev-warn", "#sidebar .usage-item.stale", "#sidebar .usage meter"].map((css) => document.querySelectorAll(css).length).join(",")`);
   if (marks !== "1,0,1") throw new Error(`one current warn metric, none stale, one meter for the one percentage: ${marks}`);
 
   // AT10.1: a drag out of later changes the order, and the toast names plain.
@@ -135,7 +171,8 @@ async function connected(page) {
   const listed = JSON.parse(topic("list", "--json")).find((entry) => entry.id === "later-one");
   if (listed?.queue !== "normal") throw new Error(`list --json must agree with the drag, got ${JSON.stringify(listed)}`);
 
-  // AT10.2: 未分類 offers filing for a worker, answers for a decision, nothing for a queued item.
+  // AT10.2: 未分類 (under 動態) offers filing for a worker, answers for a decision, nothing for a queued item.
+  await showTab(page, "動態");
   await page.waitFor("the unsorted worker", has("j-loose"));
   const unsorted = await page.evaluate(`(() => {
     const rows = [...document.querySelectorAll(".row, .card, .meta")];
@@ -148,6 +185,7 @@ async function connected(page) {
   })()`);
   if (unsorted !== "true,true,true") throw new Error(`未分類 must offer filing, answers, and nothing for a queued item: ${unsorted}`);
   // plain sets no decisions_at_once (contracts C10), so both live decisions show and none waits its turn.
+  await showTab(page, "等你");
   if (await page.evaluate(has("個決定排隊"))) throw new Error("with no cap no decision may wait its turn");
 
   // AT10.2: the topic page has the timeline with the summary's PR link, the
@@ -179,7 +217,8 @@ async function connected(page) {
   await page.waitFor("the red banner", has("看板服務沒有回應"), 25000);
   topic("open");
   await page.waitFor("the page to recover", `!${has("看板服務沒有回應")}`, 25000);
-  // The restarted board must have read w2 once before w2 stops answering.
+  // The restarted board must have read w2 once before w2 stops answering; its worker has no topic, so it is under 動態's 未分類.
+  await showTab(page, "動態");
   await page.waitFor("w2's worker after the restart", has("w2-job"), 25000);
   fs.writeFileSync(`${process.env.TB_AGG}/control/w2`, "sleep 30\n");
   await page.waitFor("the yellow banner for w2", has("home w2 已經"), 25000);
@@ -194,25 +233,82 @@ async function connected(page) {
   await page.waitFor("the reloaded page", has("建置"));
 }
 
+/**
+ * On a phone the four parts are tabs at the bottom, the 佇列 tab shows one
+ * box at a time, and a topic page has no tabs. The tab stays in the URL
+ * fragment, and the home page comes back to it.
+ */
+async function phoneTabs(page) {
+  await page.waitFor("the tabs at the bottom", `(() => { const tabs = document.querySelector(".tabs"); return tabs !== null && Math.abs(tabs.getBoundingClientRect().bottom - innerHeight) < 2; })()`);
+  if (await page.evaluate(visible("#sidebar"))) throw new Error("on a phone 佇列 is a tab of its own, not shown under 等你");
+  await everyTab(page, "the home page on a phone");
+  await showTab(page, "更多");
+  if (!(await page.evaluate(visible('.pane[data-pane="more"] [data-bar="hashtags"]')))) throw new Error("the hashtag settings belong under 更多");
+  await showTab(page, "佇列");
+  if ((await page.evaluate("location.hash")) !== "#/f/tab=queue") throw new Error("the tab must be kept in the URL fragment");
+  await page.click(".segs button", "待辦");
+  await page.waitFor("only 待辦's box", `${visible('.queue[data-queue="later"]')} && !${visible('.queue[data-queue="high"]')} && !${visible('.queue[data-queue="normal"]')}`);
+  if (!(await page.evaluate(`[...document.querySelectorAll('.queue[data-queue="later"] .topic')].some((card) => card.getClientRects().length > 0 && card.innerText.includes("二"))`)))
+    throw new Error("二 must be on screen in 待辦's box");
+  await page.click(".segs button", "一般");
+  await page.waitFor("only 一般's box", `${visible('.queue[data-queue="normal"]')} && !${visible('.queue[data-queue="later"]')}`);
+}
+
 async function alone(page) {
-  await page.waitFor("the board", has("一"));
+  await page.setViewport(390, 844);
+  await page.waitFor("the board", `document.querySelector('.topic[data-topic="one"]') !== null`);
   await page.waitFor("the not-connected note", `document.querySelector(".not-connected") !== null`);
+  await phoneTabs(page);
   await page.evaluate(dropOnQueue("二", "normal"));
+  await page.waitFor("一 on screen in 一般", visible('.queue[data-queue="normal"] .topic[data-topic="one"]'));
   await page.click(".topic button", "一");
   await page.waitFor("the topic page", has("關聯 agent"));
+  if (await page.evaluate(`document.querySelector(".tabs") !== null`)) throw new Error("a topic page has no tabs");
   await page.type(`[data-key="message:one"]`, "沒人收也要留著");
   await page.click("button", "送給 aggregator");
   await page.waitFor("the waiting message", has("等 aggregator 接上"));
   await sleep(3000);
   await page.click("button.link", "回首頁");
-  await page.waitFor("the home page", has("優先順序"));
+  await page.waitFor("the home page back on 佇列", `${has("優先順序")} && location.hash === "#/f/tab=queue"`);
   const marks = await page.evaluate(`[document.querySelectorAll(".pill.red").length, [...document.querySelectorAll(".banner")].map((b) => b.innerText).join(" | ")].join(" # ")`);
   if (marks !== "0 # ") throw new Error(`nothing connected must show no red mark and no banner: ${marks}`);
   if (!(await page.evaluate(has("沒有接上 aggregator")))) throw new Error("the not-connected note must be shown");
   await noFirstmate(page, "the page with nothing connected");
 }
 
+/**
+ * By the remote name the board refuses to confirm a program, so 更多 starts
+ * with where to confirm it instead, and no page offers 確認….
+ */
+async function remote(page) {
+  const stand = await serveStandIn({
+    listen: Number(process.env.TB_PROXY_PORT),
+    boardPort: Number(process.env.TB_BOARD_PORT),
+    host: process.env.TB_REMOTE_HOST,
+    login: process.env.TB_REMOTE_LOGIN,
+  });
+  try {
+    await page.setViewport(390, 844);
+    await page.evaluate(`void location.assign(${JSON.stringify(process.env.TB_REMOTE_URL)})`);
+    await page.waitFor("the page by its remote name", `location.hostname === ${JSON.stringify(process.env.TB_REMOTE_HOST)} && document.querySelector(".tabs") !== null`, 20000);
+    await page.waitFor("the dot on 更多", visible('.tabs button[data-tab="more"] .dot-new'), 15000);
+    await everyTab(page, "the page by its remote name");
+    await showTab(page, "更多");
+    const first = `document.querySelector('.pane[data-pane="more"]').firstElementChild`;
+    await page.waitFor("the confirmation's note first under 更多", `${first}.classList.contains("program-confirm") && ${visible(".program-confirm")}`);
+    const note = await page.evaluate(`${first}.innerText`);
+    if (!note.startsWith("要接上 plain，") || !note.endsWith("只能在 PC 上確認：在 PC 的瀏覽器打開看板再按「確認…」。"))
+      throw new Error(`更多 must start with where to confirm the program:\n${note}`);
+    if (await page.evaluate(`[...document.querySelectorAll("button")].some((button) => button.textContent.startsWith("確認"))`))
+      throw new Error("by the remote name the page must offer no 確認…");
+    if (received().length !== 0) throw new Error("nothing may reach the program before it is confirmed");
+  } finally {
+    stand.close();
+  }
+}
+
 export default async (page) => {
   if (process.env.TB_PAGE_MODE === "alone") await alone(page);
+  else if (process.env.TB_PAGE_MODE === "remote") await remote(page);
   else await connected(page);
 };

@@ -172,6 +172,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - `fm-board.sh deliver` 跑的四支框架指令（`fm-inbox.sh`、`fm-send.sh`、`fm-on.sh`、`fm-captain-hold.sh answers`）在測試裡是替身。框架改了它們的輸出或 exit code，測試不會失敗。細節與每一項對應的測試在 [adapter](../../fm-board/spec/adapter.markdown) 第 7 節。
 - 進入點 `board-server.ts`、`board-client.ts` 與 `src/page/` 沒有單元測試，由 Bash 與瀏覽器的整合測試覆蓋；CRAP 與 mutation 的關卡只管函式庫模組（C28）。
 - 窄視窗與深色的版面，`stage-7-page.sh` 只量東西有沒有超出 390 px 的視窗、深色的背景是不是深的、有沒有留著白底，看不出好不好看；觸控尺寸（`pointer: coarse`）沒有自動測試。
+- 底部分頁、分段鈕與「更多」只有 `stage-7-page` 在 390 px 下的兩輪（沒有接上、遠端名稱）走過。遠端名稱那一輪經 `test/kit/serve-stand-in.mjs` 這個替身打開頁面，不是真的 `tailscale serve`。
 - 頁面在佇列裡有上百個項目時的速度沒有量過。
 - 遠端名稱（contracts 第 6.2 節）只用 `curl` 自己帶 header 測過，沒有經真的 `tailscale serve` 與手機跑過。tailscaled 會先刪掉用戶端自帶的 `Tailscale-User-Login`、`Tailscale-Funnel-Request`，Funnel 的請求帶 `Tailscale-Funnel-Request: ?1` 而不帶登入，每個轉送的請求都設 `X-Forwarded-Host`：這些讀自 tailscale 的原始碼 `ipn/ipnlocal/serve.go`（v1.104.7 的 `addTailscaleIdentityHeaders`、`addProxyForwardedHeaders`）與 Serve 的文件，Tailscale 改了這些行為，這裡的測試看不出來。Serve 有沒有原樣轉 `Origin` 也沒驗：沒轉的話手機上的改動會被 403 擋下（不會放寬）。
   這些只在 Serve 的 HTTP 轉送（`tailscale serve --bg <埠>`）成立：TCP 轉送（`--tcp`、`--tls-terminated-tcp`）不讀 HTTP，不刪也不加任何 header，用戶端可以自己帶 `Tailscale-User-Login` 或本機的 `Host`，看板分不出來。這個埠只能用 HTTP 的那一種。

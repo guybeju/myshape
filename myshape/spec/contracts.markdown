@@ -450,6 +450,8 @@ socket 上改議題的操作寫進議題更新的紀錄都註明「<aggregator �
 
 token 是 32 位元組亂數的十六進位，第一次啟動時產生，之後不變，直到 `reset-token`。`myshape.sh open` 印出 `http://127.0.0.1:<埠>/#t=<token>`（遠端名稱不印：手機用的網址是把前面換成 `https://<名稱>`，`#t=` 之後不變）；頁面讀到後存進 `sessionStorage`、把 fragment 從網址列拿掉，之後用 header 帶。已經開著的分頁只把 fragment 換成 `#t=<token>` 時（例如 `reset-token` 之後把新網址貼進同一個分頁），頁面重新載入，照第一次載入的方式讀它。
 
+頁面自己用的 fragment（都不帶 token）：`#/topic/<議題 id>` 是議題頁；首頁是空的 fragment，或 `#/f/<查詢字串>`，鍵是篩選的 `any`、`none`（hashtag 名稱，逗號分隔）、`untagged=1`、`text`、`view`（視圖 id），與首頁的分頁 `tab`（`queue`、`activity`、`more`；「等你」不寫，不認得的值當成「等你」）。只有 `tab` 的 fragment 不算選了篩選，頁面照樣套用預設視圖（[stage-5-browser](stage-5-browser.markdown) 的首頁）。
+
 API 的路徑與 body 由第五段定；這裡只定兩件事：
 
 - **輪詢**：`GET /api/state?v=<boot_id>:<版本>`。版本沒變回 `{"changed":false}`；`boot_id` 不同一律回全量。版本是一個字串：一個只在「看得到的東西真的變了」時才加一的計數，加上每個 home 是否過期的旗標，與一段雜湊（含現在開著的排程場次）。輪詢讀到一模一樣的結果不算變；某個 home 跨過過期線算變（那一刻沒有任何讀取會回報它）；一場排程過了 `closes_by` 也算變，就算時鐘還沒存檔（第 3.9 節：超過 `closes_by` 的當成已結束）。

@@ -1,7 +1,8 @@
 // The page at a phone's width and in each colour scheme, run by browser.mjs in
 // a headless Firefox for stage-7-page.sh: at 390 px nothing reaches past the
-// window's edge, with the deadline, hashtag and schedule settings open and on
-// the topic page, and the home page is one column (C42); at 1300 px it is two.
+// window's edge on any of the home page's tabs, with the deadline, hashtag and
+// schedule settings open under 更多, and on the topic page, and 佇列 is a tab
+// of its own as wide as the page; at 1300 px 佇列 is the left column.
 // With TB_COLOR_SCHEME=dark the page must be dark at both widths and keep no
 // white background. With TB_SHOTS set to a directory, each width is saved
 // there as <scheme>-<width>-<page>.png for a person to look at.
@@ -38,13 +39,20 @@ async function fitsTheWidth(page, where) {
   }
 }
 
-/** Whether the sidebar sits below the other column (one column) or to its left (two). */
+/** Whether 佇列 (the sidebar) is hidden, fills the page's width (one column), or sits left of the tabs (two). */
 const sidebarPlace = `(() => {
-  const side = document.querySelector("#sidebar");
-  const other = [...side.parentElement.children].find((el) => el !== side);
-  const a = side.getBoundingClientRect(), b = other.getBoundingClientRect();
-  return a.top >= b.bottom ? "below" : a.right <= b.left ? "left" : "overlapping";
+  const side = document.querySelector("#sidebar").getBoundingClientRect();
+  const tabbed = document.querySelector(".tabbed").getBoundingClientRect();
+  if (side.width === 0) return "hidden";
+  if (side.width > document.documentElement.clientWidth - 40) return "full";
+  return side.right <= tabbed.left ? "left" : "overlapping";
 })()`;
+
+/** Shows a part of the home page by its tab, as the captain does. */
+async function showTab(page, label) {
+  await page.click(".tabs button", label);
+  await page.waitFor(`the ${label} tab`, `document.querySelector(".tabs button.on")?.textContent.startsWith(${JSON.stringify(label)}) === true`);
+}
 
 /** In dark: the scheme is seen, the body is dark, and nothing keeps a white background. */
 async function checkScheme(page, where) {
@@ -65,8 +73,9 @@ async function checkScheme(page, where) {
   }
 }
 
-/** Opens the deadline settings and the hashtag and schedule settings panels. */
+/** Opens the deadline settings and the hashtag and schedule settings panels, under 更多. */
 async function openTheSettings(page) {
+  await showTab(page, "更多");
   await page.evaluate(`document.querySelector('details[data-key="lifecycle-settings"]').open = true`);
   await page.click("button.link", "hashtag 設定");
   await page.click("button.link", "排程設定");
@@ -81,7 +90,15 @@ export default async (page) => {
   await shot(page, "1300-home");
 
   await resize(page, NARROW);
-  if ((await page.evaluate(sidebarPlace)) !== "below") throw new Error("at 390 px the sidebar must sit below the rest (C42)");
+  if ((await page.evaluate(sidebarPlace)) !== "hidden") throw new Error("at 390 px 佇列 is a tab of its own, not under 等你");
+  for (const label of ["等你", "佇列", "動態"]) {
+    await showTab(page, label);
+    await fitsTheWidth(page, `the ${label} tab`);
+    await checkScheme(page, `the ${label} tab at 390 px`);
+  }
+  await showTab(page, "佇列");
+  if ((await page.evaluate(sidebarPlace)) !== "full") throw new Error("at 390 px the 佇列 tab must be one column as wide as the page (C42)");
+  await shot(page, "390-queue");
   await openTheSettings(page);
   await fitsTheWidth(page, "the home page with its settings open");
   await checkScheme(page, "the home page at 390 px");
@@ -96,7 +113,7 @@ export default async (page) => {
   await shot(page, "390-topic");
 
   await page.click("button.link", "回首頁");
-  await page.waitFor("the home page", has("優先順序"));
+  await page.waitFor("the home page back on 更多", `${has("期限設定")} && document.querySelector(".tabs") !== null`);
   await resize(page, WIDE);
   if ((await page.evaluate(sidebarPlace)) !== "left") throw new Error("at 1300 px the sidebar must sit to the left");
 };

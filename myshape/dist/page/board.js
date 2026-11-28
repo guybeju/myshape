@@ -2,7 +2,7 @@ import { getJson, postJson, takeToken, tokenInHash } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
 import { dropAnchor, timeDropAnchor } from "./drop.js";
 import { frame } from "./frame.js";
-import { NO_FILTER, filterHash, parseFilterHash, viewFilter } from "./filter.js";
+import { NO_FILTER, filterHash, parseFilterHash, parseTab, viewFilter } from "./filter.js";
 import { ORDER_KEY, parseOrder } from "./sort.js";
 import { QUEUES, agentName, currentTopic, setAgentLabel } from "./state.js";
 const POLL_MS = 5000;
@@ -34,6 +34,8 @@ const page = {
     panel: null,
     notice: null,
     filter: parseFilterHash(location.hash) ?? NO_FILTER,
+    tab: parseTab(location.hash),
+    segment: "high",
     order: storedOrder(),
     tagPanel: null,
     schedulePanel: null,
@@ -168,16 +170,25 @@ async function post(path, body) {
 function currentTopicHash() {
     return location.hash.startsWith("#/topic/") ? location.hash : null;
 }
-/** Shows the home page under `filter` and keeps it in the URL fragment, without a scroll or a history entry. */
-/** Keeps `filter`, and puts it in the home page's URL fragment without a scroll or a history entry. */
+/** Puts the filter and the tab in the home page's URL fragment, without a scroll or a history entry. */
+function keepHash() {
+    if (currentTopicHash() === null)
+        history.replaceState(null, "", `${location.pathname}${filterHash(page.filter, page.tab)}`);
+}
 function keepFilter(filter) {
     page.filter = filter;
-    if (currentTopicHash() === null)
-        history.replaceState(null, "", `${location.pathname}${filterHash(filter)}`);
+    keepHash();
 }
 function setFilter(filter) {
     keepFilter(filter);
     render();
+}
+/** Like the filter, a tab adds no history entry: the browser's back still leaves the page. */
+function setTab(tab) {
+    page.tab = tab;
+    keepHash();
+    render();
+    window.scrollTo(0, 0);
 }
 function queueOf(topic) {
     return QUEUES.find((queue) => page.view?.queues[queue].includes(topic)) ?? null;
@@ -206,7 +217,7 @@ async function sendDraft(path, body, key) {
 const actions = {
     open: (topic) => {
         location.hash =
-            topic === null ? filterHash(page.filter) : `#/topic/${encodeURIComponent(topic)}`;
+            topic === null ? filterHash(page.filter, page.tab) : `#/topic/${encodeURIComponent(topic)}`;
     },
     refresh: () => void post("refresh", {}),
     draft: (key, value) => {
@@ -288,6 +299,11 @@ const actions = {
     ignore: (write) => void post("writes/ignore", { write_id: write.id }),
     send: (path, body) => void post(path, body),
     setFilter,
+    setTab,
+    setSegment: (segment) => {
+        page.segment = segment;
+        render();
+    },
     setOrder: (order) => {
         // A chosen saved view keeps its own order; otherwise this page does (spec/card-sort.markdown).
         const saved = page.view?.hashtags.views.find((entry) => entry.id === page.filter.view);
@@ -408,11 +424,10 @@ window.addEventListener("hashchange", () => {
         return;
     }
     page.panel = null;
-    const filter = parseFilterHash(location.hash);
-    if (filter !== null)
-        page.filter = filter;
-    else if (location.hash === "")
-        page.filter = NO_FILTER;
+    if (currentTopicHash() === null) {
+        page.filter = parseFilterHash(location.hash) ?? NO_FILTER;
+        page.tab = parseTab(location.hash);
+    }
     render();
     window.scrollTo(0, 0);
 });

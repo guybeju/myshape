@@ -1,5 +1,7 @@
-// The home page: the priority sidebar and the four Bearings-style sections,
-// followed by everything not yet filed under a topic.
+// The home page in four parts, 等你, 佇列, 動態 and 更多: on a wide screen
+// 佇列 is the left column and the other three are tabs above the right one; on
+// a narrow screen the four are tabs at the bottom. Every part is drawn and
+// board.css shows the ones the tab and the width call for.
 import type { CardOrder } from "#board/hashtags.js";
 import type { Queue } from "#board/topics.js";
 import type { AgentView, SummaryView } from "#board/view.js";
@@ -23,14 +25,22 @@ import {
   untaggedQueued,
 } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
-import type { Actions, Page, View } from "./state.js";
+import type { Actions, Page, Segment, View } from "./state.js";
 import { dropHint } from "./drop.js";
-import { isShown, resolveFilter, shownTopics } from "./filter.js";
+import { TABS, isShown, resolveFilter, shownTopics } from "./filter.js";
+import type { Tab } from "./filter.js";
 import { cardOrder, sortCards } from "./sort.js";
-import { filterBar, mergeTagNote, topicChips } from "./tags.js";
+import {
+  FILTER_PANEL,
+  filterPanel,
+  hashtagBar,
+  mergeTagNote,
+  owedLine,
+  topicChips,
+} from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
-import { lifecycleSettings, queueCards, undelivered } from "./cards.js";
+import { lifecycleSettings, queueCards, undelivered, waitingCount } from "./cards.js";
 import { usagePanel } from "./usage.js";
 
 /** The topics the captain's filter shows, with what each matched; null when nothing is filtered. */
@@ -194,22 +204,49 @@ function orderButtons(page: Page, view: View, actions: Actions, order: CardOrder
   );
 }
 
-export function sidebar(page: Page, view: View, actions: Actions): Child {
-  const shown = shownOf(page, view);
-  const order = cardOrder(page, view.hashtags.views);
+const SEGMENT_LABEL: Record<Segment, string> = { ...QUEUE_LABEL, schedules: "排程" };
+
+/** On a narrow screen, the buttons that choose the one box the 佇列 tab shows, each with its count. */
+function segmentButtons(page: Page, actions: Actions, counts: Record<Segment, number>): Child {
   return h(
     "div",
-    { id: "sidebar" },
+    { class: "segs" },
+    (Object.keys(SEGMENT_LABEL) as Segment[]).map((segment) =>
+      h(
+        "button",
+        {
+          class: segment === page.segment ? "on" : "",
+          "data-segment": segment,
+          onclick: () => actions.setSegment(segment),
+        },
+        SEGMENT_LABEL[segment],
+        h("span", { class: "count" }, String(counts[segment])),
+      ),
+    ),
+  );
+}
+
+/** 佇列: the left column on a wide screen. 用量 heads it there; on a narrow screen it is under 更多. */
+function sidebar(page: Page, view: View, actions: Actions, shown: Shown): Child {
+  const order = cardOrder(page, view.hashtags.views);
+  const scheduled = (id: string): boolean =>
+    isShown(shown, id) && view.topics[id]?.status !== "archived";
+  const counts: Record<Segment, number> = {
+    high: queueTopics(view, "high", shown).length,
+    normal: queueTopics(view, "normal", shown).length,
+    later: queueTopics(view, "later", shown).length,
+    schedules: view.schedules.series.filter((card) => scheduled(card.topic)).length,
+  };
+  return h(
+    "div",
+    { id: "sidebar", "data-segment": page.segment },
     usagePanel(view.metrics, Date.now()),
     h("h2", {}, "優先順序"),
+    segmentButtons(page, actions, counts),
     orderButtons(page, view, actions, order),
     nowStrip(page, view, actions),
     QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)),
-    scheduleColumn(
-      view,
-      actions,
-      (id) => isShown(shown, id) && view.topics[id]?.status !== "archived",
-    ),
+    scheduleColumn(view, actions, scheduled),
     archivedBox(view, actions, shown),
   );
 }
@@ -354,16 +391,10 @@ function noTopic(view: View): Child {
   );
 }
 
-export function home(page: Page, view: View, actions: Actions): Child {
-  const active = ["working", "stuck", "unknown", "decide"];
-  const shown = shownOf(page, view);
-  const mine = <T extends { topic: string | null }>(items: T[]): T[] =>
-    items.filter((item) => isShown(shown, item.topic));
-  const todos = mine(liveTodos(view));
+/** 等你: what waits on the captain. */
+function waitPart(page: Page, view: View, actions: Actions, shown: Shown): Child {
+  const todos = liveTodos(view).filter((todo) => isShown(shown, todo.topic));
   return [
-    filterBar(page, view, actions, shown),
-    scheduleBar(page, view, actions),
-    lifecycleSettings(page, actions, view),
     todos.length === 0
       ? null
       : section(
@@ -376,6 +407,15 @@ export function home(page: Page, view: View, actions: Actions): Child {
       queueCards(page, view, actions, (topic) => isShown(shown, topic)),
     ),
     undelivered(page, actions),
+  ];
+}
+
+/** 動態: what came back and what is under way. */
+function activityPart(page: Page, view: View, actions: Actions, shown: Shown): Child {
+  const active = ["working", "stuck", "unknown", "decide"];
+  const mine = <T extends { topic: string | null }>(items: T[]): T[] =>
+    items.filter((item) => isShown(shown, item.topic));
+  return [
     section(
       "最近的結果",
       mine(view.summaries)
@@ -403,5 +443,93 @@ export function home(page: Page, view: View, actions: Actions): Child {
         .map((hold) => holdCard(page, view, actions, hold, true)),
     ),
     shown === null ? unsorted(page, view, actions) : null,
+  ];
+}
+
+/**
+ * 更多: the programs waiting for the captain's confirmation first, then 用量
+ * (shown here only on a narrow screen) and the settings.
+ */
+function morePart(page: Page, view: View, actions: Actions, confirms: Child): Child {
+  return [
+    confirms,
+    usagePanel(view.metrics, Date.now()),
+    hashtagBar(page, view, actions),
+    scheduleBar(page, view, actions),
+    lifecycleSettings(page, actions, view),
+  ];
+}
+
+function waitingPill(view: View): Child {
+  const count = waitingCount(view);
+  return h("span", { class: count > 0 ? "count red" : "count" }, count);
+}
+
+function confirmDot(view: View): Child {
+  return view.aggregator.confirm.length > 0
+    ? h("span", { class: "dot-new", title: "有程式等你確認" })
+    : null;
+}
+
+const TAB_LABEL: Record<Tab, string> = {
+  wait: "等你",
+  queue: "佇列",
+  activity: "動態",
+  more: "更多",
+};
+
+/**
+ * The tabs: above the right column on a wide screen, where 佇列 is the left
+ * column and has none, and at the bottom of a narrow one. 等你 always shows
+ * its count; 更多 has a dot while a program waits for confirmation.
+ */
+function tabBar(page: Page, view: View, actions: Actions): Child {
+  const marks: Record<Tab, Child> = {
+    wait: waitingPill(view),
+    queue: null,
+    activity: null,
+    more: confirmDot(view),
+  };
+  return h(
+    "nav",
+    { class: "tabs" },
+    TABS.map((tab) =>
+      h(
+        "button",
+        {
+          class: tab === page.tab ? "on" : "",
+          "data-tab": tab,
+          onclick: () => actions.setTab(tab),
+        },
+        TAB_LABEL[tab],
+        marks[tab],
+      ),
+    ),
+  );
+}
+
+function pane(tab: Tab, content: Child): Child {
+  return h("div", { class: "pane", "data-pane": tab }, content);
+}
+
+/** The home page; `confirms` are the programs waiting for the captain's confirmation (frame.ts). */
+export function home(page: Page, view: View, actions: Actions, confirms: Child): Child {
+  const shown = shownOf(page, view);
+  return [
+    page.open.has(FILTER_PANEL) ? filterPanel(page, view, actions) : null,
+    h(
+      "div",
+      { class: "side home", "data-tab": page.tab },
+      sidebar(page, view, actions, shown),
+      h(
+        "div",
+        { class: "tabbed" },
+        tabBar(page, view, actions),
+        owedLine(view, actions, shown),
+        pane("wait", waitPart(page, view, actions, shown)),
+        pane("activity", activityPart(page, view, actions, shown)),
+        pane("more", morePart(page, view, actions, confirms)),
+      ),
+    ),
   ];
 }

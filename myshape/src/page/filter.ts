@@ -1,6 +1,7 @@
 // Which topics the page shows under the captain's filter: hashtag buttons and
 // a keyword box, combined with AND, or a saved view. Only what is shown
-// changes; nothing here talks to the board. Pure, so it is tested on its own.
+// changes; nothing here talks to the board. The home page's tab shares the
+// filter's URL fragment. Pure, so it is tested on its own.
 import type { HashtagView, SavedView } from "#board/hashtags.js";
 import type { BoardView } from "#board/view.js";
 
@@ -22,6 +23,14 @@ export const NO_FILTER: Filter = { any: [], none: [], untagged: false, text: "",
 
 const PREFIX = "#/f/";
 
+/** The home page's four parts: 等你, 佇列, 動態 and 更多. */
+export type Tab = "wait" | "queue" | "activity" | "more";
+
+export const TABS: readonly Tab[] = ["wait", "queue", "activity", "more"];
+
+/** The fragment's keys that belong to the filter; `tab` is the only other one. */
+const FILTER_KEYS = ["any", "none", "untagged", "text", "view"];
+
 /** What the page reads its filter from. */
 export type FilterSource = Pick<
   BoardView,
@@ -40,10 +49,17 @@ function list(value: string | null): string[] {
   return value === null || value === "" ? [] : value.split(",").filter((name) => name !== "");
 }
 
-/** The filter in a URL fragment (`#/f/any=A,B&none=C&untagged=1&text=gpu&view=w`), or null. */
+function queryOf(hash: string): URLSearchParams | null {
+  return hash.startsWith(PREFIX) ? new URLSearchParams(hash.slice(PREFIX.length)) : null;
+}
+
+/**
+ * The filter in a URL fragment (`#/f/any=A,B&none=C&untagged=1&text=gpu&view=w`),
+ * or null when the fragment names no part of a filter, such as one with only a tab.
+ */
 export function parseFilterHash(hash: string): Filter | null {
-  if (!hash.startsWith(PREFIX)) return null;
-  const query = new URLSearchParams(hash.slice(PREFIX.length));
+  const query = queryOf(hash);
+  if (query === null || !FILTER_KEYS.some((name) => query.has(name))) return null;
   return {
     any: list(query.get("any")),
     none: list(query.get("none")),
@@ -53,16 +69,34 @@ export function parseFilterHash(hash: string): Filter | null {
   };
 }
 
-/** The URL fragment for `filter`; empty for no filter. */
-export function filterHash(filter: Filter): string {
-  if (!isActive(filter) && filter.view === null) return "";
+/** The tab in a URL fragment (`#/f/…&tab=queue`); 等你 when it names none or one the page lacks. */
+export function parseTab(hash: string): Tab {
+  const named = queryOf(hash)?.get("tab");
+  return TABS.find((tab) => tab === named) ?? "wait";
+}
+
+/** True when the captain chose a filter or a saved view: the header's 篩選 says so. */
+export function hasFilter(filter: Filter): boolean {
+  return isActive(filter) || filter.view !== null;
+}
+
+/** The fragment's filter part; empty for no filter. */
+function filterQuery(filter: Filter): URLSearchParams {
   const query = new URLSearchParams();
+  if (!hasFilter(filter)) return query;
   if (filter.any.length > 0) query.set("any", filter.any.join(","));
   if (filter.none.length > 0) query.set("none", filter.none.join(","));
   if (filter.untagged) query.set("untagged", "1");
   if (filter.text !== "") query.set("text", filter.text);
   if (filter.view !== null) query.set("view", filter.view);
-  return `${PREFIX}${query.toString()}`;
+  return query;
+}
+
+/** The home page's URL fragment for `filter` and `tab`; empty for no filter on 等你. */
+export function filterHash(filter: Filter, tab: Tab): string {
+  const query = filterQuery(filter);
+  if (tab !== "wait") query.set("tab", tab);
+  return query.size === 0 ? "" : `${PREFIX}${query.toString()}`;
 }
 
 export function viewFilter(view: SavedView & { id: string }): Filter {

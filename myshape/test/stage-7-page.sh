@@ -2,10 +2,11 @@
 # The page in a real browser with an aggregator on the other side (AT10 of the
 # board-interface test plan, as it stands for B4): a headless Firefox walks
 # the page of a board-only root whose other side is stub-plain, bound outside
-# the root and confirmed on the page, and of a root with nothing on the other
-# side (stage-7-page.mjs); then the page at 390 and 1300 px in light and in
-# dark (stage-7-layout.mjs). All run in the hardened environment of
-# stage-7-standalone.sh.
+# the root and confirmed on the page (on a PC's width), of a root with nothing
+# on the other side (on a phone's width), and of a board opened by its remote
+# name through a stand-in for tailscale serve (stage-7-page.mjs); then the page
+# at 390 and 1300 px in light and in dark (stage-7-layout.mjs). All run in the
+# hardened environment of stage-7-standalone.sh.
 # shellcheck disable=SC2016 # jq filters are literal text.
 set -u
 
@@ -115,7 +116,28 @@ test_the_page_with_nothing_connected() {
     node "$ROOT/myshape/test/kit/browser.mjs" "$(sa "$home" open)" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
   assert_equals 0 "$rc" "the browser walk with nothing connected failed: $out"
   sa "$home" stop >/dev/null
-  pass "with nothing connected the page shows one plain note and no red mark (AT10.6)"
+  pass "with nothing connected, on a phone's width, the tabs work and the page shows one plain note and no red mark (AT10.6)"
+}
+
+test_the_page_by_its_remote_name() {
+  local home agg program url out rc=0
+  local name=board-pc.example-tailnet.ts.net login=captain@example.invalid
+  agg=$TMP_ROOT/agg-remote
+  SA_ROOT=$TMP_ROOT/root/remote
+  tb_make_board_root "$SA_ROOT" >/dev/null
+  SA_ENV=("${BASE_ENV[@]}")
+  program=$(sa_install_stub plain "$agg")
+  home=$(sa_home remote)
+  sa_bind "$home" "$program" plain
+  printf '{"host":"%s","login":"%s"}\n' "$name" "$login" > "$home/config/myshape-remote.json"
+  printf '%s\n' '{ "tasks": [] }' > "$agg/plain/main.json"
+  url=$(sa "$home" open) || fail "the board did not start"
+  out=$(TB_AGG="$agg" TB_PAGE_MODE=remote TB_PROXY_PORT="$(tb_free_port)" TB_BOARD_PORT="$(cat "$home/config/myshape-port")" \
+    TB_REMOTE_HOST="$name" TB_REMOTE_LOGIN="$login" TB_REMOTE_URL="http://$name/${url#http://127.0.0.1:*/}" \
+    node "$ROOT/myshape/test/kit/browser.mjs" "$url" "$ROOT/myshape/test/stage-7-page.mjs" 2>&1) || rc=$?
+  assert_equals 0 "$rc" "the browser walk by the remote name failed: $out"
+  sa "$home" stop >/dev/null
+  pass "by the remote name, on a phone's width, 更多 starts with where to confirm the program and nothing offers 確認…"
 }
 
 test_the_page_narrow_and_dark() {
@@ -145,5 +167,5 @@ test_nothing_is_left() {
   pass "no board is left running and no Firstmate file was reached"
 }
 
-fm_test_run test_the_page_with_an_aggregator test_the_page_with_nothing_connected test_the_page_narrow_and_dark \
-  test_nothing_is_left
+fm_test_run test_the_page_with_an_aggregator test_the_page_with_nothing_connected test_the_page_by_its_remote_name \
+  test_the_page_narrow_and_dark test_nothing_is_left

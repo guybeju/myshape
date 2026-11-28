@@ -5,6 +5,11 @@ import fs from "node:fs";
 
 const topic = (...args) => execFileSync(process.env.TB_TOPIC, args, { encoding: "utf8" });
 const has = (text) => `document.body.innerText.includes(${JSON.stringify(text)})`;
+/** Shows a part of the home page by its tab, as the captain does; only the tab on screen is in the page's text. */
+async function showTab(page, label) {
+  await page.click(".tabs button", label);
+  await page.waitFor(`the ${label} tab`, `document.querySelector(".tabs button.on")?.textContent.startsWith(${JSON.stringify(label)}) === true`);
+}
 const queueHas = (queue, name) =>
   `[...document.querySelectorAll('.queue[data-queue="${queue}"] .topic')].some((card) => card.innerText.includes(${JSON.stringify(name)}))`;
 
@@ -42,7 +47,11 @@ const queueOrder = `["high", "normal", "later"].map((queue) => [...document.quer
 
 export default async function run(page) {
   await page.waitFor("the home page", has("等你決定"));
-  for (const title of ["最近的結果", "進行中", "排定的", "未分類", "優先順序", "待辦（不自動開工）"]) {
+  for (const title of ["優先順序", "待辦（不自動開工）"]) {
+    await page.waitFor(`section ${title}`, has(title));
+  }
+  await showTab(page, "動態");
+  for (const title of ["最近的結果", "進行中", "排定的", "未分類"]) {
     await page.waitFor(`section ${title}`, has(title));
   }
   await page.waitFor("the milestone summary", has("PR 開好了"));
@@ -73,13 +82,18 @@ export default async function run(page) {
     throw new Error("a hold with its own card and tagged work must not be listed as untagged");
   // The adapter shows one decision at a time: call-1 (Billing) is in front, the loose call
   // waits its turn as one line, with no question and no buttons.
+  await showTab(page, "等你");
   await page.waitFor("the loose call waiting its turn", has("還有 1 個決定排隊，輪到時才顯示"));
   if (await page.evaluate(has("這個要不要做？"))) throw new Error("a decision waiting its turn must not show its question");
-  // A filter that hides both counts the one in front and the one waiting apart; the line clears it.
+  // A filter (its panel opened from the header) that hides both counts the one in front and
+  // the one waiting apart; the line stays when the panel is closed, and clears it.
+  await page.click("header button", "篩選");
   await page.type('[data-key="filter-text"]', "Login");
-  await page.waitFor("the owed line under a filter", has("這個篩選之外還有：等你決定 1、決定排隊 1"));
+  await page.click('[data-panel="filter"] button', "收起");
+  await page.waitFor("the owed line under a filter", `${has("這個篩選之外還有：等你決定 1、決定排隊 1")} && document.querySelector('[data-panel="filter"]') === null`);
   await page.click("p.owed button", "這個篩選之外還有");
   await page.waitFor("the filter cleared", `!${has("這個篩選之外還有")} && ${has("還有 1 個決定排隊，輪到時才顯示")}`);
+  await showTab(page, "動態");
 
   // 未分類 lists what still needs a topic; finished work without one is folded below it,
   // still taggable. A mate's own record is not work and appears nowhere.
@@ -104,6 +118,7 @@ export default async function run(page) {
   if ((await page.evaluate(`${finished}.querySelectorAll("select").length`)) !== 2)
     throw new Error("each finished item can still be filed under a topic");
 
+  await showTab(page, "等你");
   // Something the captain has to do by hand: its own section, guidance as plain text, each
   // command exactly as written with its own copy button, and a claim that firstmate checks
   // before the item goes away.
@@ -180,6 +195,7 @@ export default async function run(page) {
   const told = () => fs.readFileSync(process.env.TB_LOG, "utf8").includes("stdin=使用者在看板上：「Restart x」撤下（todo-1）");
   for (let tries = 0; tries < 60 && !told(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 150));
   if (!told()) throw new Error("taking the item down must tell firstmate in the captain's words");
+  await showTab(page, "動態");
   await page.waitFor("the agent", has("ship-a"));
   const rowOf = (task) =>
     `[...document.querySelectorAll(".row")].find((row) => row.innerText.includes("${task}")).innerText`;
@@ -188,6 +204,7 @@ export default async function run(page) {
     throw new Error("a worker that has started must not be marked as unstarted");
 
   // Answer the pending decision: option, then one send that says what it will do.
+  await showTab(page, "等你");
   await page.click(".card button", "合併");
   await page.waitFor("the second step", has("送出後解除等待，這一項回到排隊中"));
   await page.waitFor("the confirmation wording", has("看板自己不會合併或捨棄"));
@@ -380,6 +397,7 @@ export default async function run(page) {
     throw new Error("現在 belongs above 高");
   await page.waitFor("the scheduled topic under 排程", `${column}.innerText.includes("Weekly") && ${column}.innerText.includes("下一場")`);
   if (await page.evaluate(queueHas("later", "Weekly"))) throw new Error("a scheduled topic is not a card in 待辦's box");
+  await showTab(page, "動態");
   const later = `[...document.querySelectorAll("section h2")].find((title) => title.textContent === "排定的").closest("section").innerText`;
   if (await page.evaluate(`${later}.includes("Weekly")`)) throw new Error("排定的 must not list a scheduled topic");
   if (await page.evaluate(`${strip}.querySelector("[draggable]") !== null || ${column}.querySelector("[draggable]") !== null`))
