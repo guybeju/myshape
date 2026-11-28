@@ -221,6 +221,12 @@ second mate 的 home 讀不到那一份時（沒有檔或副本、讀不懂、�
 | `bin/fm-fleet-snapshot.sh --board-input`（它的參數解析有這個 case 標籤時），否則 `--json` | `fm-dispatch-plan.sh order` | 和彙整腳本相同（contracts 第 11.1 節） | `dispatch-plan/test/stage-1-order.sh` 全部 |
 | `bin/fm-tasks-axi.sh hold <id> --reason <文字>`、`unhold <id>` | `order` 只印成給 first mate 照著跑的指令 | 指令的形狀 | `stage-1-order.sh` 的 `test_sections` 只檢查印出來的字串 |
 | `bin/fm-captain-hold.sh answers --source myshape` | `fm-board.sh --in-home <id> answers` | 在那個 home 執行並原樣傳回 | `stage-1-tag.sh` 的 `test_in_home_answers_passes_through`（替身） |
+| `bin/fm-capacity.sh` 的報告第一行（`capacity: … load1=… cores=… mem_free_pct=… disk_free_mb=…`，讀不到的是 `unknown`），與它的 `FM_PROC_ROOT_OVERRIDE` | `fm-dispatch-plan.sh order`、`machine` 的主機訊號 | 鍵名與 `key=value` 的形狀；報告模式不連網、不寫檔 | 真的：`dispatch-plan/test/stage-1-order.sh` 的 `test_waits_for_the_machine`、`stage-5-machine.sh` 的 `test_record_describes_the_machine` |
+| `bin/fm-lane-vitals-lib.sh` 的 `fm_lane_vitals_probe <os> 0` 設的 `LV_LOAD5`（要先載入 `bin/fm-timeout-lib.sh`） | 同上的 `load5`，在 subshell 裡載入 | 5 分鐘負載；讀不到是空的 | 真的：`stage-1-order.sh` 的 `test_waits_for_the_machine` |
+| `bin/fm-wake-lib.sh` 的 `fm_local_firstmate_state_dirs`（`FM_LOCAL_FIRSTMATE_STATES`）與 `fm_treehouse_project_lock_path`；`bin/fm-backend.sh` 的 `fm_meta_get`；`bin/fm-project-capacity-lib.sh` 的 `fm_project_capacity_config_dir`、`fm_project_capacity_lookup`、`fm_project_capacity_occupants` | `fm-dispatch-plan.sh machine`，在 subshell 裡載入 | 這台的每個 home、每筆紀錄的鍵、上限檔的格式與佔位的算法都是上游的 | 真的：`stage-5-machine.sh` 的 `test_record_describes_the_machine`、`test_record_names_what_it_could_not_read` |
+| `bin/fm-role.sh report` 的 `fm-role: <role> …` | `machine` 的 `homes[].role` | 第一個字是 role；不連網 | 真的：`stage-6-machines.sh` 的 `test_names_environment_gaps` |
+| 每個 home 的 `state/home-summary.json`（`fm-secondmate-home-summary.v1` 的 `generated_epoch`、`endpoints[].id`、`endpoints[].state`） | `machine` 的 worker 狀態 | 別的 schema 就當成沒有狀態 | `stage-5-machine.sh` 用測試自己寫的摘要，不是框架產生的 |
+| `bin/fm-on.sh <id> <指令> …`（不帶 `--stdin`） | `fm-dispatch-plan.sh machines` | 遠端的 stdout 與 exit code 原樣回來，255 表示連不到 | `stage-6-machines.sh` 用假的 `fm-on.sh`；真的那一條沒有測 |
 | `bin/fm-tasks-axi-lib.sh` 的 `fm_tasks_axi_backend <目錄>` | `fm-topic-board-read.sh` | backlog 根目錄的 backend；不是 `markdown` 就沒有封存檔 | 真的：`stage-1-feed.sh` 的 `test_closed_decisions` |
 
 「真的」是測試執行 checkout 裡真的那支指令；「替身」是測試用自己寫的假指令取代它，只檢查送出去的參數與 stdin，並照劇本回應。替身的那幾列，框架改了輸出或 exit code，測試不會失敗，要靠人對照這兩張表。

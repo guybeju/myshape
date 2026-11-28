@@ -355,7 +355,100 @@ test_lists_only_a_hashtag_when_asked() {
   pass "order --hashtag lists only the lines of topics with the hashtag, in the main home"
 }
 
+# headings <output>: every line that is not an item line, joined by spaces.
+headings() {
+  printf '%s\n' "$1" | grep -v '^  ' | tr '\n' ' '
+}
+
+# While rule-v1 says this machine waits, the work that would be dispatched is
+# listed under 等機器 after one line naming why; an answered decision stays
+# under 可派, and the other sections do not change. A machine with room adds
+# nothing.
+test_waits_for_the_machine() {
+  local home out busy
+  home=$(tb_make_home order-busy)
+  tb_write_topics "$home"
+  write_backlog "$home"
+  write_tags "$home"
+  dp_host 9.19 3.00 50 102400 4
+  out=$(tb_run "$home" "$PLAN" order 2> "$TMP_ROOT/order-busy.err") || fail "order failed on a busy machine"
+  assert_equals "" "$(cat "$TMP_ROOT/order-busy.err")" "order on a busy machine must not write to stderr"
+  busy="這台機器先等（rule-v1：cpu: 1 分鐘負載 9.19，4 核心）；「等機器」的項目先不派，下一輪再看；captain 明講要做的照派。"
+  assert_equals "$busy 可派： 等機器： 該 hold： 該解除： 停著： 先不派： " "$(headings "$out")" \
+    "the line naming why must come first and 等機器 right after 可派"
+  assert_equals "d1 " "$(section "$out" "可派：")" "only an answered decision may stay dispatchable while the machine waits"
+  assert_equals "h1 h2 r1 n1 u1 p1 " "$(section "$out" "等機器：")" "the work must wait for the machine, in dispatch order"
+  printf '%s\n' "$out" | grep '^  r1	' | grep -q '先照「該解除」解除' ||
+    fail "an item waiting for the machine and still under the board's hold must say so"
+  assert_equals "l1 a1 " "$(section "$out" "該 hold：")" "the holds must not change while the machine waits"
+  assert_equals "o1 b1 c1 " "$(section "$out" "先不派：")" "先不派 must not change while the machine waits"
+  dp_host 1.00 15.00 50 102400 20
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_not_contains "$out" "等機器" "a 5-minute load under 0.85 x cores must not hold anything"
+  dp_host 1.00 17.00 50 102400 20
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_contains "$out" "（rule-v1：cpu: 5 分鐘負載 17 ≥ 17（核心數 × 0.85））" "a 5-minute load at 0.85 x cores must wait"
+  dp_host 0.10 0.10 9 102400 4
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_contains "$out" "（rule-v1：memory: 可用 9%）" "memory under 10% free must wait"
+  dp_host 0.10 0.10 50 5119 4
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_contains "$out" "（rule-v1：disk: 剩 5119 MB）" "disk under 5120 MB must wait"
+  dp_calm_host
+  out=$(tb_run "$home" "$PLAN" order)
+  assert_equals "可派： 該 hold： 該解除： 停著： 先不派： " "$(headings "$out")" "a machine with room must add no line"
+  assert_equals "h1 h2 r1 n1 u1 p1 d1 " "$(section "$out" "可派：")" "a machine with room must dispatch as before"
+  pass "order lists the work under 等機器 while rule-v1 says this machine waits"
+}
+
+# When the machine's signals cannot be read, order says so in one line and
+# dispatches as before: unknown never holds anything.
+test_falls_open_when_the_machine_is_unknown() {
+  local home root out
+  home=$(tb_make_home order-unknown)
+  tb_write_topics "$home"
+  write_backlog "$home"
+  write_tags "$home"
+  dp_host 0.10 0.10 - 102400 4
+  out=$(tb_run "$home" "$PLAN" order) || fail "order failed without a memory reading"
+  dp_calm_host
+  assert_equals "看不出這台機器能不能再加（rule-v1：缺少必要訊號：mem_free_pct）；照「可派」派。 可派： 該 hold： 該解除： 停著： 先不派： " \
+    "$(headings "$out")" "an unreadable memory must say so in one line"
+  assert_equals "h1 h2 r1 n1 u1 p1 d1 " "$(section "$out" "可派：")" "an unknown machine must dispatch as before"
+  root="$TMP_ROOT/order-unknown-root"
+  order_root "$root" none
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" "$root/bin/fm-dispatch-plan.sh" order) ||
+    fail "order failed in a code root without fm-capacity.sh"
+  assert_contains "$out" "看不出這台機器能不能再加（rule-v1：缺少必要訊號：load1、cores、mem_free_pct）；照「可派」派。" \
+    "a code root without upstream's probes must say the machine is unknown"
+  assert_equals "h1 h2 r1 n1 u1 p1 d1 " "$(section "$out" "可派：")" "without upstream's probes order must dispatch as before"
+  pass "order dispatches as before, with one line, when the machine is unknown"
+}
+
+# order --tsv: the same items, one tab-separated line each, and no other line.
+test_tsv_lists_the_items_for_a_program() {
+  local home out
+  home=$(tb_make_home order-tsv)
+  tb_write_topics "$home"
+  write_backlog "$home"
+  write_tags "$home"
+  out=$(tb_run "$home" "$PLAN" order --tsv) || fail "order --tsv failed"
+  assert_equals "dispatch:h1 dispatch:h2 dispatch:r1 dispatch:n1 dispatch:u1 dispatch:p1 dispatch:d1 hold:l1 hold:a1 release:r1 parked:l2 not-yet:o1 not-yet:b1 not-yet:c1 " \
+    "$(printf '%s\n' "$out" | awk -F'\t' '{ printf "%s:%s ", $1, $2 }')" "every section must be listed in order"
+  assert_contains "$out" "$(printf 'dispatch\th1\tbilling\t帳務重構\thigh\t0\tsample\twork')" "a line must carry every column"
+  assert_contains "$out" "$(printf 'dispatch\td1\t\t（未分類）\tnone\t0\tsample\tdecision')" "an answered decision must say so"
+  assert_equals "8" "$(printf '%s\n' "$out" | awk -F'\t' '{ print NF }' | sort -u)" "every line must have eight columns"
+  dp_host 9.19 9.19 50 102400 4
+  out=$(tb_run "$home" "$PLAN" order --tsv)
+  dp_calm_host
+  assert_equals "dispatch:d1 machine-wait:h1 machine-wait:h2 " \
+    "$(printf '%s\n' "$out" | awk -F'\t' 'NR <= 3 { printf "%s:%s ", $1, $2 }')" "a busy machine must list the work as machine-wait"
+  expect_code 2 "$(tb_code "$home" "$PLAN" order --tsv extra)" "order --tsv with another argument"
+  pass "order --tsv lists every item with its section for a program"
+}
+
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check test_lists_only_a_hashtag_when_asked \
   test_falls_open_without_a_usable_topic_file test_ranks_an_untagged_item_by_its_topic_line \
   test_resolves_archived_blockers_and_lists_every_item \
-  test_falls_open_when_the_snapshot_fails test_asks_for_board_input_when_the_snapshot_offers_it
+  test_falls_open_when_the_snapshot_fails test_asks_for_board_input_when_the_snapshot_offers_it \
+  test_waits_for_the_machine test_falls_open_when_the_machine_is_unknown test_tsv_lists_the_items_for_a_program

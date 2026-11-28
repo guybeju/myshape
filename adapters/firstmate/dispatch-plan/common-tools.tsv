@@ -1,0 +1,11 @@
+# The tools every machine that runs Firstmate fork work should have, beyond
+# upstream's own toolchain, one per line: <name><TAB><lowest version, or ->.
+# fm-dispatch-plan.sh machine records the version of each one it finds
+# (<name> --version); machines lists each missing or older one under 環境差異
+# as a gap to close. The lowest versions are FORK-SETUP's node and
+# bin/fm-lint.sh's required ShellCheck.
+node	22
+pnpm	-
+firefox	-
+jq	-
+shellcheck	0.11.0
