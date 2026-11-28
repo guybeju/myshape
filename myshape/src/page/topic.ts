@@ -28,6 +28,12 @@ import type { Actions, Page, View } from "./state.js";
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
 const MAX_UPDATES = 200;
 
+/** What differs between editing a topic's name and its goal. */
+const EDITABLE = {
+  name: { op: "rename", tag: "h2", class: "", label: "編輯名稱" },
+  goal: { op: "goal", tag: "span", class: "goal", label: "編輯目標" },
+} as const;
+
 /** A line of text with an edit button that swaps it for an input in place. */
 function editable(
   page: Page,
@@ -37,15 +43,24 @@ function editable(
   text: string,
 ): Child {
   const key = `${field}:${id}`;
-  const op = field === "name" ? "rename" : "goal";
+  const shape = EDITABLE[field];
   if (!page.editing.has(key)) {
     return [
-      h(field === "name" ? "h2" : "span", { class: field === "goal" ? "goal" : "" }, text),
-      h("button", { class: "link", onclick: () => actions.edit(key, true) }, "編輯"),
+      h(shape.tag, { class: shape.class }, text),
+      h(
+        "button",
+        {
+          class: "link edit",
+          "aria-label": shape.label,
+          title: shape.label,
+          onclick: () => actions.edit(key, true),
+        },
+        "✎",
+      ),
     ];
   }
   const save = (): void => {
-    actions.topic(op, { id, value: page.drafts.get(key) ?? text });
+    actions.topic(shape.op, { id, value: page.drafts.get(key) ?? text });
     actions.edit(key, false);
   };
   const input = draftInput(page, actions, key, "", save);
@@ -297,7 +312,7 @@ function agentCard(page: Page, actions: Actions, agent: AgentView): Child {
       : h(
           "div",
           { class: "note" },
-          "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。",
+          `「已送達」只代表訊息到了轉達的 ${agent.home}，它再轉給這個 agent 可能還要一點時間。`,
         ),
     writeRows(
       page,

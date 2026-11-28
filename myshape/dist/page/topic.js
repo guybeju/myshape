@@ -7,18 +7,28 @@ import { topicSchedule } from "./schedule-parts.js";
 import { queueCards } from "./cards.js";
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
 const MAX_UPDATES = 200;
+/** What differs between editing a topic's name and its goal. */
+const EDITABLE = {
+    name: { op: "rename", tag: "h2", class: "", label: "編輯名稱" },
+    goal: { op: "goal", tag: "span", class: "goal", label: "編輯目標" },
+};
 /** A line of text with an edit button that swaps it for an input in place. */
 function editable(page, actions, id, field, text) {
     const key = `${field}:${id}`;
-    const op = field === "name" ? "rename" : "goal";
+    const shape = EDITABLE[field];
     if (!page.editing.has(key)) {
         return [
-            h(field === "name" ? "h2" : "span", { class: field === "goal" ? "goal" : "" }, text),
-            h("button", { class: "link", onclick: () => actions.edit(key, true) }, "編輯"),
+            h(shape.tag, { class: shape.class }, text),
+            h("button", {
+                class: "link edit",
+                "aria-label": shape.label,
+                title: shape.label,
+                onclick: () => actions.edit(key, true),
+            }, "✎"),
         ];
     }
     const save = () => {
-        actions.topic(op, { id, value: page.drafts.get(key) ?? text });
+        actions.topic(shape.op, { id, value: page.drafts.get(key) ?? text });
         actions.edit(key, false);
     };
     const input = draftInput(page, actions, key, "", save);
@@ -154,7 +164,7 @@ function agentCard(page, actions, agent) {
         ? null
         : h("span", { class: "note" }, `最後更新 ${when(agent.updated_at)}`), agent.stale ? h("span", { class: "pill warn" }, "資料過期") : null), h("div", { class: "note" }, `${agent.state} ${agent.detail}`), h("div", { class: "btns" }, draftInput(page, actions, key, "只給這個 agent 的訊息", send), h("button", { onclick: send }, agent.home === "main" ? "直送" : `經 ${agent.home} 轉達`)), agent.home === "main"
         ? null
-        : h("div", { class: "note" }, "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。"), writeRows(page, actions, (write) => write.kind === "direct" && write.home === agent.home && write.task === agent.task));
+        : h("div", { class: "note" }, `「已送達」只代表訊息到了轉達的 ${agent.home}，它再轉給這個 agent 可能還要一點時間。`), writeRows(page, actions, (write) => write.kind === "direct" && write.home === agent.home && write.task === agent.task));
 }
 /** Backlog items of this topic that no worker has been dispatched for, folded by default. */
 function queued(view, id) {

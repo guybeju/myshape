@@ -80,7 +80,7 @@ first mate 這一側：fm-board.sh（feed、deliver、bind、tag、setup、帶 t
 | 原始碼放哪 | 頂層新目錄 `myshape/`：`src/`、`dist/`、`public/`、`rules/`、`spec/`、`test/`。Bash 入口在 `bin/`（`fm-on.sh` 只認那裡） | [contracts](contracts.markdown) 第 2 節 |
 | TypeScript 怎麼變成能跑的東西 | 用釘死版本的 `tsc` 編成 `.js` 提交進 git，執行期只跑 `dist/`。原因：這台的 `node` 沒有 TypeScript 支援（實測） | [第二段](stage-2-service.markdown) |
 | 規則範本放哪 | `fm-board/rules/*.md.tmpl`（原本在 `myshape/rules/`，規則是 first mate 的，後來搬到 first mate 這一側）。不能是 `.md`，也不能放 `config/` 或 `data/` | [adapter](../../fm-board/spec/adapter.markdown) 第 6 節 |
-| 頁面上改名、改目標、封存、議題併議題放哪 | 都在議題頁：標題與目標旁的「編輯」鈕；標題列的「⋯」選單放「封存」與「併入其他議題…」 | [第五段](stage-5-browser.markdown) |
+| 頁面上改名、改目標、封存、議題併議題放哪 | 都在議題頁：標題與目標旁的 ✎ 鈕；標題列的「⋯」選單放「封存」與「併入其他議題…」 | [第五段](stage-5-browser.markdown) |
 | 執行期的 npm 相依 | 沒有。只用 Node 的內建模組；開發期只有 `typescript` 與 `@types/node` | [第二段](stage-2-service.markdown) |
 
 另外定了 spec 自己的位置：`myshape/spec/*.markdown`，由第一段的 PR 帶進 fork。
@@ -89,7 +89,7 @@ first mate 這一側：fm-board.sh（feed、deliver、bind、tag、setup、帶 t
 
 - 議題與 agent 的真正多對多。
 - 高優先插隊、暫停進行中的工作。
-- 手機或對外存取。
+- 手機或對外的連線。頁面本身在手機的寬度、觸控與深色下的樣子在範圍內，見[第五段](stage-5-browser.markdown)的「深色、觸控與窄螢幕」。
 - 修改上游既有檔案，包含派工腳本與 `AGENTS.md`（例外見 contracts 第 2 節）。
 - 由獨立 agent 定期改寫議題摘要。
 - 貢獻回 firstmate 上游。

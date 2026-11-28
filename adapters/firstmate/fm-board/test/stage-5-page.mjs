@@ -315,7 +315,7 @@ export default async function run(page) {
   await page.waitFor("the closed decision's records, newest first", `${decisionRow}.querySelectorAll(".upd").length === 2 && ${decisionRow}.querySelector(".upd").innerText.includes("在看板回答") && ${decisionRow}.querySelectorAll(".upd")[1].innerText.includes("待決事項「A call」已開")`);
   if (!(await page.evaluate(`[...document.querySelectorAll("section")].find((box) => box.querySelector("h2")?.textContent === "更新").innerText.includes("在看板回答 main/call-1：合併")`)))
     throw new Error("a closed decision's lines stay in 更新");
-  await page.click("button", "編輯");
+  await page.click('button[aria-label="編輯名稱"]');
   await page.type('[data-key="name:billing"]', "Billing X");
   await page.click("button", "儲存");
   await page.waitFor("the new name", `document.querySelector(".titleline h2")?.textContent === "Billing X"`);
