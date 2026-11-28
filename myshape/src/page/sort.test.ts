@@ -46,6 +46,13 @@ describe("the order of a queue's cards", () => {
     ]);
   });
 
+  it("counts a card with no time at all as older than every other", () => {
+    const at = (id: string): string | null | undefined =>
+      id === "nul" ? null : id === "gone" ? undefined : born[id];
+    expect(sortCards(["nul", "a", "gone", "b"], "newest", at)).toEqual(["b", "a", "nul", "gone"]);
+    expect(sortCards(["nul", "a", "gone", "b"], "oldest", at)).toEqual(["nul", "gone", "a", "b"]);
+  });
+
   it("lists an empty queue as empty", () => {
     for (const order of ["priority", "newest", "oldest"] as const)
       expect(sortCards([], order, createdAt)).toEqual([]);

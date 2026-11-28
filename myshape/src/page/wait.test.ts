@@ -64,12 +64,12 @@ describe("the creation time of a card in 等你決定", () => {
 
   it("is nothing when the board has no time for the card", () => {
     const view = { ...board(), holds: [{ home: "main", task: "h-old", hold_set: null }] };
-    expect(turnCreatedAt(view as WaitSource, turn("hold", "main\th-old", "gpu"))).toBe("");
-    expect(turnCreatedAt(view as WaitSource, turn("hold", "main\tgone", "gpu"))).toBe("");
-    expect(turnCreatedAt(view as WaitSource, turn("close", "web", "web"))).toBe("");
-    expect(turnCreatedAt(view as WaitSource, turn("close", "nowhere", null))).toBe("");
-    expect(turnCreatedAt(view as WaitSource, turn("idle", "gpu", "gpu"))).toBe("");
-    expect(turnCreatedAt(view as WaitSource, turn("stall", "stall:gone", null))).toBe("");
+    expect(turnCreatedAt(view as WaitSource, turn("hold", "main\th-old", "gpu"))).toBeNull();
+    expect(turnCreatedAt(view as WaitSource, turn("hold", "main\tgone", "gpu"))).toBeUndefined();
+    expect(turnCreatedAt(view as WaitSource, turn("close", "web", "web"))).toBeNull();
+    expect(turnCreatedAt(view as WaitSource, turn("close", "nowhere", null))).toBeUndefined();
+    expect(turnCreatedAt(view as WaitSource, turn("idle", "gpu", "gpu"))).toBeUndefined();
+    expect(turnCreatedAt(view as WaitSource, turn("stall", "stall:gone", null))).toBeUndefined();
   });
 });
 

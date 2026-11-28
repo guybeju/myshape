@@ -41,9 +41,12 @@ export function cardOrder(
 /** Before every time a Date can hold (±8.64e15 ms), and still a number a difference can be taken of. */
 const BEFORE_ALL = Number.MIN_SAFE_INTEGER;
 
-/** A creation time as a moment; one that cannot be read is older than every other. */
-function moment(created: string): number {
-  const at = Date.parse(created);
+/**
+ * A creation time as a moment; none, or one that cannot be read, is older than
+ * every other. null and undefined read as words no time parses as.
+ */
+function moment(created: string | null | undefined): number {
+  const at = Date.parse(String(created));
   return Number.isNaN(at) ? BEFORE_ALL : at;
 }
 
@@ -55,7 +58,7 @@ function moment(created: string): number {
 export function sortCards<Card>(
   cards: readonly Card[],
   order: CardOrder,
-  createdAt: (card: Card) => string,
+  createdAt: (card: Card) => string | null | undefined,
 ): Card[] {
   if (order === "priority") return [...cards];
   const direction = order === "newest" ? -1 : 1;

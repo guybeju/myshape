@@ -24,9 +24,9 @@ const CREATED_AT: Record<TurnView["kind"], TimeOf> = {
   stall: (view, key) => view.stalls.find((card) => card.key === key)?.since,
 };
 
-/** When a card of 等你決定 came to be; "" when the board has no time for it. */
-export function turnCreatedAt(view: WaitSource, turn: TurnView): string {
-  return CREATED_AT[turn.kind](view, turn.key) ?? "";
+/** When a card of 等你決定 came to be; null or undefined when the board has no time for it. */
+export function turnCreatedAt(view: WaitSource, turn: TurnView): string | null | undefined {
+  return CREATED_AT[turn.kind](view, turn.key);
 }
 
 /**

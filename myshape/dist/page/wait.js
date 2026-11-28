@@ -7,9 +7,9 @@ const CREATED_AT = {
     idle: (view, key) => view.idle.find((card) => card.topic === key)?.since,
     stall: (view, key) => view.stalls.find((card) => card.key === key)?.since,
 };
-/** When a card of 等你決定 came to be; "" when the board has no time for it. */
+/** When a card of 等你決定 came to be; null or undefined when the board has no time for it. */
 export function turnCreatedAt(view, turn) {
-    return CREATED_AT[turn.kind](view, turn.key) ?? "";
+    return CREATED_AT[turn.kind](view, turn.key);
 }
 /**
  * The cards of 等你決定 that `shows` lets through: the ones in front, in

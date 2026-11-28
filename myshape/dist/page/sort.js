@@ -18,9 +18,12 @@ export function cardOrder(page, views) {
 }
 /** Before every time a Date can hold (±8.64e15 ms), and still a number a difference can be taken of. */
 const BEFORE_ALL = Number.MIN_SAFE_INTEGER;
-/** A creation time as a moment; one that cannot be read is older than every other. */
+/**
+ * A creation time as a moment; none, or one that cannot be read, is older than
+ * every other. null and undefined read as words no time parses as.
+ */
 function moment(created) {
-    const at = Date.parse(created);
+    const at = Date.parse(String(created));
     return Number.isNaN(at) ? BEFORE_ALL : at;
 }
 /**
