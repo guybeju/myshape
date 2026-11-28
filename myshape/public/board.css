@@ -28,6 +28,7 @@ section{margin-bottom:20px}
 /* A card a finger lifted by its ⠿ (touch.ts) shows in the inverse colours. */
 .topic.dragging.lifted{opacity:1;background:var(--ink);color:var(--bg);outline:2px solid var(--accent);box-shadow:0 6px 18px var(--shadow)}
 .topic.lifted .link,.topic.lifted .note,.topic.lifted .handle{color:inherit}
+.topic.lifted .pill.warn{color:var(--ink)}
 .topic .handle{display:none}
 .topic .name{font-weight:600}
 .goal{color:var(--mute);font-size:13px}
