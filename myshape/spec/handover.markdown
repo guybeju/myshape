@@ -199,6 +199,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - `find` 平常每個議題只印最近八筆來歷（`--all` 印全部）；移動與改目標記在來歷裡，但只有 `--all` 才印，所以不會把合併、拆分擠掉；來歷不記建立議題；`split` 不帶 task 會建一個空議題，新名稱可以和來源相同。
 - `install-rules` 會換掉結束標記之後同一行的文字（有備份）；別處有一行以標記開頭時拒絕安裝（C37）。
 - 程式退回視圖沒有 `order` 的舊版時，下一次存 `hashtags.json` 會丟掉每個視圖的排列，回到新版時那些視圖是照優先順序（[卡片排列](card-sort.markdown)）。
+- 程式退回沒有 `aggregator_must_mark_new` 的舊版時，下一次存 `hashtags.json` 會丟掉這個設定，舊版也不要求 `--new`；回到新版時它是預設的「要」，使用者關掉過的要再關一次。舊版不認得 `--new` 與 `--new-hashtag`，用了是用法錯。
 - 程式退回沒有 `history` 或 `todos` 欄位的舊版時，下一次存檔會丟掉這兩個欄位（見 [rollout](../../fm-board/spec/rollout.markdown)）；退回看板自己存項目之前的版本時，看板上的項目不會顯示（`data/myshape/todos.json` 留著，回到新版又會出現）。
 - first mate 自己直接做、沒有派 worker 的項目，在關掉之前會被 `order` 列在「可派」。
 - 經 secondmate 轉達的訊息，看板在送到 secondmate 時就記成已送達。secondmate 之後回報轉不出去，頁面不會改，使用者只會從 first mate 在聊天裡的回報知道。

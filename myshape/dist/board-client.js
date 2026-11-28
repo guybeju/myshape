@@ -289,7 +289,7 @@ const TOPIC_COMMANDS = {
     create: {
         positional: ["name"],
         valued: ["goal", "id", "queue"],
-        repeated: { hashtag: "hashtags" },
+        repeated: { hashtag: "hashtags", "new-hashtag": "new_hashtags" },
         required: ["goal"],
     },
     merge: { positional: ["from", "into"], valued: ["reason"] },
@@ -459,20 +459,34 @@ async function todoAdd(config, paths, args) {
     await ensureRunning(config, paths);
     return finish(await send(config, paths, request("todo-add", item)));
 }
-const HASHTAG_USAGE = "hashtag 的用法：myshape.sh hashtag <議題 id> +<名稱>，或 myshape.sh hashtag <議題 id> --remove <名稱>（myshape.sh --help 看用法）";
+const HASHTAG_USAGE = "hashtag 的用法：myshape.sh hashtag <議題 id> +<名稱> [--new]，或 myshape.sh hashtag <議題 id> --remove <名稱>（myshape.sh --help 看用法）";
 /** The name in a `+NAME` argument, or null when the argument is not one. */
 function addedName(change) {
     return change !== undefined && /^\+./u.test(change) ? change.slice(1) : null;
 }
-/** `hashtag <topic> +NAME` puts a hashtag on, `hashtag <topic> --remove NAME` takes it off. */
+/**
+ * `hashtag <topic> +NAME` puts a hashtag on, with `--new` when the name is
+ * meant as a new hashtag; `hashtag <topic> --remove NAME` takes it off.
+ */
 function hashtagRequest(args) {
-    const parsed = parseArgs(args, ["remove"]);
+    const parsed = parseArgs(args, ["remove"], ["new"]);
     const [id, change, ...rest] = parsed.positional;
     const remove = parsed.flags.get("remove");
-    const name = remove === undefined ? addedName(change) : change === undefined ? remove : null;
-    if (id === undefined || rest.length > 0 || typeof name !== "string")
+    const said = parsed.flags.has("new");
+    if (id === undefined || rest.length > 0)
         throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
-    return request(remove === undefined ? "hashtag-add" : "hashtag-remove", { id, name });
+    if (remove === undefined)
+        return addRequest(id, change, said);
+    if (change !== undefined || said || typeof remove !== "string")
+        throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+    return request("hashtag-remove", { id, name: remove });
+}
+/** `hashtag <topic> +NAME [--new]`. */
+function addRequest(id, change, said) {
+    const name = addedName(change);
+    if (name === null)
+        throw new Exit(EXIT_USAGE, HASHTAG_USAGE);
+    return request("hashtag-add", { id, name, ...(said ? { new: true } : {}) });
 }
 async function topicCommand(config, paths, sub, args) {
     const shape = TOPIC_COMMANDS[sub];

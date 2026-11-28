@@ -165,7 +165,9 @@ order new work is handed out in (`dispatch-order.ts`), and then:
 hashtag on a topic or takes it off through `bin/myshape.sh hashtag`, only
 when the name is a hashtag name and the captain's `aggregator_may_tag`,
 `aggregator_may_create`, lock, per-topic, board-wide and hourly limits (read
-from `hashtags.json` and `events.jsonl`) allow it. Nothing calls it yet: which
+from `hashtags.json` and `events.jsonl`) allow it. A caller that means a name
+as a new hashtag says so, and the command then carries `--new`: the board
+opens a name it does not have only then. Nothing calls it yet: which
 output may ask for a hashtag change comes with the board's tag list. The
 agent creates no topic, and creates, edits, pauses, resumes, skips or deletes
 no schedule: its only schedule commands are `take` and `close … done`.

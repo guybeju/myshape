@@ -530,7 +530,11 @@ describe.skipIf(!IN_CI)(
         };
         const board = new BoardCommand(recording, boardCommand, scratch.home, scratch.env);
         const tagger = new Tagger(scratch.home, board, () => Date.now());
-        expect(await tagger.change("ask", "add", "AGG_TEST")).toEqual({ sent: true });
+        expect(await tagger.change("ask", "add", "AGG_TEST")).toEqual({
+          sent: false,
+          reason: expect.stringContaining("#AGG_TEST 是看板還沒有的 hashtag，這次沒有改。"),
+        });
+        expect(await tagger.change("ask", "add", "AGG_TEST", true)).toEqual({ sent: true });
         expect(records("hashtag.added").map((record) => [record["by"], record["topic"]])).toEqual([
           ["aggregator", "ask"],
         ]);
@@ -549,7 +553,10 @@ describe.skipIf(!IN_CI)(
           sent: false,
           reason: HASHTAG_REASON.mayTag,
         });
-        expect(sent).toEqual([["hashtag", "ask", "+AGG_TEST"]]);
+        expect(sent).toEqual([
+          ["hashtag", "ask", "+AGG_TEST"],
+          ["hashtag", "ask", "+AGG_TEST", "--new"],
+        ]);
         expect(records("hashtag.removed")).toEqual([]);
 
         for (const call of query.calls) {

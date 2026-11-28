@@ -23,6 +23,7 @@ export function isCardOrder(value) {
 export const DEFAULT_SETTINGS = {
     aggregator_may_tag: true,
     aggregator_may_create: true,
+    aggregator_must_mark_new: true,
     per_topic_max: 8,
     board_max: 50,
     aggregator_hourly_max: 20,
@@ -34,7 +35,11 @@ export const SETTING_RANGES = {
     aggregator_hourly_max: [0, 1000],
 };
 const NUMBER_SETTINGS = Object.keys(SETTING_RANGES);
-const FLAG_SETTINGS = ["aggregator_may_tag", "aggregator_may_create"];
+const FLAG_SETTINGS = [
+    "aggregator_may_tag",
+    "aggregator_may_create",
+    "aggregator_must_mark_new",
+];
 /** The aggregator's changes the hourly cap counts and the captain may take back. */
 export const WATCHED = {
     changes: new Set(["hashtag.added", "hashtag.removed"]),
@@ -77,6 +82,93 @@ export function topicsWith(store, name) {
         .filter(([, names]) => names.includes(name))
         .map(([id]) => id)
         .toSorted();
+}
+// ---- spellings close to a name ----
+/** At most this many close hashtags are named in a reply. */
+export const NEAR_MAX = 5;
+/** At most this many of the most used hashtags are named in a refusal. */
+export const MOST_USED_MAX = 20;
+/** `key` without its underscores, as code points. */
+function bare(key) {
+    return [...key.replaceAll("_", "")];
+}
+/**
+ * The edit distance of two code-point lists, counting a swap of two
+ * neighbours as one edit (Damerau-Levenshtein, optimal string alignment).
+ * A read before the start of a list is undefined, which matches no code
+ * point, so the first row and column take no swap.
+ */
+export function editDistance(a, b) {
+    let before = [];
+    let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (const [i, x] of a.entries()) {
+        const next = [i + 1];
+        for (const [j, y] of b.entries()) {
+            const kept = row[j] + (x === y ? 0 : 1);
+            let best = Math.min(row[j + 1] + 1, next[j] + 1, kept);
+            if (x === b[j - 1] && a[i - 1] === y)
+                best = Math.min(best, before[j - 1] + 1);
+            next.push(best);
+        }
+        before = row;
+        row = next;
+    }
+    return row[b.length];
+}
+/**
+ * How close two keys are once their underscores are dropped: 0 when they are
+ * the same, 1 when one holds the other and the shorter has at least 2 code
+ * points, 2 when they are within 1 edit (the shorter has at most 5 code
+ * points) or 2 edits (longer); null when none of these.
+ */
+export function nearTier(one, two) {
+    const a = bare(one);
+    const b = bare(two);
+    const x = a.join("");
+    const y = b.join("");
+    if (x === y)
+        return 0;
+    const shorter = Math.min(a.length, b.length);
+    if (shorter >= 2 && (x.includes(y) || y.includes(x)))
+        return 1;
+    if (shorter === 0)
+        return null;
+    return editDistance(a, b) <= (shorter <= 5 ? 1 : 2) ? 2 : null;
+}
+/** The board's hashtags in the order of their keys (one hashtag per key). */
+function inKeyOrder(store) {
+    const byKey = new Map(Object.entries(store.hashtags).map(([name, entry]) => [entry.key, name]));
+    return [...byKey.keys()].toSorted().map((key) => {
+        const name = byKey.get(key);
+        const entry = store.hashtags[name];
+        return { key, hashtag: { name, topics: topicsWith(store, name).length, locked: entry.locked } };
+    });
+}
+/**
+ * The board's hashtags whose key is close to `key` (nearTier), at most
+ * NEAR_MAX: the closest tier first, within a tier the most used first, then
+ * by key. The hashtag whose key is `key` itself is never one of them. Only an
+ * order to show; it decides nothing.
+ */
+export function nearHashtags(store, key) {
+    const found = [];
+    for (const entry of inKeyOrder(store)) {
+        const tier = entry.key === key ? null : nearTier(key, entry.key);
+        if (tier !== null)
+            found.push({ tier, hashtag: entry.hashtag });
+    }
+    return found
+        .toSorted((a, b) => a.tier - b.tier || b.hashtag.topics - a.hashtag.topics)
+        .slice(0, NEAR_MAX)
+        .map((entry) => entry.hashtag);
+}
+/** The hashtags on at least one topic, the most used first, then by key; at most `max`. */
+export function mostUsedHashtags(store, max) {
+    return inKeyOrder(store)
+        .map((entry) => entry.hashtag)
+        .filter((hashtag) => hashtag.topics > 0)
+        .toSorted((a, b) => b.topics - a.topics)
+        .slice(0, max);
 }
 // ---- reading the file ----
 function parseEntry(raw, key) {
@@ -257,6 +349,54 @@ function creationProblem(ctx, fresh) {
         return `看板最多 ${settings.board_max} 個 hashtag，已經有 ${count} 個；${tags(fresh)} 開不了，這次沒有改。使用者可以在頁面上開，或調高上限。`;
     return null;
 }
+const SAID_NOTHING_NEW = { names: [], via: "hashtag" };
+/** `#NAME（N 個議題）`, with the lock when it has one. */
+function listedText(entry) {
+    const lock = entry.locked ? "；鎖上：只有使用者能貼" : "";
+    return `#${entry.name}（${entry.topics} 個議題${lock}）`;
+}
+/** The close hashtags of every name in `fresh`, each once, at most NEAR_MAX. */
+function nearAll(store, fresh) {
+    const found = new Map();
+    for (const name of fresh)
+        for (const entry of nearHashtags(store, hashtagKey(name)))
+            found.set(entry.name, entry);
+    return [...found.values()].slice(0, NEAR_MAX);
+}
+/** What the board has, for a refusal: the close ones, then the most used, then how many. */
+function boardList(store, fresh) {
+    const count = Object.keys(store.hashtags).length;
+    const near = nearAll(store, fresh);
+    const shown = new Set(near.map((entry) => entry.name));
+    const used = mostUsedHashtags(store, MOST_USED_MAX + shown.size)
+        .filter((entry) => !shown.has(entry.name))
+        .slice(0, MOST_USED_MAX);
+    const parts = [
+        near.length === 0 ? null : `看板上相近的：${near.map(listedText).join("、")}`,
+        used.length === 0 ? null : `常用的：${used.map(listedText).join("、")}`,
+        `共 ${count} 個，全部用 myshape.sh hashtags 看。`,
+    ];
+    return parts.filter((part) => part !== null).join("；");
+}
+function againText(opening, topic, fresh) {
+    if (opening.via === "create")
+        return `把這些名稱從 --hashtag 改成 --new-hashtag 再跑一次：${fresh.map((name) => `--new-hashtag ${name}`).join(" ")}`;
+    return `加 --new 再跑一次：myshape.sh hashtag ${topic.id} +${fresh[0]} --new`;
+}
+/** Why the aggregator may not open `fresh` without saying they are new, or null. */
+function unmarkedProblem(ctx, topic, fresh, opening) {
+    if (ctx.by !== "aggregator" || !ctx.store.settings.aggregator_must_mark_new)
+        return null;
+    const said = new Set(opening.names.map(hashtagKey));
+    const unmarked = fresh.filter((name) => !said.has(hashtagKey(name)));
+    if (unmarked.length === 0)
+        return null;
+    const head = `${tags(unmarked)} 是看板還沒有的 hashtag，這次沒有改。`;
+    const again = againText(opening, topic, unmarked);
+    if (Object.keys(ctx.store.hashtags).length === 0)
+        return `${head}看板上還沒有任何 hashtag；確定要開新的，${again}`;
+    return `${head}${boardList(ctx.store, unmarked)}意思相同就改貼那一個；只有確定意思不同、要開新的，才${again}`;
+}
 /** The names asked for, as the spellings to put on: known ones as shown, new ones as given. */
 function wanted(store, raw) {
     const names = [];
@@ -290,12 +430,15 @@ function overMax(ctx, topic, count) {
 function lockedOf(store, names) {
     return names.filter((name) => store.hashtags[name]?.locked === true);
 }
-/** Why `adding` may not go on a topic that has `count` hashtags now, or null. */
-function addProblem(ctx, topic, count, adding, fresh) {
-    const problem = aggregatorProblem(ctx, lockedOf(ctx.store, adding)) ?? creationProblem(ctx, fresh);
+/** Why `change.adding` may not go on the topic, or null. */
+function addProblem(ctx, topic, change, opening) {
+    const problem = aggregatorProblem(ctx, lockedOf(ctx.store, change.adding)) ??
+        creationProblem(ctx, change.fresh) ??
+        unmarkedProblem(ctx, topic, change.fresh, opening);
     if (problem !== null)
         return problem;
-    return count + adding.length > ctx.store.settings.per_topic_max
+    const count = change.before.length;
+    return count + change.adding.length > ctx.store.settings.per_topic_max
         ? overMax(ctx, topic, count)
         : null;
 }
@@ -310,9 +453,11 @@ function withTopicTags(store, id, names) {
 }
 /**
  * Puts `raw` hashtags on one topic, opening the ones the board does not have.
- * One record for the whole change, saying what the topic had before and after.
+ * While aggregator_must_mark_new is on, the aggregator opens only the names
+ * `opening` says are new. One record for the whole change, saying what the
+ * topic had before and after.
  */
-export function addHashtags(ctx, rawTopic, raw) {
+export function addHashtags(ctx, rawTopic, raw, opening = SAID_NOTHING_NEW) {
     const topic = liveTopic(ctx.topics, rawTopic);
     if (typeof topic === "string")
         return refuse(topic);
@@ -323,10 +468,19 @@ export function addHashtags(ctx, rawTopic, raw) {
     const adding = asked.names.filter((name) => !before.includes(name));
     if (adding.length === 0)
         return unchanged(ctx.store, `ok ${topic.id} 本來就有 ${tags(asked.names)}`);
-    const problem = addProblem(ctx, topic, before.length, adding, asked.fresh);
+    const change = { before, adding, fresh: asked.fresh };
+    const problem = addProblem(ctx, topic, change, opening);
     if (problem !== null)
         return refuse(problem);
-    return putOn(ctx, topic, { before, adding, fresh: asked.fresh });
+    return putOn(ctx, topic, change);
+}
+/** `（新開的 hashtag：#X）` for the names opened, with the close ones the board had; empty for none. */
+function openedText(store, fresh) {
+    if (fresh.length === 0)
+        return "";
+    const near = nearAll(store, fresh).map((entry) => entry.name);
+    const close = near.length === 0 ? "" : `；看板上相近的有 ${tags(near)}`;
+    return `（新開的 hashtag：${tags(fresh)}${close}）`;
 }
 /** The change that puts `adding` on a topic that had `before`, opening `fresh`. */
 function putOn(ctx, topic, change) {
@@ -336,7 +490,8 @@ function putOn(ctx, topic, change) {
     for (const name of fresh)
         next.hashtags[name] = newEntry(ctx, hashtagKey(name), Object.keys(next.hashtags).length);
     const opened = fresh.length === 0 ? "" : `（新開的 hashtag：${tags(fresh)}）`;
-    return changed(next, `ok ${topic.id} 已貼上 ${tags(adding)}${opened}`, {
+    const line = `ok ${topic.id} 已貼上 ${tags(adding)}${openedText(ctx.store, fresh)}`;
+    return changed(next, line, {
         kind: "hashtag.added",
         topic: topic.id,
         before: before.join(" "),

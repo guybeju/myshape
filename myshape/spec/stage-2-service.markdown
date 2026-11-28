@@ -114,14 +114,14 @@ client 的流程，除了 `status`、`stop` 之外的每個經 socket 的子命�
 
 | 子命令 | 作用 | 原樣重做時 |
 | --- | --- | --- |
-| `create <名稱> --goal <一行> [--id <id>] [--queue high\|normal\|later] [--hashtag <名稱>]…` | 建立新議題，一建立就已確認，排在佇列最後：沒有 `--queue` 就是 `normal`，只有明確傳了才放別的佇列，不從名稱或目標推斷（C52）。每個 `--hashtag` 照下面的 `hashtag` 貼上，任何一個被拒絕就整個不建。印出 id 與放在哪裡 | 沒封存的議題裡已有名稱與目標都相同的，回那個 id，不建第二個，也不搬位置（重做時帶了別的 `--queue` 也一樣）。同名不同目標照規則加序號 |
+| `create <名稱> --goal <一行> [--id <id>] [--queue high\|normal\|later] [--hashtag <名稱>]… [--new-hashtag <名稱>]…` | 建立新議題，一建立就已確認，排在佇列最後：沒有 `--queue` 就是 `normal`，只有明確傳了才放別的佇列，不從名稱或目標推斷（C52）。每個 `--hashtag` 照下面的 `hashtag` 貼上，每個 `--new-hashtag` 照 `hashtag … --new` 貼上；任何一個被拒絕就整個不建，看板還沒有的名稱放在 `--hashtag` 也是。印出 id 與放在哪裡 | 沒封存的議題裡已有名稱與目標都相同的，回那個 id，不建第二個，也不搬位置（重做時帶了別的 `--queue` 也一樣）。同名不同目標照規則加序號 |
 | `merge <舊 id> <新 id>` | 把舊議題併進新議題：`merged[舊] = 新`，舊議題從 `topics` 與佇列移除。新 id 必須是沒封存的議題 | 已併過就回成功 |
 | `close-propose <id> --reason <文字>` | 寫入 `close_proposal` | 理由相同不動，不同就換掉 |
 | `move <id> <佇列> [--before <id> \| --first]` | 移動佇列與位置；沒給位置時，新進這個佇列的放尾端 | 沒給位置而議題已在那個佇列就不動 |
 | `rename <id> <名稱>`、`goal <id> <一行>` | 改名、改目標 | 值相同不動 |
 | `archive <id>` | 從 `topics.json` 搬到封存檔，加 `archived_at`，清掉 `close_proposal` | 已封存就回成功 |
 | `reopen <id> [--queue <佇列>]` | 從封存檔搬回來，一律變成已確認，預設放「一般」尾端 | 已不在封存檔而且存在就回成功 |
-| `hashtag <id> +<名稱>`、`hashtag <id> --remove <名稱>` | 在一個沒封存的議題上貼、撕一個 hashtag，存在 `data/myshape/hashtags.json`（[contracts](contracts.markdown) 第 3.8 節）；第一次用到的名稱就開新的 hashtag。撕掉用 `--remove`，不收 `-<名稱>` | 已經有（不分大小寫與全形）或已經沒有就不動 |
+| `hashtag <id> +<名稱> [--new]`、`hashtag <id> --remove <名稱>` | 在一個沒封存的議題上貼、撕一個 hashtag，存在 `data/myshape/hashtags.json`（[contracts](contracts.markdown) 第 3.8 節）；第一次用到的名稱就開新的 hashtag，但要加 `--new`（不帶值）明說：沒加時 exit 1，印一行看板上相近的、常用的與怎麼再跑一次，什麼都不改（使用者在頁面上關掉 `aggregator_must_mark_new` 時不用加）。撕掉用 `--remove`，不收 `-<名稱>`；`--new` 不和 `--remove` 一起用，多出來的參數都是用法錯 | 已經有（不分大小寫與全形）或已經沒有就不動 |
 
 每個 id 參數都先過 `merged` 表。名稱與目標是單行、去頭尾空白、不能是空的；名稱上限 80 個碼位，目標上限 200 個碼位。`move`、`reopen` 觸發的「議題變成可派」通知是第四段的事，這一段只留一個內部事件的掛點。`create`、`merge`、`close-propose`、`archive`、`reopen` 各寫一筆系統紀錄進 `events.jsonl`；`hashtag` 與帶 `--hashtag` 的 `create` 另寫一筆 `hashtag.added` 或 `hashtag.removed`，`merge`、`split` 帶上 hashtag 時另寫一筆 `hashtag.carried`。`find` 的關鍵字是看板有的 hashtag 時，先列那個 hashtag 與貼著它的議題，而且不把它當成 task id 去讀 home。
 

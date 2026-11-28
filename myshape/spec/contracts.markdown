@@ -217,7 +217,8 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
   "topics": { "quota-routing": ["AI_INFRA", "URGENT"] },
   "views": { "work": { "name": "工作", "any": [], "none": ["AI_INFRA"], "text": "", "untagged": false,
                        "order": "newest" } },
-  "settings": { "aggregator_may_tag": true, "aggregator_may_create": true, "per_topic_max": 8,
+  "settings": { "aggregator_may_tag": true, "aggregator_may_create": true,
+                "aggregator_must_mark_new": true, "per_topic_max": 8,
                 "board_max": 50, "aggregator_hourly_max": 20, "default_view": "all" }
 }
 ```
@@ -233,6 +234,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
   | --- | --- | --- |
   | `aggregator_may_tag` | `true` | aggregator 可以在議題上貼撕 hashtag |
   | `aggregator_may_create` | `true` | aggregator 可以開新的 hashtag；新開的在頁面上標「新」，直到使用者按「看過了」 |
+  | `aggregator_must_mark_new` | `true` | aggregator 開新的 hashtag 要明說是新的（下面「開新的要明說」）；使用者在頁面上不受它管 |
   | `per_topic_max` | 8 | 1 到 32。一個議題最多幾個，使用者也受它管。合併取聯集可以超過，頁面標出，減到上限以下之前誰都不能再貼新的 |
   | `board_max` | 50 | 1 到 500。aggregator 開新的時整個看板最多幾個；使用者在頁面上仍可開 |
   | `aggregator_hourly_max` | 20 | 0 到 1000。aggregator 一小時內最多改幾次（`hashtag.added`、`hashtag.removed` 的紀錄，從 `events.jsonl` 算），超過的拒絕並說使用者可以在頁面上調高 |
@@ -240,11 +242,15 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 
   單一 hashtag 的鎖預設不鎖（`locked: false`）。
 - `outbox` 是最後一次 hashtag 改動寫的系統紀錄，和 `topics.json` 的一樣（第 3.3 節）。
-- 誰能做什麼：在一個議題上貼、撕（`hashtag-add`、`hashtag-remove`）兩條通道都能用，socket 上一次只動一個議題；第一次用到的名稱就開新的 hashtag。改名、合併兩個 hashtag、刪掉整個 hashtag（都要兩步確認，第 8 節）、改設定、上鎖解鎖、換顏色、撤回 aggregator 的改動、「看過了」與存、刪視圖只在頁面上（第 6.1 節）。
+- 誰能做什麼：在一個議題上貼、撕（`hashtag-add`、`hashtag-remove`）兩條通道都能用，socket 上一次只動一個議題；第一次用到的名稱就開新的 hashtag，但 aggregator 要照下一條明說。改名、合併兩個 hashtag、刪掉整個 hashtag（都要兩步確認，第 8 節）、改設定、上鎖解鎖、換顏色、撤回 aggregator 的改動、「看過了」與存、刪視圖只在頁面上（第 6.1 節）。
   拆分議題時新議題複製來源的 hashtag；合併議題時取聯集，第二步確認畫面寫出會多哪些。這兩種是議題操作的後續，不算 aggregator 的 hashtag 改動，不受鎖與每小時上限管。
+- 開新的要明說：`aggregator_must_mark_new` 打開時，aggregator 用到看板沒有的名稱（比對 `key`），只有明說是新的才開：`hashtag-add` 帶 `new: true`（`myshape.sh hashtag <id> +<名稱> --new`），`create` 把它放在 `new_hashtags`（`--new-hashtag <名稱>`）而不是 `hashtags`（`--hashtag`）。`new` 用在看板已有的名稱上就照常貼上。
+  沒明說時拒絕、什麼都不改（`create` 整個不建），回一行：先是看板上相近的最多 5 個，再是貼在最多議題上的最多 20 個（不重複列相近的、不列沒有議題貼著的），每個寫出貼在幾個議題、鎖上的另寫「鎖上：只有使用者能貼」；然後是「共 N 個，全部用 myshape.sh hashtags 看」與怎麼再跑一次。明說而開成功時，回話照樣寫出相近的，例如「ok t7 已貼上 #GPU（新開的 hashtag：#GPU；看板上相近的有 #GPU_CLUSTER）」；紀錄的文字不帶相近的。這條在鎖、每小時上限、可以開新的與全看板上限之後才檢查，那些擋住時加 `--new` 也過不了，所以先回它們。
+  「相近」只決定回話裡的順序，不決定可不可以開：兩邊的 `key` 都先去掉底線、以碼位計，分三級：一樣；一個包含另一個，短的至少 2 個碼位；Damerau-Levenshtein 距離（相鄰兩個對調算一次，optimal string alignment）不超過 1（短的在 5 個碼位以內）或 2（更長）。同一級裡貼在越多議題的越前面，再照 `key` 的字串順序。要問的那一個自己不算。
+- 建議用法（給 aggregator）：要貼之前先看 `myshape.sh hashtags`，或照拒絕的那一行：先找 `key` 一樣的，再找去掉底線一樣的；還是對不到，就看每個 hashtag 貼在哪些議題，依意思判斷要不要沿用；只有確定意思不同時才加 `--new` 開新的，並告訴使用者。鎖上的不能貼，也不要另開一個和它同義的。
 - 撤回：頁面列出 aggregator 在上一次「看過了」之後的 `hashtag.added`、`hashtag.removed`，每一筆可以撤回一次：它貼上的撕掉、撕掉的貼回去，它新開、現在沒有議題貼著、使用者還沒看過的 hashtag 一起拿掉；它撕掉的 hashtag 已經不在（改名、合併或刪掉了）就拒絕。
 - 這些鎖、上限與只在頁面上的操作，是防 aggregator 一時不小心或被誤導的護欄，不是界線：socket 不驗證身分（第 6.1 節），瀏覽器的 token 是同一個帳號的一個檔，同一個帳號下存心的程式擋不住，和確認紀錄（第 7 節）一樣。
-- 讀的一方：aggregator 可以直接讀這個檔（設定與鎖也在裡面，才不會白送會被拒絕的要求），但只經 socket 的操作改它。`myshape.sh list --hashtag` 用 jq 讀它，服務沒在跑也能用。
+- 讀的一方：aggregator 可以直接讀這個檔（設定與鎖也在裡面，才不會白送會被拒絕的要求），但只經 socket 的操作改它。`myshape.sh list --hashtag` 與 `myshape.sh hashtags`（列出每個 hashtag，見 [stage-1-files](stage-1-files.markdown)）用 jq 讀它，服務沒在跑也能用。
 - `v` 是 1 的期間，上面列的欄位意思不變；讀的一方略過不認得的欄位。沒有這個檔時當成沒有任何 hashtag，第一次改 hashtag 時才建立。
 
 ### 3.9 `data/myshape/schedules.json`
@@ -407,7 +413,7 @@ first mate 這一側怎麼產生這份回報（`fm-topic-board-read.sh` 讀 back
 
 `state/myshape/board.sock`，0600，不帶 token。一條連線一個要求：client 送一行 JSON `{"v":1,"op":"<名稱>","args":{…}}`，服務回一行 JSON `{"ok":true,"line":"<要印的那一行>",…}` 或 `{"ok":false,"code":"refused|usage|…","line":"<原因與修法>"}`，然後關閉連線。
 
-`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`hashtag-add`、`hashtag-remove`、`schedule-add`、`schedule-edit`、`schedule-pause`、`schedule-resume`、`schedule-skip`、`schedule-rt`、`schedule-delete`、`schedule-take`、`schedule-close`、`schedule-tick`、`reset-token`。`create` 另收 `hashtags`（名稱的清單）。`schedule-tick` 不在操作表裡：它跑一次排程的時鐘（第 3.9 節），改動記成 `board` 的，不先等讀取，回「ok schedule tick：…」寫這次做了什麼。
+`op` 的清單：`health`、`status`、`stop`、`create`、`merge`、`close-propose`、`move`、`rename`、`split`、`goal`、`archive`、`reopen`、`summary`、`which`、`find`、`todo-add`、`todo-done`、`todo-failed`、`todo-obsolete`、`hashtag-add`、`hashtag-remove`、`schedule-add`、`schedule-edit`、`schedule-pause`、`schedule-resume`、`schedule-skip`、`schedule-rt`、`schedule-delete`、`schedule-take`、`schedule-close`、`schedule-tick`、`reset-token`。`create` 另收 `hashtags` 與 `new_hashtags`（名稱的清單，後者是明說要開新的），`hashtag-add` 另收 `new`（`true` 是明說要開新的，第 3.8 節）。`schedule-tick` 不在操作表裡：它跑一次排程的時鐘（第 3.9 節），改動記成 `board` 的，不先等讀取，回「ok schedule tick：…」寫這次做了什麼。
 改動看板的操作全部列在一張表裡（`myshape/src/ops.ts` 的 `OPERATIONS`）：哪條通道可以用、經哪個檔存（第 3.3 節）。socket 與頁面都只經這張表改看板，每一個改動都至少寫一筆系統紀錄，沒有紀錄的改動編譯不過。
 `keep`（頁面的「先不關」）、`todo-claim`（「做完了」）、`todo-drop`（「不做了」）與 `todo-takedown`（「好，撤下」）是使用者自己按的，socket 收到就拒絕，什麼都不改；它們只在頁面的 API 上。hashtag 的 `hashtag-rename`、`hashtag-merge`、`hashtag-delete`、`hashtag-settings`、`hashtag-lock`、`hashtag-color`、`hashtag-revert`、`hashtag-seen`、`view-save`、`view-delete` 也是（第 3.8 節）。
 `lifecycle-settings`（期限設定）與 `lifecycle-answer`（「沒人處理的議題」的先不關、「沒人接」的延到，與帶 `ask: true` 的〔請 <aggregator> 處理〕）也是使用者自己按的，socket 收到就拒絕；`keep` 帶 `days`（1 到 90，沒帶是 14）或 `later: true`。要你動手的操作只能從 [lifecycle](lifecycle.markdown) 第 2.6 節表裡的狀態出發，其他一律拒絕、什麼都不改。

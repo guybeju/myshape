@@ -191,7 +191,7 @@ SH
     fail "could not read the operation table from myshape/dist/ops.js"
   while IFS= read -r sub; do
     case "$sub" in
-      list) continue ;;
+      list | hashtags) continue ;;
       create) case_args='create N --goal g' ;;
       merge) case_args='merge billing login' ;;
       close-propose) case_args='close-propose billing --reason r' ;;

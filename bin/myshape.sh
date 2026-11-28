@@ -3,8 +3,9 @@
 #
 # Usage:
 #   myshape.sh list [--all] [--json] [--hashtag <name>]
-#   myshape.sh create <name> --goal <one line> [--id <id>] [--queue high|normal|later] [--hashtag <name>]...
-#   myshape.sh hashtag <topic-id> +<name> | --remove <name>
+#   myshape.sh hashtags
+#   myshape.sh create <name> --goal <one line> [--id <id>] [--queue high|normal|later] [--hashtag <name>]... [--new-hashtag <name>]...
+#   myshape.sh hashtag <topic-id> +<name> [--new] | --remove <name>
 #   myshape.sh merge <old-topic-id> <new-topic-id> [--reason <one line>]
 #   myshape.sh close-propose <topic-id> --reason <text>
 #   myshape.sh move <topic-id> <queue> [--before <topic-id> | --first]
@@ -38,8 +39,8 @@
 # starts and never deletes. Anywhere else it is refused with exit 1 and nothing
 # is written; open starts a board there.
 #
-# list only reads files; it does not need the board service, so it keeps
-# working when the service is down. Every other subcommand talks to the board
+# list and hashtags only read files; they do not need the board service, so
+# they keep working when the service is down. Every other subcommand talks to the board
 # service over its Unix socket and, except for status and stop, starts the
 # service first when it is not running. They need node 22 or newer. Repeating
 # any of them unchanged is safe.
@@ -47,17 +48,23 @@
 # create makes a topic that is confirmed at once and last in its queue:
 # normal unless --queue names another. A live topic with the same name and
 # goal is the same topic, so a repeat prints its id and leaves it where it is.
-# Each --hashtag puts that hashtag on the topic, like hashtag below; when the
-# board refuses one of them, it makes no topic.
+# Each --hashtag puts a hashtag the board has on the topic, like hashtag
+# below, and each --new-hashtag one meant as new, like hashtag with --new;
+# when the board refuses one of them, it makes no topic.
 #
 # hashtag puts one hashtag on one live topic (+<name>) or takes it off
 # (--remove <name>). Hashtags describe what a topic is about; they change no
 # queue, order or dispatch and send nothing. A name is letters (Chinese too),
 # digits and underscore, 1 to 32 characters; case and full-width forms do not
 # make another hashtag, and the spelling first created is the one shown. The
-# first use of a name opens the hashtag. The board refuses, and changes
-# nothing, when the captain turned off the aggregator's tagging or opening of
-# new hashtags on the page, when the hashtag is locked, when the topic already
+# first use of a name opens the hashtag, but only with --new: a name the board
+# does not have, sent without it, is refused with one line that names the
+# board's hashtags closest to it and the most used, and how to ask again. Use
+# one of those when it means the same; add --new only for a name sure to mean
+# something else. The captain can turn this rule off on the page. The board
+# also refuses, and changes nothing, when the captain turned off the
+# aggregator's tagging or opening of new hashtags on the page, when the
+# hashtag is locked, when the topic already
 # has the per-topic maximum (8 unless changed), when the board already has the
 # board-wide maximum of hashtags (50) and the name is new, or past the hourly
 # cap of the aggregator's hashtag changes (20); the captain changes these on
@@ -68,6 +75,12 @@
 # data/myshape/hashtags.json with jq, so it works with the service down; it
 # matches the stored spelling and its case and full-width variants. find also
 # matches hashtags: a keyword that is a hashtag prints its topics.
+#
+# hashtags lists every hashtag the board has, read from
+# data/myshape/hashtags.json with jq: one line each, the most used first, with
+# how many topics carry it, its lock, who opened it and up to three of its
+# topics' names, then one line with how many there are and the settings. With
+# no hashtag yet it prints 看板還沒有 hashtag。 and exits 0.
 #
 # open prints the board's URL. status and stop never start the service, but
 # the main home's next session start does.
@@ -351,6 +364,50 @@ $(tb_hashtag_topics_jq)"'
   ' 2>/dev/null || tb_die 1 "讀不懂 ${TOPICS_FILE}、${ARCHIVE_FILE}、${HASHTAGS_FILE} 或 ${SCHEDULES_FILE}。"
 }
 
+cmd_hashtags() {
+  local topics=/dev/null archive=/dev/null
+  [ "$#" -eq 0 ] || usage_error "hashtags 不收參數：$1"
+  require_jq hashtags
+  [ -f "$HASHTAGS_FILE" ] || { printf '%s\n' "看板還沒有 hashtag。"; return 0; }
+  [ ! -f "$TOPICS_FILE" ] || topics=$TOPICS_FILE
+  [ ! -f "$ARCHIVE_FILE" ] || archive=$ARCHIVE_FILE
+  jq -r -n --slurpfile tags "$HASHTAGS_FILE" --slurpfile live "$topics" --slurpfile gone "$archive" '
+    # A topic id with merges followed, as the board reads hashtags.json.
+    def follow($merged; $hops):
+      if $hops > 64 or $merged[.] == null then . else $merged[.] | follow($merged; $hops + 1) end;
+    def flag($name; $default): .[$name] | if type == "boolean" then . else $default end;
+    def number($name; $low; $high; $default):
+      .[$name] | if type == "number" and . == floor and . >= $low and . <= $high then . else $default end;
+    def yes: if . then "是" else "否" end;
+    ($tags[0] // {}) as $store
+    | ($live[0] // {}) as $doc
+    | ($doc.topics // {}) as $open
+    | (($gone[0] // {}).topics // {}) as $archived
+    | ($store.settings // {}) as $set
+    | [ ($store.hashtags // {}) | to_entries[] | select(.value | type == "object")
+        | .key as $name
+        | ([ ($store.topics // {}) | to_entries[] | select(any(.value[]?; . == $name))
+             | .key | follow($doc.merged // {}; 0)
+             | select($open[.] != null or $archived[.] != null) ] | unique) as $ids
+        | {name: $name, key: (.value.key // ($name | ascii_downcase)), count: ($ids | length),
+           locked: (.value.locked == true),
+           by: (if .value.created_by == "aggregator" then "aggregator" else "使用者" end),
+           examples: [ $ids[] | select($open[.] != null) | $open[.].name ] | .[:3]} ]
+    | sort_by(-.count, .key) as $rows
+    | if ($rows | length) == 0 then "看板還沒有 hashtag。"
+      else
+        ($rows[] | "#\(.name)\t\(.count) 個議題\t\(if .locked then "鎖上：只有使用者能貼撕" else "沒鎖" end)"
+          + "\t開的人：\(.by)" + (if (.examples | length) == 0 then "" else "\t例：\(.examples | join("、"))" end)),
+        ("共 \($rows | length) 個。設定：aggregator 可以貼撕 \($set | flag("aggregator_may_tag"; true) | yes)"
+          + "；可以開新的 \($set | flag("aggregator_may_create"; true) | yes)"
+          + "；開新的要明說（--new）\($set | flag("aggregator_must_mark_new"; true) | yes)"
+          + "；一個議題最多 \($set | number("per_topic_max"; 1; 32; 8)) 個"
+          + "；aggregator 開新的時看板最多 \($set | number("board_max"; 1; 500; 50)) 個"
+          + "；aggregator 每小時最多改 \($set | number("aggregator_hourly_max"; 0; 1000; 20)) 次")
+      end
+  ' 2>/dev/null || tb_die 1 "讀不懂 ${HASHTAGS_FILE}、${TOPICS_FILE} 或 ${ARCHIVE_FILE}。"
+}
+
 # todo_part <flag> <value>: <value> with carriage returns and trailing newlines
 # removed. A value with nothing else in it is a usage error.
 todo_part() {
@@ -547,8 +604,8 @@ main() {
       usage
       return 0
       ;;
-    open | list | todo | schedule | split | create | merge | close-propose | move | rename | hashtag | \
-      goal | archive | reopen | summary | retract | which | find | status | stop | restart | reset-token) ;;
+    open | list | hashtags | todo | schedule | split | create | merge | close-propose | move | rename | \
+      hashtag | goal | archive | reopen | summary | retract | which | find | status | stop | restart | reset-token) ;;
     *) usage_error "不認得的子命令：$sub" ;;
   esac
   refuse_old_name FM_HOME "${FM_HOME:-}" "${MYSHAPE_HOME:-}" MYSHAPE_HOME "$BOARD_HOME"
@@ -557,6 +614,7 @@ main() {
   [ "$sub" = open ] || require_board
   case "$sub" in
     list) cmd_list "$@" ;;
+    hashtags) cmd_hashtags "$@" ;;
     todo) cmd_todo "$@" ;;
     schedule) cmd_schedule "$@" ;;
     *) cmd_service "$sub" "$@" ;;

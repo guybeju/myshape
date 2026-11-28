@@ -414,8 +414,8 @@ test_every_change_leaves_a_record() {
   records_after topic.archived "topics/archive" api topics/archive '{"id":"recpart"}'
   records_after topic.reopened "topics/reopen" api topics/reopen '{"id":"recpart"}'
   records_after topic.merged "topics/merge" two_step topics/merge '{"from":"recpart","into":"rec"}'
-  records_after hashtag.added "hashtag +" t hashtag rec +AI_INFRA
-  records_after "topic.created hashtag.added" "create --hashtag" t create "Tagged" --goal "g" --id tagged --hashtag AI_INFRA --hashtag URGENT
+  records_after hashtag.added "hashtag + --new" t hashtag rec +AI_INFRA --new
+  records_after "topic.created hashtag.added" "create --hashtag --new-hashtag" t create "Tagged" --goal "g" --id tagged --hashtag AI_INFRA --new-hashtag URGENT
   records_after hashtag.removed "hashtag --remove" t hashtag tagged --remove urgent
   records_after hashtag.added "hashtags/add" api hashtags/add '{"id":"rec","name":"URGENT"}'
   records_after hashtag.removed "hashtags/remove" api hashtags/remove '{"id":"rec","name":"URGENT"}'
