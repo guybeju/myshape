@@ -165,7 +165,9 @@ jq '.todos = {"h-open": {state: "rejected", at: "2026-07-24T10:00:00Z", reason: 
   "$MAIN/data/topics.json" > "$MAIN/data/topics.json.new"
 mv "$MAIN/data/topics.json.new" "$MAIN/data/topics.json"
 
-SHOWN='{todos, closed_todos, updates}'
+# Every field the old board's page showed; created_at came later (myshape/spec/card-sort.markdown
+# decision 10) and is checked on its own against the stored item.
+SHOWN='{todos: [.todos[] | del(.created_at)], closed_todos, updates}'
 
 test_the_old_code_adopts_and_closes() {
   on "$OLD" myshape.sh open >/dev/null || fail "the old board did not start"
@@ -194,6 +196,9 @@ test_the_new_code_reads_the_old_items_the_same() {
   view >/dev/null
   assert_equals "$(cat "$TMP_ROOT/shown.before")" "$(view "$SHOWN")" \
     "the items, the closed item and every update must show exactly as before"
+  assert_equals "$(jq -c '.items["h-open"].created_at' "$MAIN/data/myshape/todos.json")" \
+    "$(view '.todos[] | select(.task == "h-open") | .created_at')" \
+    "the item's creation time must be the one stored with it"
   assert_equals "" "$(cmp "$TMP_ROOT/events.before" "$MAIN/data/myshape/events.jsonl" 2>&1)" \
     "reading the old board's home must add no record, not even for the hold closed with its item"
   assert_equals "" "$(cmp "$TMP_ROOT/todos.before" "$MAIN/data/myshape/todos.json" 2>&1)" \
