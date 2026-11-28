@@ -149,8 +149,17 @@ export class Tagger {
     private readonly nowMs: () => number,
   ) {}
 
-  /** Puts `name` on `topic` (`add`) or takes it off (`remove`), when every guard allows it. */
-  async change(topic: string, change: HashtagChange, name: string): Promise<HashtagOutcome> {
+  /**
+   * Puts `name` on `topic` (`add`) or takes it off (`remove`), when every
+   * guard allows it. `opening` says a name put on is meant as a new hashtag:
+   * the board opens a name it does not have only when told so.
+   */
+  async change(
+    topic: string,
+    change: HashtagChange,
+    name: string,
+    opening = false,
+  ): Promise<HashtagOutcome> {
     const board = readBoard(this.home);
     const current = followMerges(board.topics.merged, topic);
     const check = checkHashtag(change, name, {
@@ -161,7 +170,7 @@ export class Tagger {
       lastHour: hashtagChangesInLastHour(this.home, Math.floor(this.nowMs() / 1000)),
     });
     if (!check.send) return { sent: false, reason: check.reason };
-    const problem = await this.board.hashtag(current, change, name.replace(/^#/, ""));
+    const problem = await this.board.hashtag(current, change, name.replace(/^#/, ""), opening);
     return problem === undefined ? { sent: true } : { sent: false, reason: problem };
   }
 }

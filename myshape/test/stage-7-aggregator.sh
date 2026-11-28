@@ -815,6 +815,21 @@ test_plain_reads_with_nobody_looking() {
 }
 
 # AT6.6: no text the board emits names Firstmate.
+# An aggregator written only from the contract opens a new hashtag the way
+# the board's reply says: refused without --new, with the board's list and
+# how to ask again, then opened with it.
+test_plain_new_hashtag() {
+  local out rc=0
+  out=$(p hashtag solo +PLAIN_TAG 2>&1) || rc=$?
+  expect_code 1 "$rc" "a new hashtag without --new"
+  assert_contains "$out" "#PLAIN_TAG 是看板還沒有的 hashtag，這次沒有改。" "the refusal must name the new hashtag"
+  assert_contains "$out" "myshape.sh hashtag solo +PLAIN_TAG --new" "the refusal must say how to ask again"
+  out=$(p hashtag solo +PLAIN_TAG --new) || fail "hashtag --new failed: $out"
+  assert_contains "$out" "（新開的 hashtag：#PLAIN_TAG）" "--new must open the hashtag"
+  assert_contains "$(p hashtags)" "#PLAIN_TAG" "hashtags must list the new hashtag"
+  pass "a new hashtag is said new, as the board's refusal tells an aggregator written only from the contract"
+}
+
 test_plain_texts_name_no_firstmate() {
   local texts
   texts=$(state_of "$PH"; cat "$AGG_PLAIN/received.jsonl" "$PH/data/myshape/events.jsonl")
@@ -1175,7 +1190,7 @@ fm_test_run test_fm_setup test_fm_work_reaches_the_page test_fm_status_metrics \
   test_plain_setup test_plain_work test_plain_ledger test_plain_second_home test_plain_banners \
   test_plain_work_only_under_topics test_plain_topics_and_order test_plain_the_captains_channel test_plain_hands_on \
   test_plain_changes_are_marked test_plain_lifecycle_fields test_plain_reads_with_nobody_looking \
-  test_plain_texts_name_no_firstmate \
+  test_plain_new_hashtag test_plain_texts_name_no_firstmate \
   test_bind_setup test_bind_a_tracked_program_needs_no_confirmation \
   test_bind_an_override_keeps_the_exemption_only_for_the_own_location test_bind_paths_only \
   test_bind_a_confirmation_is_bound_to_the_bytes test_bind_a_fixed_environment test_bind_only_the_page_confirms \

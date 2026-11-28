@@ -784,7 +784,12 @@ describe("hashtags through the table", () => {
   }
 
   it("create puts its hashtags on the new topic and saves both files", () => {
-    const made = reply("create", { name: "GPU", goal: "g", hashtags: ["ai_infra", "NEW_ONE"] });
+    const made = reply("create", {
+      name: "GPU",
+      goal: "g",
+      hashtags: ["ai_infra"],
+      new_hashtags: ["NEW_ONE"],
+    });
     expect(made.response).toEqual({
       ok: true,
       line: "ok gpu 已建立，排在「一般」最後；已貼上 #AI_INFRA、#NEW_ONE（新開的 hashtag：#NEW_ONE）",
@@ -801,8 +806,22 @@ describe("hashtags through the table", () => {
     ]);
     const again = reply("create", { name: "GPU", goal: "g", hashtags: ["AI_INFRA", "NEW_ONE"] });
     expect(again.committed).toBeNull();
-    const more = reply("create", { name: "GPU", goal: "g", hashtags: ["LATER"] });
+    const more = reply("create", { name: "GPU", goal: "g", new_hashtags: ["LATER"] });
     expect(more.committed).toBe("hashtags");
+  });
+
+  it("create with a new name it did not say is new makes nothing, and names the board's", () => {
+    const before = files();
+    const refused = reply("create", { name: "GPU", goal: "g", hashtags: ["AI_INFRA", "GPU"] });
+    expect(refused.response).toMatchObject({ ok: false, code: "refused" });
+    const line = refused.response.ok ? "" : refused.response.line;
+    expect(line).toContain("#GPU 是看板還沒有的 hashtag");
+    expect(line).toContain("--new-hashtag GPU");
+    expect(line).not.toContain("--new ");
+    expect(files()).toEqual(before);
+    expect(reply("create", { name: "GPU", goal: "g", new_hashtags: "GPU" }).response).toMatchObject(
+      { ok: false, code: "usage" },
+    );
   });
 
   it("create that a hashtag rail refuses makes no topic", () => {
@@ -852,7 +871,18 @@ describe("hashtags through the table", () => {
   });
 
   it("an aggregator's change can be taken back on the page, from its record", () => {
-    const added = reply("hashtag-add", { id: "b", name: "AI_INFA" });
+    const before = files();
+    const unsaid = reply("hashtag-add", { id: "b", name: "AI_INFA" });
+    expect(unsaid.response).toMatchObject({ ok: false, code: "refused" });
+    expect(unsaid.response.ok ? "" : unsaid.response.line).toContain(
+      "看板上相近的：#AI_INFRA（1 個議題）",
+    );
+    expect(files()).toEqual(before);
+    const added = reply("hashtag-add", { id: "b", name: "AI_INFA", new: true });
+    expect(added.response).toEqual({
+      ok: true,
+      line: "ok b 已貼上 #AI_INFA（新開的 hashtag：#AI_INFA；看板上相近的有 #AI_INFRA）",
+    });
     const rid = added.records[0]?.rid as string;
     expect(added.records[0]).toMatchObject({
       by: "aggregator",
@@ -877,6 +907,7 @@ describe("each hashtag operation's arguments", () => {
 
   it("say what each one needs, and change nothing", () => {
     usage("hashtag-add", { id: "a" }, false);
+    usage("hashtag-add", { id: "a", name: "X", new: "yes" }, false);
     usage("hashtag-remove", { name: "X" }, false);
     usage("hashtag-rename", { name: "OLD" });
     usage("hashtag-merge", { into: "OLD" });

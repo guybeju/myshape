@@ -235,14 +235,18 @@ describe("BoardCommand's board writes", () => {
     await b.todoObsolete("i", "不需要");
     await b.closePropose("t", "都落地了");
     await b.hashtag("t", "add", "AI");
+    await b.hashtag("t", "add", "GPU", true);
     await b.hashtag("t", "remove", "AI");
+    await b.hashtag("t", "remove", "GPU", true);
     expect(calls.map((call) => call.args)).toEqual([
       ["todo", "done", "i"],
       ["todo", "failed", "i", "--reason", "還沒好"],
       ["todo", "obsolete", "i", "--reason", "不需要"],
       ["close-propose", "t", "--reason", "都落地了"],
       ["hashtag", "t", "+AI"],
+      ["hashtag", "t", "+GPU", "--new"],
       ["hashtag", "t", "--remove", "AI"],
+      ["hashtag", "t", "--remove", "GPU"],
     ]);
     expect(calls.every((call) => call.input === undefined)).toBe(true);
   });

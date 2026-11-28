@@ -68,6 +68,13 @@ describe("the guarded hashtag operation", () => {
     expect(sent()).toEqual([["hashtag", "gpu", "+AI_INFRA"]]);
   });
 
+  it("says a name is meant as a new hashtag with --new only when asked to", async () => {
+    const { tagger, sent } = setUp();
+    expect(await tagger.change("gpu", "add", "GPU", true)).toEqual({ sent: true });
+    expect(await tagger.change("gpu", "remove", "GPU", true)).toMatchObject({ sent: false });
+    expect(sent()).toEqual([["hashtag", "gpu", "+GPU", "--new"]]);
+  });
+
   it("takes one off with --remove", async () => {
     const { tagger, sent } = setUp({
       tags: { gpu: ["AI_INFRA"] },

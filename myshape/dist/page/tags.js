@@ -118,14 +118,22 @@ export function filterBar(page, view, actions, shown) {
 const SETTING_LABEL = {
     aggregator_may_tag: () => `${agentName()} 可以貼撕 hashtag`,
     aggregator_may_create: () => `${agentName()} 可以開新的 hashtag`,
+    aggregator_must_mark_new: () => `${agentName()} 開新的 hashtag 時要明說是新的（沒明說就拒絕，並列出相近的與常用的）`,
     per_topic_max: () => "一個議題最多幾個 hashtag",
     board_max: () => `整個看板最多幾個 hashtag（${agentName()} 開新的時）`,
     aggregator_hourly_max: () => `${agentName()} 每小時最多改幾次 hashtag`,
     default_view: () => "打開看板預設看哪個視圖",
 };
+const BOOLEAN_WORDS = {
+    aggregator_must_mark_new: ["要", "不用"],
+};
+/** How a yes-or-no setting reads: its word for on, then for off. */
+function flagWords(name) {
+    return BOOLEAN_WORDS[name] ?? ["可以", "不可以"];
+}
 function shownValue(view, name, value) {
     if (typeof value === "boolean")
-        return value ? "可以" : "不可以";
+        return flagWords(name)[value ? 0 : 1];
     if (name === "default_view")
         return view.hashtags.views.find((saved) => saved.id === value)?.name ?? "全部";
     return String(value);
@@ -134,7 +142,7 @@ function settingControl(page, view, actions, name) {
     const current = view.hashtags.settings[name];
     const apply = (value) => actions.send("hashtags/settings", { [name]: value });
     if (typeof current === "boolean")
-        return h("button", { onclick: () => apply(!current) }, current ? "改成不可以" : "改成可以");
+        return h("button", { onclick: () => apply(!current) }, `改成${flagWords(name)[current ? 1 : 0]}`);
     if (name === "default_view")
         return h("select", { class: "auto", onchange: (event) => apply(event.target.value) }, [{ id: "all", name: "全部" }, ...view.hashtags.views].map((saved) => h("option", { value: saved.id, ...(saved.id === current ? { selected: true } : {}) }, saved.name)));
     const key = `setting:${name}`;

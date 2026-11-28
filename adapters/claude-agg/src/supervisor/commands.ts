@@ -173,9 +173,18 @@ export class BoardCommand {
     return this.write(["close-propose", topic, "--reason", reason]);
   }
 
-  /** Puts one hashtag on a topic or takes it off (`myshape.sh hashtag`). */
-  hashtag(topic: string, change: "add" | "remove", name: string): Promise<string | undefined> {
-    const args = change === "add" ? [`+${name}`] : ["--remove", name];
+  /**
+   * Puts one hashtag on a topic or takes it off (`myshape.sh hashtag`);
+   * `opening` says a name put on is meant as a new hashtag (`--new`).
+   */
+  hashtag(
+    topic: string,
+    change: "add" | "remove",
+    name: string,
+    opening = false,
+  ): Promise<string | undefined> {
+    const args =
+      change === "add" ? [`+${name}`, ...(opening ? ["--new"] : [])] : ["--remove", name];
     return this.write(["hashtag", topic, ...args]);
   }
 

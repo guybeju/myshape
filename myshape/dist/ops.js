@@ -93,17 +93,12 @@ function create(ctx, args) {
         return { usage: "--queue 只能是 high、normal、later。" };
     if (id === null)
         return { usage: "--id 要是字串。" };
-    if (hashtagList(args) === null)
+    if (stringList(args["hashtags"]) === null)
         return { usage: "--hashtag 要是 hashtag 名稱。" };
+    if (stringList(args["new_hashtags"]) === null)
+        return { usage: "--new-hashtag 要是 hashtag 名稱。" };
     const input = { name, goal, ...id, ...(queue === undefined ? {} : { queue }) };
     return topics.create(ctx.topics, input, ctx.now);
-}
-/** The `hashtags` argument of a create: absent (none), a list of strings, or null when it is something else. */
-function hashtagList(args) {
-    const value = args["hashtags"];
-    if (value === undefined)
-        return [];
-    return Array.isArray(value) && value.every((name) => typeof name === "string") ? value : null;
 }
 function hashtagContext(ctx, topicState = ctx.topics) {
     return {
@@ -127,10 +122,12 @@ function asFollow(result) {
 }
 /** A new topic gets the hashtags its create names, under the same rails as any other. */
 function createHashtags(ctx, args, result) {
-    const names = hashtagList(args) ?? [];
+    const opening = stringList(args["new_hashtags"]) ?? [];
+    const names = [...(stringList(args["hashtags"]) ?? []), ...opening];
     if (names.length === 0 || result.subject === undefined)
         return { follow: null, line: "" };
-    return asFollow(hashtags.addHashtags(hashtagContext(ctx, result.state), result.subject, names));
+    const context = hashtagContext(ctx, result.state);
+    return asFollow(hashtags.addHashtags(context, result.subject, names, { names: opening, via: "create" }));
 }
 /** A merged topic brings its hashtags along: the topic it went into gets the union. */
 function mergeHashtags(ctx, args, result) {
@@ -445,10 +442,23 @@ function onPair([first, second], apply) {
 function onTopicTag(apply) {
     return onPair(["id", "name"], apply);
 }
+/** `hashtag-add`: one name on one topic; `new: true` says the name is new. */
+function addTag(ctx, args) {
+    const id = stringField(args, "id");
+    const name = stringField(args, "name");
+    const said = args["new"];
+    if (id === null || name === null)
+        return hashtagUsage("需要 id 與 name。");
+    if (said !== undefined && typeof said !== "boolean")
+        return hashtagUsage("new 要是 true 或 false。");
+    const opening = { names: said === true ? [name] : [], via: "hashtag" };
+    return hashtags.addHashtags(hashtagContext(ctx), id, [name], opening);
+}
 /** A hashtag operation on one hashtag and one more string argument. */
 function onTag(second, apply) {
     return onPair(["name", second], apply);
 }
+/** A list of strings: none when absent, null when it is something else. */
 function stringList(value) {
     if (value === undefined)
         return [];
@@ -487,7 +497,7 @@ const HASHTAG_OPERATIONS = {
     "hashtag-add": {
         channel: "both",
         commitFile: "hashtags",
-        run: onTopicTag((ctx, topic, name) => hashtags.addHashtags(ctx, topic, [name])),
+        run: addTag,
     },
     "hashtag-remove": {
         channel: "both",

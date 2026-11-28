@@ -57,6 +57,8 @@ export interface SavedView {
 export interface HashtagSettings {
   aggregator_may_tag: boolean;
   aggregator_may_create: boolean;
+  /** The aggregator opens a new hashtag only when it says the name is new. */
+  aggregator_must_mark_new: boolean;
   per_topic_max: number;
   board_max: number;
   aggregator_hourly_max: number;
@@ -76,6 +78,7 @@ export interface HashtagStore {
 export const DEFAULT_SETTINGS: Readonly<HashtagSettings> = {
   aggregator_may_tag: true,
   aggregator_may_create: true,
+  aggregator_must_mark_new: true,
   per_topic_max: 8,
   board_max: 50,
   aggregator_hourly_max: 20,
@@ -89,7 +92,11 @@ export const SETTING_RANGES: Readonly<Record<NumberSetting, readonly [number, nu
   aggregator_hourly_max: [0, 1000],
 };
 const NUMBER_SETTINGS = Object.keys(SETTING_RANGES) as NumberSetting[];
-const FLAG_SETTINGS = ["aggregator_may_tag", "aggregator_may_create"] as const;
+const FLAG_SETTINGS = [
+  "aggregator_may_tag",
+  "aggregator_may_create",
+  "aggregator_must_mark_new",
+] as const;
 
 /** The aggregator's changes the hourly cap counts and the captain may take back. */
 export const WATCHED: oversight.Watched = {
@@ -143,6 +150,104 @@ export function topicsWith(store: Frozen<HashtagStore>, name: string): string[] 
     .filter(([, names]) => names.includes(name))
     .map(([id]) => id)
     .toSorted();
+}
+
+// ---- spellings close to a name ----
+
+/** At most this many close hashtags are named in a reply. */
+export const NEAR_MAX = 5;
+/** At most this many of the most used hashtags are named in a refusal. */
+export const MOST_USED_MAX = 20;
+
+/** A hashtag named in a reply: its spelling, how many topics carry it, and its lock. */
+export interface ListedHashtag {
+  name: string;
+  topics: number;
+  locked: boolean;
+}
+
+/** `key` without its underscores, as code points. */
+function bare(key: string): string[] {
+  return [...key.replaceAll("_", "")];
+}
+
+/**
+ * The edit distance of two code-point lists, counting a swap of two
+ * neighbours as one edit (Damerau-Levenshtein, optimal string alignment).
+ */
+export function editDistance(a: readonly string[], b: readonly string[]): number {
+  let before: number[] = [];
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min((row[j] as number) + 1, (next[j - 1] as number) + 1);
+      best = Math.min(best, (row[j - 1] as number) + cost);
+      const swapped = i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1];
+      if (swapped) best = Math.min(best, (before[j - 2] as number) + 1);
+      next.push(best);
+    }
+    before = row;
+    row = next;
+  }
+  return row[b.length] as number;
+}
+
+/**
+ * How close two keys are once their underscores are dropped: 0 when they are
+ * the same, 1 when one holds the other and the shorter has at least 2 code
+ * points, 2 when they are within 1 edit (the shorter has at most 5 code
+ * points) or 2 edits (longer); null when none of these.
+ */
+export function nearTier(one: string, two: string): 0 | 1 | 2 | null {
+  const a = bare(one);
+  const b = bare(two);
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.join("") === long.join("")) return 0;
+  if (short.length >= 2 && long.join("").includes(short.join(""))) return 1;
+  if (short.length === 0) return null;
+  return editDistance(a, b) <= (short.length <= 5 ? 1 : 2) ? 2 : null;
+}
+
+function byKey(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+function listed(store: Frozen<HashtagStore>, name: string): ListedHashtag {
+  const entry = store.hashtags[name] as Frozen<HashtagEntry>;
+  return { name, topics: topicsWith(store, name).length, locked: entry.locked };
+}
+
+/**
+ * The board's hashtags whose key is close to `key` (nearTier), at most
+ * NEAR_MAX: the closest tier first, within a tier the most used first, then
+ * by key. The hashtag whose key is `key` itself is never one of them. Only an
+ * order to show; it decides nothing.
+ */
+export function nearHashtags(store: Frozen<HashtagStore>, key: string): ListedHashtag[] {
+  const found: { tier: number; key: string; hashtag: ListedHashtag }[] = [];
+  for (const [name, entry] of Object.entries(store.hashtags)) {
+    const tier = entry.key === key ? null : nearTier(key, entry.key);
+    if (tier !== null) found.push({ tier, key: entry.key, hashtag: listed(store, name) });
+  }
+  return found
+    .toSorted(
+      (a, b) => a.tier - b.tier || b.hashtag.topics - a.hashtag.topics || byKey(a.key, b.key),
+    )
+    .slice(0, NEAR_MAX)
+    .map((entry) => entry.hashtag);
+}
+
+/** The hashtags on at least one topic, the most used first, then by key; at most `max`. */
+export function mostUsedHashtags(store: Frozen<HashtagStore>, max: number): ListedHashtag[] {
+  return Object.entries(store.hashtags)
+    .map(([name, entry]) => ({ key: entry.key, hashtag: listed(store, name) }))
+    .filter((entry) => entry.hashtag.topics > 0)
+    .toSorted((a, b) => b.hashtag.topics - a.hashtag.topics || byKey(a.key, b.key))
+    .slice(0, max)
+    .map((entry) => entry.hashtag);
 }
 
 // ---- reading the file ----
@@ -366,6 +471,72 @@ function creationProblem(ctx: HashtagContext, fresh: readonly string[]): string 
   return null;
 }
 
+/**
+ * Which of the names asked for the asker said are new (the socket's `new`
+ * and a create's `new_hashtags`), and which command it asked with, so a
+ * refusal can say how to ask again.
+ */
+export interface Opening {
+  names: readonly string[];
+  via: "hashtag" | "create";
+}
+
+const SAID_NOTHING_NEW: Opening = { names: [], via: "hashtag" };
+
+/** `#NAME（N 個議題）`, with the lock when it has one. */
+function listedText(entry: ListedHashtag): string {
+  const lock = entry.locked ? "；鎖上：只有使用者能貼" : "";
+  return `#${entry.name}（${entry.topics} 個議題${lock}）`;
+}
+
+/** The close hashtags of every name in `fresh`, each once, at most NEAR_MAX. */
+function nearAll(store: Frozen<HashtagStore>, fresh: readonly string[]): ListedHashtag[] {
+  const found = new Map<string, ListedHashtag>();
+  for (const name of fresh)
+    for (const entry of nearHashtags(store, hashtagKey(name))) found.set(entry.name, entry);
+  return [...found.values()].slice(0, NEAR_MAX);
+}
+
+/** What the board has, for a refusal: the close ones, then the most used, then how many. */
+function boardList(store: Frozen<HashtagStore>, fresh: readonly string[]): string {
+  const count = Object.keys(store.hashtags).length;
+  const near = nearAll(store, fresh);
+  const shown = new Set(near.map((entry) => entry.name));
+  const used = mostUsedHashtags(store, MOST_USED_MAX + shown.size)
+    .filter((entry) => !shown.has(entry.name))
+    .slice(0, MOST_USED_MAX);
+  const parts = [
+    near.length === 0 ? null : `看板上相近的：${near.map(listedText).join("、")}`,
+    used.length === 0 ? null : `常用的：${used.map(listedText).join("、")}`,
+    `共 ${count} 個，全部用 myshape.sh hashtags 看。`,
+  ];
+  return parts.filter((part) => part !== null).join("；");
+}
+
+function againText(opening: Opening, topic: { id: string }, fresh: readonly string[]): string {
+  if (opening.via === "create")
+    return `把這些名稱從 --hashtag 改成 --new-hashtag 再跑一次：${fresh.map((name) => `--new-hashtag ${name}`).join(" ")}`;
+  return `加 --new 再跑一次：myshape.sh hashtag ${topic.id} +${fresh[0] as string} --new`;
+}
+
+/** Why the aggregator may not open `fresh` without saying they are new, or null. */
+function unmarkedProblem(
+  ctx: HashtagContext,
+  topic: { id: string },
+  fresh: readonly string[],
+  opening: Opening,
+): string | null {
+  if (ctx.by !== "aggregator" || !ctx.store.settings.aggregator_must_mark_new) return null;
+  const said = new Set(opening.names.map(hashtagKey));
+  const unmarked = fresh.filter((name) => !said.has(hashtagKey(name)));
+  if (unmarked.length === 0) return null;
+  const head = `${tags(unmarked)} 是看板還沒有的 hashtag，這次沒有改。`;
+  const again = againText(opening, topic, unmarked);
+  if (Object.keys(ctx.store.hashtags).length === 0)
+    return `${head}看板上還沒有任何 hashtag；確定要開新的，${again}`;
+  return `${head}${boardList(ctx.store, unmarked)}意思相同就改貼那一個；只有確定意思不同、要開新的，才${again}`;
+}
+
 /** The names asked for, as the spellings to put on: known ones as shown, new ones as given. */
 function wanted(
   store: Frozen<HashtagStore>,
@@ -404,18 +575,27 @@ function lockedOf(store: Frozen<HashtagStore>, names: readonly string[]): string
   return names.filter((name) => store.hashtags[name]?.locked === true);
 }
 
-/** Why `adding` may not go on a topic that has `count` hashtags now, or null. */
+/** What a topic had and what is to go on it, with the names among them the board does not have. */
+interface Adding {
+  before: readonly string[];
+  adding: readonly string[];
+  fresh: readonly string[];
+}
+
+/** Why `change.adding` may not go on the topic, or null. */
 function addProblem(
   ctx: HashtagContext,
   topic: { id: string; name: string },
-  count: number,
-  adding: readonly string[],
-  fresh: readonly string[],
+  change: Adding,
+  opening: Opening,
 ): string | null {
   const problem =
-    aggregatorProblem(ctx, lockedOf(ctx.store, adding)) ?? creationProblem(ctx, fresh);
+    aggregatorProblem(ctx, lockedOf(ctx.store, change.adding)) ??
+    creationProblem(ctx, change.fresh) ??
+    unmarkedProblem(ctx, topic, change.fresh, opening);
   if (problem !== null) return problem;
-  return count + adding.length > ctx.store.settings.per_topic_max
+  const count = change.before.length;
+  return count + change.adding.length > ctx.store.settings.per_topic_max
     ? overMax(ctx, topic, count)
     : null;
 }
@@ -434,12 +614,15 @@ function withTopicTags(
 
 /**
  * Puts `raw` hashtags on one topic, opening the ones the board does not have.
- * One record for the whole change, saying what the topic had before and after.
+ * While aggregator_must_mark_new is on, the aggregator opens only the names
+ * `opening` says are new. One record for the whole change, saying what the
+ * topic had before and after.
  */
 export function addHashtags(
   ctx: HashtagContext,
   rawTopic: string,
   raw: readonly string[],
+  opening: Opening = SAID_NOTHING_NEW,
 ): HashtagResult {
   const topic = liveTopic(ctx.topics, rawTopic);
   if (typeof topic === "string") return refuse(topic);
@@ -449,16 +632,25 @@ export function addHashtags(
   const adding = asked.names.filter((name) => !before.includes(name));
   if (adding.length === 0)
     return unchanged(ctx.store, `ok ${topic.id} 本來就有 ${tags(asked.names)}`);
-  const problem = addProblem(ctx, topic, before.length, adding, asked.fresh);
+  const change = { before, adding, fresh: asked.fresh };
+  const problem = addProblem(ctx, topic, change, opening);
   if (problem !== null) return refuse(problem);
-  return putOn(ctx, topic, { before, adding, fresh: asked.fresh });
+  return putOn(ctx, topic, change);
+}
+
+/** `（新開的 hashtag：#X）` for the names opened, with the close ones the board had; empty for none. */
+function openedText(store: Frozen<HashtagStore>, fresh: readonly string[]): string {
+  if (fresh.length === 0) return "";
+  const near = nearAll(store, fresh).map((entry) => entry.name);
+  const close = near.length === 0 ? "" : `；看板上相近的有 ${tags(near)}`;
+  return `（新開的 hashtag：${tags(fresh)}${close}）`;
 }
 
 /** The change that puts `adding` on a topic that had `before`, opening `fresh`. */
 function putOn(
   ctx: HashtagContext,
   topic: { id: string; name: string },
-  change: { before: readonly string[]; adding: readonly string[]; fresh: readonly string[] },
+  change: Adding,
 ): HashtagResult {
   const { before, adding, fresh } = change;
   const after = [...before, ...adding];
@@ -466,7 +658,8 @@ function putOn(
   for (const name of fresh)
     next.hashtags[name] = newEntry(ctx, hashtagKey(name), Object.keys(next.hashtags).length);
   const opened = fresh.length === 0 ? "" : `（新開的 hashtag：${tags(fresh)}）`;
-  return changed(next, `ok ${topic.id} 已貼上 ${tags(adding)}${opened}`, {
+  const line = `ok ${topic.id} 已貼上 ${tags(adding)}${openedText(ctx.store, fresh)}`;
+  return changed(next, line, {
     kind: "hashtag.added",
     topic: topic.id,
     before: before.join(" "),

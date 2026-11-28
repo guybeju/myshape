@@ -8,12 +8,16 @@ import {
   colorHashtag,
   deleteHashtag,
   deleteView,
+  editDistance,
   emptyHashtags,
   hashtagKey,
   hashtagView,
   lockHashtag,
   markSeen,
   mergeHashtags,
+  mostUsedHashtags,
+  nearHashtags,
+  nearTier,
   parseHashtags,
   reconcile,
   removeHashtag,
@@ -29,6 +33,7 @@ import type {
   HashtagStore,
 } from "./hashtags.js";
 import type { Frozen } from "./records.js";
+import { generator } from "./seeded-random.test-helper.js";
 import { emptyState } from "./topics.js";
 import type { TopicState } from "./topics.js";
 
@@ -57,6 +62,15 @@ function ctx(
   return { store, topics: topicState(), by: "aggregator", records: [], now: NOW, ...extra };
 }
 
+/** Puts hashtags on as an asker that says each name is new: for the tests of the other rails. */
+function addSaidNew(
+  context: HashtagContext,
+  topic: string,
+  names: readonly string[],
+): HashtagResult {
+  return addHashtags(context, topic, names, { names, via: "hashtag" });
+}
+
 /** The store after a change that must have been made. */
 function after(result: HashtagResult): HashtagStore {
   if (!result.ok || !result.changed) throw new Error(`expected a change, got ${result.line}`);
@@ -64,8 +78,8 @@ function after(result: HashtagResult): HashtagStore {
 }
 
 function tagged(): HashtagStore {
-  let store = after(addHashtags(ctx(), "a", ["AI_INFRA", "URGENT"]));
-  store = after(addHashtags(ctx(store), "b", ["AI_INFRA"]));
+  let store = after(addSaidNew(ctx(), "a", ["AI_INFRA", "URGENT"]));
+  store = after(addSaidNew(ctx(store), "b", ["AI_INFRA"]));
   return store;
 }
 
@@ -95,10 +109,10 @@ describe("a hashtag name", () => {
   });
 
   it("keeps the spelling first created when another spelling is put on", () => {
-    const store = after(addHashtags(ctx(), "a", ["AI_INFRA"]));
-    const again = addHashtags(ctx(store), "a", ["ai_infra", "ＡＩ_INFRA"]);
+    const store = after(addSaidNew(ctx(), "a", ["AI_INFRA"]));
+    const again = addSaidNew(ctx(store), "a", ["ai_infra", "ＡＩ_INFRA"]);
     expect(again).toMatchObject({ ok: true, changed: false, line: "ok a 本來就有 #AI_INFRA" });
-    const other = after(addHashtags(ctx(store), "b", ["ＡＩ_INFRA"]));
+    const other = after(addSaidNew(ctx(store), "b", ["ＡＩ_INFRA"]));
     expect(other.topics["b"]).toEqual(["AI_INFRA"]);
     expect(Object.keys(other.hashtags)).toEqual(["AI_INFRA"]);
   });
@@ -106,7 +120,7 @@ describe("a hashtag name", () => {
 
 describe("putting hashtags on a topic", () => {
   it("opens a new hashtag on first use and records before and after", () => {
-    const result = addHashtags(ctx(), "old", ["AI_INFRA"]);
+    const result = addSaidNew(ctx(), "old", ["AI_INFRA"]);
     expect(result).toMatchObject({
       ok: true,
       changed: true,
@@ -124,12 +138,12 @@ describe("putting hashtags on a topic", () => {
   });
 
   it("refuses a topic that is archived or missing, and a malformed name", () => {
-    expect(addHashtags(ctx(), "z", ["X"])).toMatchObject({
+    expect(addSaidNew(ctx(), "z", ["X"])).toMatchObject({
       ok: false,
       line: "議題 z 已封存，要先 reopen。",
     });
-    expect(addHashtags(ctx(), "nope", ["X"])).toMatchObject({ ok: false });
-    expect(addHashtags(ctx(), "a", ["-X"])).toMatchObject({ ok: false });
+    expect(addSaidNew(ctx(), "nope", ["X"])).toMatchObject({ ok: false });
+    expect(addSaidNew(ctx(), "a", ["-X"])).toMatchObject({ ok: false });
   });
 
   it("refuses more than the per-topic maximum, for the captain too", () => {
@@ -137,9 +151,9 @@ describe("putting hashtags on a topic", () => {
       ...emptyHashtags(),
       settings: { ...emptyHashtags().settings, per_topic_max: 2 },
     };
-    const two = after(addHashtags(ctx(store), "a", ["A1", "A2"]));
+    const two = after(addSaidNew(ctx(store), "a", ["A1", "A2"]));
     for (const by of ["aggregator", "captain"] as const) {
-      const third = addHashtags(ctx(two, { by }), "a", ["A3"]);
+      const third = addSaidNew(ctx(two, { by }), "a", ["A3"]);
       expect(third).toMatchObject({ ok: false });
       expect(!third.ok && third.line).toContain("已經有 2 個 hashtag，上限 2 個");
     }
@@ -148,12 +162,12 @@ describe("putting hashtags on a topic", () => {
   it("lets only the captain open a hashtag past the board-wide maximum", () => {
     const base = emptyHashtags();
     const store = after(
-      addHashtags(ctx({ ...base, settings: { ...base.settings, board_max: 1 } }), "a", ["ONE"]),
+      addSaidNew(ctx({ ...base, settings: { ...base.settings, board_max: 1 } }), "a", ["ONE"]),
     );
-    expect(addHashtags(ctx(store), "b", ["ONE"])).toMatchObject({ ok: true, changed: true });
-    const refused = addHashtags(ctx(store), "b", ["TWO"]);
+    expect(addSaidNew(ctx(store), "b", ["ONE"])).toMatchObject({ ok: true, changed: true });
+    const refused = addSaidNew(ctx(store), "b", ["TWO"]);
     expect(!refused.ok && refused.line).toContain("看板最多 1 個 hashtag");
-    expect(addHashtags(ctx(store, { by: "captain" }), "b", ["TWO"])).toMatchObject({
+    expect(addSaidNew(ctx(store, { by: "captain" }), "b", ["TWO"])).toMatchObject({
       changed: true,
     });
   });
@@ -161,20 +175,20 @@ describe("putting hashtags on a topic", () => {
   it("follows the captain's settings for the aggregator", () => {
     const store = tagged();
     const noTagging = { ...store, settings: { ...store.settings, aggregator_may_tag: false } };
-    expect(addHashtags(ctx(noTagging), "c", ["URGENT"])).toMatchObject({ ok: false });
+    expect(addSaidNew(ctx(noTagging), "c", ["URGENT"])).toMatchObject({ ok: false });
     expect(removeHashtag(ctx(noTagging), "a", "URGENT")).toMatchObject({ ok: false });
-    expect(addHashtags(ctx(noTagging, { by: "captain" }), "c", ["URGENT"])).toMatchObject({
+    expect(addSaidNew(ctx(noTagging, { by: "captain" }), "c", ["URGENT"])).toMatchObject({
       changed: true,
     });
     const noOpening = { ...store, settings: { ...store.settings, aggregator_may_create: false } };
-    expect(addHashtags(ctx(noOpening), "c", ["URGENT"])).toMatchObject({ changed: true });
-    const refused = addHashtags(ctx(noOpening), "c", ["FRESH"]);
+    expect(addSaidNew(ctx(noOpening), "c", ["URGENT"])).toMatchObject({ changed: true });
+    const refused = addSaidNew(ctx(noOpening), "c", ["FRESH"]);
     expect(!refused.ok && refused.line).toContain("關掉了 aggregator 開新的 hashtag");
   });
 
   it("keeps a locked hashtag for the captain", () => {
     const store = after(lockHashtag(ctx(tagged(), { by: "captain" }), "ai_infra", true));
-    const add = addHashtags(ctx(store), "c", ["AI_INFRA"]);
+    const add = addSaidNew(ctx(store), "c", ["AI_INFRA"]);
     expect(!add.ok && add.line).toContain("#AI_INFRA 鎖上了");
     expect(removeHashtag(ctx(store), "a", "AI_INFRA")).toMatchObject({ ok: false });
     expect(removeHashtag(ctx(store, { by: "captain" }), "a", "AI_INFRA")).toMatchObject({
@@ -191,17 +205,242 @@ describe("putting hashtags on a topic", () => {
       by: "aggregator",
     });
     const full = Array.from({ length: 20 }, (_, n) => made(NOW_S - n));
-    const refused = addHashtags(ctx(store, { records: full }), "c", ["URGENT"]);
+    const refused = addSaidNew(ctx(store, { records: full }), "c", ["URGENT"]);
     expect(!refused.ok && refused.line).toContain("超過每小時上限");
     const old = [...full.slice(1), made(NOW_S - 3600)];
-    expect(addHashtags(ctx(store, { records: old }), "c", ["URGENT"])).toMatchObject({
+    expect(addSaidNew(ctx(store, { records: old }), "c", ["URGENT"])).toMatchObject({
       changed: true,
     });
-    expect(
-      addHashtags(ctx(store, { records: full, by: "captain" }), "c", ["URGENT"]),
-    ).toMatchObject({
+    expect(addSaidNew(ctx(store, { records: full, by: "captain" }), "c", ["URGENT"])).toMatchObject(
+      {
+        changed: true,
+      },
+    );
+  });
+});
+
+/**
+ * A store with these hashtags, each on as many topics as given (topic ids
+ * t0, t1, …), and locked when the count is negative.
+ */
+function registry(uses: Record<string, number>): HashtagStore {
+  const store = emptyHashtags();
+  let next = 0;
+  for (const [name, count] of Object.entries(uses)) {
+    store.hashtags[name] = {
+      key: hashtagKey(name),
+      created_at: NOW,
+      created_by: "captain",
+      color: "c1",
+      locked: count < 0,
+    };
+    for (let n = 0; n < Math.abs(count); n += 1) {
+      const id = `t${next}`;
+      next += 1;
+      store.topics[id] = [name];
+    }
+  }
+  return store;
+}
+
+function refusal(result: HashtagResult): string {
+  if (result.ok) throw new Error(`expected a refusal, got ${result.line}`);
+  return result.line;
+}
+
+describe("a new hashtag the aggregator must say is new", () => {
+  it("is refused unsaid, with the way to ask again, and changes nothing", () => {
+    const store = tagged();
+    const line = refusal(addHashtags(ctx(store), "c", ["AI_INFA"]));
+    expect(line).toBe(
+      "#AI_INFA 是看板還沒有的 hashtag，這次沒有改。" +
+        "看板上相近的：#AI_INFRA（2 個議題）；常用的：#URGENT（1 個議題）；" +
+        "共 2 個，全部用 myshape.sh hashtags 看。意思相同就改貼那一個；" +
+        "只有確定意思不同、要開新的，才加 --new 再跑一次：myshape.sh hashtag c +AI_INFA --new",
+    );
+    expect(store).toEqual(tagged());
+  });
+
+  it("opens once it is said new, in any spelling, and names the close ones", () => {
+    const made = addHashtags(ctx(tagged()), "c", ["AI_INFA"], {
+      names: ["ai_infa"],
+      via: "hashtag",
+    });
+    expect(made).toMatchObject({
+      changed: true,
+      line: "ok c 已貼上 #AI_INFA（新開的 hashtag：#AI_INFA；看板上相近的有 #AI_INFRA）",
+      records: [{ text: "議題「C」貼上 #AI_INFA（新開的 hashtag：#AI_INFA）" }],
+    });
+    const far = addHashtags(ctx(tagged()), "c", ["BILLING"], {
+      names: ["BILLING"],
+      via: "hashtag",
+    });
+    expect(far).toMatchObject({ line: "ok c 已貼上 #BILLING（新開的 hashtag：#BILLING）" });
+  });
+
+  it("binds only the aggregator, and only while the setting is on", () => {
+    const store = tagged();
+    expect(addHashtags(ctx(store, { by: "captain" }), "c", ["FRESH"])).toMatchObject({
       changed: true,
     });
+    const off = { ...store, settings: { ...store.settings, aggregator_must_mark_new: false } };
+    expect(addHashtags(ctx(off), "c", ["FRESH"])).toMatchObject({
+      changed: true,
+      line: "ok c 已貼上 #FRESH（新開的 hashtag：#FRESH）",
+    });
+  });
+
+  it("lets a name said new that the board has go on as it is", () => {
+    const made = addHashtags(ctx(tagged()), "c", ["ai_infra"], {
+      names: ["ai_infra"],
+      via: "hashtag",
+    });
+    expect(made).toMatchObject({ changed: true, line: "ok c 已貼上 #AI_INFRA" });
+  });
+
+  it("on a create, refuses only the names not said new and says to use --new-hashtag", () => {
+    const store = tagged();
+    const asked = ["AI_INFRA", "NEW1", "NEW2", "NEW3"];
+    const line = refusal(addHashtags(ctx(store), "c", asked, { names: ["NEW1"], via: "create" }));
+    expect(line).toContain("#NEW2、#NEW3 是看板還沒有的 hashtag，這次沒有改。");
+    expect(line).toContain(
+      "才把這些名稱從 --hashtag 改成 --new-hashtag 再跑一次：--new-hashtag NEW2 --new-hashtag NEW3",
+    );
+    expect(line).not.toContain("NEW1");
+    const made = addHashtags(ctx(store), "c", asked, {
+      names: ["NEW1", "NEW2", "NEW3"],
+      via: "create",
+    });
+    expect(made).toMatchObject({ changed: true });
+  });
+
+  it("on an empty board says there is none yet", () => {
+    expect(refusal(addHashtags(ctx(), "c", ["FIRST"]))).toBe(
+      "#FIRST 是看板還沒有的 hashtag，這次沒有改。看板上還沒有任何 hashtag；" +
+        "確定要開新的，加 --new 再跑一次：myshape.sh hashtag c +FIRST --new",
+    );
+  });
+
+  it("names at most 20 of the most used, not those already named close, and how many", () => {
+    const uses: Record<string, number> = { AI_INFRA: 1 };
+    for (let n = 0; n < 30; n += 1) uses[`TAG${String(n).padStart(2, "0")}`] = 30 - n;
+    const line = refusal(addHashtags(ctx(registry(uses)), "c", ["AI_INFA"]));
+    expect(line).toContain("看板上相近的：#AI_INFRA（1 個議題）；常用的：#TAG00（30 個議題）、");
+    expect(line).toContain("#TAG19（11 個議題）；共 31 個");
+    expect(line).not.toContain("#TAG20");
+    expect(line.match(/#AI_INFRA/g)).toHaveLength(1);
+    expect(line).not.toContain("\n");
+  });
+
+  it("comes after the locks and the creation limits, which no --new would get past", () => {
+    const store = after(lockHashtag(ctx(tagged(), { by: "captain" }), "URGENT", true));
+    expect(refusal(addHashtags(ctx(store), "c", ["URGENT", "FRESH"]))).toContain("鎖上了");
+    const closed = { ...store, settings: { ...store.settings, aggregator_may_create: false } };
+    expect(refusal(addHashtags(ctx(closed), "c", ["FRESH"]))).toContain(
+      "關掉了 aggregator 開新的 hashtag",
+    );
+    const full = { ...store, settings: { ...store.settings, board_max: 2 } };
+    expect(refusal(addHashtags(ctx(full), "c", ["FRESH"]))).toContain("看板最多 2 個 hashtag");
+  });
+});
+
+describe("hashtags close to a name", () => {
+  it("lists the same without underscores, then containing, then within a few edits", () => {
+    const store = registry({
+      AI_INFRA: 1,
+      AIINFRA: 0,
+      AI_INFRA_GPU: 0,
+      AI_INFA: 0,
+      UNRELATED: 9,
+    });
+    expect(nearHashtags(store, "ai_infra").map((entry) => entry.name)).toEqual([
+      "AIINFRA",
+      "AI_INFRA_GPU",
+      "AI_INFA",
+    ]);
+  });
+
+  it("puts the most used first within a tier, then by key, and marks the locked", () => {
+    const store = registry({ GPUS: 1, GPUX: 3, GPUA: 1, GPUB: -2 });
+    expect(nearHashtags(store, "gpu")).toEqual([
+      { name: "GPUX", topics: 3, locked: false },
+      { name: "GPUB", topics: 2, locked: true },
+      { name: "GPUA", topics: 1, locked: false },
+      { name: "GPUS", topics: 1, locked: false },
+    ]);
+    const line = refusal(addHashtags(ctx(registry({ GPUB: -2 })), "c", ["GPU"]));
+    expect(line).toContain("看板上相近的：#GPUB（2 個議題；鎖上：只有使用者能貼）");
+  });
+
+  it("names at most five", () => {
+    const store = registry({ GPU1: 0, GPU2: 0, GPU3: 0, GPU4: 0, GPU5: 0, GPU6: 0 });
+    expect(nearHashtags(store, "gpu").map((entry) => entry.name)).toEqual([
+      "GPU1",
+      "GPU2",
+      "GPU3",
+      "GPU4",
+      "GPU5",
+    ]);
+  });
+
+  it("holds containment to a shorter side of two code points or more", () => {
+    expect(nearTier("ab", "xaby")).toBe(1);
+    expect(nearTier("a", "xay")).toBeNull();
+    expect(nearTier("𠀀", "𠀀𠀁")).toBe(2);
+    expect(nearTier("𠀀𠀁", "𠀂𠀀𠀁")).toBe(1);
+  });
+
+  it("allows one edit up to five code points and two beyond", () => {
+    expect(nearTier("abcde", "abdce")).toBe(2);
+    expect(nearTier("abcde", "abxye")).toBeNull();
+    expect(nearTier("abcdef", "abxyef")).toBe(2);
+    expect(nearTier("abcdef", "axyzef")).toBeNull();
+    expect(nearTier("a_b_c", "abc")).toBe(0);
+    expect(nearTier("_", "__")).toBe(0);
+    expect(nearTier("_", "a")).toBeNull();
+  });
+
+  it("counts a swap of neighbours as one edit", () => {
+    expect(editDistance([..."ab"], [..."ba"])).toBe(1);
+    expect(editDistance([..."ca"], [..."abc"])).toBe(3);
+    expect(editDistance([..."kitten"], [..."sitting"])).toBe(3);
+    expect(editDistance([], [..."abc"])).toBe(3);
+    expect(editDistance([..."abc"], [])).toBe(3);
+  });
+
+  it("lists the most used apart from the unused, most first, then by key", () => {
+    const store = registry({ B: 2, A: 2, C: 3, D: 0 });
+    expect(mostUsedHashtags(store, 3).map((entry) => entry.name)).toEqual(["C", "A", "B"]);
+    expect(mostUsedHashtags(store, 2).map((entry) => entry.name)).toEqual(["C", "A"]);
+  });
+
+  it("for any board, never lists the name itself, lists the same first, and is stable", () => {
+    const letters = ["a", "b", "c", "_"];
+    for (let seed = 1; seed <= 200; seed += 1) {
+      const random = generator(seed);
+      const word = (): string =>
+        Array.from(
+          { length: 1 + Math.floor(random() * 6) },
+          () => letters[Math.floor(random() * letters.length)],
+        ).join("");
+      const uses: Record<string, number> = {};
+      for (let n = 0; n < 12; n += 1) uses[word()] = Math.floor(random() * 4);
+      const store = registry(uses);
+      const key = hashtagKey(word());
+      const near = nearHashtags(store, key);
+      const tiers = near.map((entry) => nearTier(key, hashtagKey(entry.name)));
+      expect(
+        near.every((entry) => hashtagKey(entry.name) !== key),
+        `seed ${seed}`,
+      ).toBe(true);
+      expect(tiers.toSorted(), `seed ${seed}`).toEqual(tiers);
+      const same = Object.values(store.hashtags).filter(
+        (entry) => entry.key !== key && nearTier(key, entry.key) === 0,
+      ).length;
+      expect(tiers.filter((tier) => tier === 0).length, `seed ${seed}`).toBe(Math.min(same, 5));
+      const reversed = registry(Object.fromEntries(Object.entries(uses).toReversed()));
+      expect(nearHashtags(reversed, key), `seed ${seed}`).toEqual(near);
+    }
   });
 });
 
@@ -295,6 +534,19 @@ describe("the settings", () => {
     ])
       expect(changeSettings(captain, bad)).toMatchObject({ ok: false, code: "usage" });
     expect(changeSettings(captain, { per_topic_max: 8 })).toMatchObject({ changed: false });
+  });
+
+  it("make the aggregator say a new hashtag is new unless the captain turns it off", () => {
+    expect(emptyHashtags().settings.aggregator_must_mark_new).toBe(true);
+    const off = after(changeSettings(captain, { aggregator_must_mark_new: false }));
+    expect(off.settings.aggregator_must_mark_new).toBe(false);
+    expect(changeSettings(captain, { aggregator_must_mark_new: "no" })).toMatchObject({
+      code: "usage",
+    });
+    const read = (settings: unknown) => parseHashtags({ v: 1, settings }).settings;
+    expect(read({ aggregator_must_mark_new: false }).aggregator_must_mark_new).toBe(false);
+    expect(read({ aggregator_must_mark_new: "no" }).aggregator_must_mark_new).toBe(true);
+    expect(read(undefined).aggregator_must_mark_new).toBe(true);
   });
 });
 
@@ -399,7 +651,7 @@ describe("taking back the aggregator's change", () => {
 
   it("takes off what it put on, and drops a hashtag it opened that nobody saw", () => {
     const base = tagged();
-    const add = addHashtags(ctx(base), "c", ["AI_INFA", "URGENT"]);
+    const add = addSaidNew(ctx(base), "c", ["AI_INFA", "URGENT"]);
     const records = recorded(base, add, "r-typo");
     const result = revertChange(ctx(after(add), { by: "captain", records }), "r-typo");
     expect(result).toMatchObject({
@@ -447,7 +699,7 @@ describe("taking back the aggregator's change", () => {
 
 describe("the seen mark", () => {
   it("clears the 新 mark and the list of recent changes", () => {
-    const add = addHashtags(ctx(), "a", ["AI_INFA"]);
+    const add = addSaidNew(ctx(), "a", ["AI_INFA"]);
     if (!add.ok || !add.changed) throw new Error("expected a change");
     const records: HashtagRecord[] = [
       { ...add.records[0], rid: "r1", ts: NOW_S, by: "aggregator" },
@@ -469,8 +721,8 @@ describe("the seen mark", () => {
 
 describe("what topic changes do to hashtags", () => {
   it("a merge takes the union and may go over the per-topic maximum, which the page flags", () => {
-    let store = after(addHashtags(ctx(), "a", ["A1", "A2"]));
-    store = after(addHashtags(ctx(store), "b", ["A2", "B1"]));
+    let store = after(addSaidNew(ctx(), "a", ["A1", "A2"]));
+    store = after(addSaidNew(ctx(store), "b", ["A2", "B1"]));
     store = { ...store, settings: { ...store.settings, per_topic_max: 2 } };
     const carried = carryMerge(store, "b", { id: "a", name: "A" });
     expect(carried?.records[0]).toMatchObject({
@@ -483,7 +735,7 @@ describe("what topic changes do to hashtags", () => {
     const merged = carried?.store as HashtagStore;
     expect(merged.topics["b"]).toBeUndefined();
     expect(hashtagView(merged, []).over).toEqual(["a"]);
-    expect(addHashtags(ctx(merged, { by: "captain" }), "a", ["C1"])).toMatchObject({ ok: false });
+    expect(addSaidNew(ctx(merged, { by: "captain" }), "a", ["C1"])).toMatchObject({ ok: false });
     expect(carryMerge(store, "c", { id: "a", name: "A" })).toBeNull();
   });
 
@@ -619,7 +871,7 @@ describe("the edges", () => {
   });
 
   it("a hashtag is 新 only when the aggregator opened it after the last seen mark", () => {
-    const store = after(addHashtags(ctx(), "a", ["X"]));
+    const store = after(addSaidNew(ctx(), "a", ["X"]));
     const atSeen: HashtagRecord[] = [{ rid: "s", ts: NOW_S, kind: "hashtag.seen", by: "captain" }];
     expect(hashtagView(store, atSeen).hashtags[0]?.new).toBe(false);
     const undated = {
@@ -633,7 +885,7 @@ describe("the edges", () => {
   it("a topic at the per-topic maximum is not flagged as over it", () => {
     const base = emptyHashtags();
     const store = after(
-      addHashtags(ctx({ ...base, settings: { ...base.settings, per_topic_max: 2 } }), "a", [
+      addSaidNew(ctx({ ...base, settings: { ...base.settings, per_topic_max: 2 } }), "a", [
         "A",
         "B",
       ]),
