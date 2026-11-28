@@ -31,10 +31,35 @@
 - design E（build 1）已經在：`order` 的三種來源與 `queues-push`。`machines` 直接用每個 home 的 `order --tsv` 排，不另外排一次。
 - 看板讀取契約的 `turn`（hold kind `load`）講的是等容量、自己 hold 住的項目；「等機器」的項目沒有 hold，看板照一般排隊中的項目顯示，看板不用改。
 
-不在這一版的（build 3，placement）：`place()`、`needs:` 那幾行、每台的 placements、交出去的項目回到主 home 的路、共用工具清單和 FORK-SETUP 第 1 節對不對得上的檢查。
-清單本身這一版就放了，因為紀錄的 `tools` 要讀它（第 10 節）。
 決定 3 答了 B，所以設計裡「PC 等而 Mac 有空時告訴 captain 一次」那一行不做，留給 build 3 的 placement。
 負載降下來時叫醒 home 的檢查也不做，和設計一樣（第 9 節）。
+
+### 0.1 placement 和設計的對照（build 3）
+
+設計是 `overflow-plan.md` 修訂 2 的第 1 到 6 節（第 5 節第 3 項是這一版），照 `board-decoupling-recheck` 第 3.3 與 5.3 節搬到 first mate 這一側。
+這一版對照的是 guybeju/myshape 的 `main`（`bfc4379`，build 2 合併之後）。
+
+仍然適用：
+
+- 每個項目在每台機器上三種答案：可以、補齊後可以（每個差距寫出是什麼、誰補、大概的代價）、不行；不行只來自項目宣告的作業系統或機器（第 10 節）。
+- `place` 是 `rule-v1` 旁邊另一個不記狀態的函式，輸出另外放在 `placements[]`；`rule-v1` 的 `room`／`wait`／`unknown` 和讀它的 `order`、「等機器」、該轉告、該通知都不變。
+- 項目內文的 `needs:` 那幾行，沒有就是哪裡都可以；什麼都不存，每次從這一次的紀錄算。
+- 登入量不到，寫成待查，不寫成缺。
+
+build 2 已經有的：
+
+- 紀錄的 `platform`、`tools`、`homes[].code`、`projects_cloned`、`homes[].role`，和「環境差異」那一段（每台和共用清單比、和主 home 比）；`place` 直接讀它們，不另外量。
+- 共用工具清單 `dispatch-plan/common-tools.tsv`；這一版加它和 FORK-SETUP 第 1 節對不對得上的檢查（`stage-8-common-list.sh`）。
+
+搬了或改了的：
+
+- `place` 在 `bin/fm-dispatch-plan.sh`，不在 `fm-topic.sh`，也不在看板（`myshape/`）裡；`machines` 印「放到別台」。
+- 項目的 `needs:` 跟著 `order --tsv` 的第九欄與紀錄的 `ready[].needs` 從那一台送到主 home，因為主 home 只看得到每台的紀錄。
+- 清單和 FORK-SETUP 的檢查在 dispatcher 的測試裡，不在 `check-guide.sh`；ShellCheck 的最低版本照 `bin/fm-lint.sh` 的 pin，因為 FORK-SETUP 第 1 節沒寫它。
+- 設計的 hardware 需要還沒有任何項目用到，所以 `needs:` 這一版只認 `os=` 與 `machine=` 兩種會給不行的。
+- 「這台先等、需要的都有」不是第四種答案：`state` 是 `now`，`load` 寫 `wait`，文字不寫「可以」而寫「什麼都不缺，但那台先等」。
+- 規則範本主 home 那段從 v15 到 v16，只在第 4 行加「放到別台」；設計寫的「約 1445／1450」是舊的算法，現在三個範本是 1598／1600，靠刪五個多餘的字讓總數不變。
+- 交出去的項目回到主 home 的路不需要新工具（第 12 節）。
 
 ## 1. 五個子命令
 
@@ -42,13 +67,13 @@
 | --- | --- | --- |
 | `order [--hashtag <名稱>] [--tsv]` | 每個 home；`--hashtag` 只在主 home | 列出排隊中的項目該派、該 hold、該解除的順序，其餘的列在「先不派」並附原因；這台機器先等時，工作改列在「等機器」；`--hashtag` 只列議題貼著那個 hashtag 的那幾行；`--tsv` 給程式讀 |
 | `machine [--json]` | 每一台 | 這台的紀錄（`--json`），或只有這台的檢視 |
-| `machines [--json]` | 主 home | 每台的紀錄、`rule-v1` 的答案、該轉告、該通知與環境差異 |
+| `machines [--json]` | 主 home | 每台的紀錄、`rule-v1` 的答案、該轉告、該通知、放到別台與環境差異 |
 | `queues-in -` | 遠端的 second mate | 收下主 home 送來的佇列副本 |
 | `queues-push [--check \| --to <id>]` | 主 home | 把佇列副本送到每個遠端的 second mate，或只送給 `<id>` |
 
 規則範本叫主 first mate（`captain.block.md.tmpl`）與每個 second mate（`captain-shared.block.md.tmpl`）在重新評估排隊中的工作前跑 `order`，照「可派」的順序派；「等機器」不在「可派」裡，所以兩段規則都不用為它多寫一句。
 看板通知某個議題可以派了的時候，主 first mate 也請手上有那個議題項目的 second mate 跑 `order`。
-主 first mate 跑完 `order` 接著跑 `machines`，照「該轉告」「該通知」做。
+主 first mate 跑完 `order` 接著跑 `machines`，照「該轉告」「該通知」「放到別台」做（規則範本 v16）。
 
 ## 2. `order` 的佇列從哪裡來
 
@@ -162,7 +187,7 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
  "projects_cloned":["main","sample","sm1"],
  "tools":[{"name":"node","found":true,"version":"22.22.1"},{"name":"shellcheck","found":false,"version":null}],
  "ready":[{"home":"sm1","section":"dispatch","id":"s1","topic":"billing","topic_name":"帳務重構",
-   "queue":"high","at":0,"repo":"sample"}],
+   "queue":"high","at":0,"repo":"sample","needs":[{"kind":"os","value":"macos"}]}],
  "notes":[]}
 ```
 
@@ -177,7 +202,7 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 | `projects[]` | 最上層的 home 的 `config/project-capacity` 的每一行；`held` 照上游的 `fm_project_capacity_occupants`，用這台上叫那個名字的 clone（worker 的專案、home 本身或 `projects/<名稱>`）；沒有那個名字的 clone 時是 0，因為這台開不了它的 worker；紀錄讀不完時是 `null` |
 | `projects_cloned` | 每個 home 本身與它 `projects/` 底下的目錄名 |
 | `tools[]` | `dispatch-plan/common-tools.tsv` 上的每個工具，`<名稱> --version` 的第一個版本號（每個最多 5 秒）；沒有清單時整個是 `null` |
-| `ready[]` | 每個 home 的 `order --tsv` 裡「可派」與「等機器」的工作（不含已經回答的決定），照那個 home 的順序 |
+| `ready[]` | 每個 home 的 `order --tsv` 裡「可派」與「等機器」的工作（不含已經回答的決定），照那個 home 的順序；`needs` 是它的 `needs:` 那幾行（第 10 節），讀不懂時是 `null` |
 | `notes[]` | 讀不到的訊號是哪個、為什麼 |
 
 - 只有標籤與數字，沒有路徑、位址、指令或權杖，和上游的 `fm-lane-capacity.v1` 一樣。
@@ -212,7 +237,8 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 - 那一行放在來源那一行之後，因為 second mate 與 FORK-SETUP 都讀 `order` 的第一行。
 - 讀不到 backlog 時照舊只印「讀不到 backlog，照平常的方式派工。」，不問機器。
 - 等的代價：負載降下來時沒有東西叫醒 home。「等機器」的項目等那個 home 下一次重新評估：它有 worker 在跑時很快就有（拆掉或 PR 就緒），閒著的 home 要等心跳，最長 7200 秒。主 home 的 `machines` 在主 home 自己重新評估時看到那台有空，就在「該轉告」請那個 second mate 跑 `order`。
-- `--tsv`：同樣的項目，每項一行、八欄，用 tab 分開：段落（`dispatch`、`machine-wait`、`hold`、`release`、`parked`、`not-yet`）、id、議題 id、議題名稱、佇列（`high`、`normal`、`later`、`archived`、`none`）、在佇列裡的位置、repo、`work` 或 `decision`；沒有說明的那幾行，也不列「等你驗證」。讀不到 backlog 時什麼都不印。
+- `--tsv`：同樣的項目，每項一行、九欄，用 tab 分開：段落（`dispatch`、`machine-wait`、`hold`、`release`、`parked`、`not-yet`）、id、議題 id、議題名稱、佇列（`high`、`normal`、`later`、`archived`、`none`）、在佇列裡的位置、repo、`work` 或 `decision`、項目的 `needs:` 那幾行（一個 JSON 陣列，第 10 節）；沒有說明的那幾行，也不列「等你驗證」。讀不到 backlog 時什麼都不印。
+  第九欄是 build 3 加的；只讀前八欄的程式不受影響。
 
 ## 10. `machine` 與 `machines`
 
@@ -226,15 +252,71 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
   - 某個專案滿了，排在最前面的項目在一個 home，另一個 home 有排得比較後面的項目：請後面那個 home 把下一個位子讓給前面的。
 - **該通知**（給 captain 的一行，同一件事只說一次）：上面那種讓位；以及機器有空、專案卻滿了而且有項目在等，寫出佔位的裡面幾個 paused、幾個是 scout。
 - **環境差異**：每台和共用工具清單比（沒裝的、比最低版本舊的、版本讀不到的、那台的清單沒有的）；每個 home 的 commit 和 role 和主 home 比；下一個項目的 repo 在那台沒有 clone；作業系統不同時列出來；登入每台都待查。
-  每一行寫出補齊的方法與誰做（那台的 second mate、要 captain 同意），從不寫成那台不能跑。
-- `--json` 印 `{"schema":"fm-dispatch-machines.v1","at":…,"machines":[{via, record, verdict, error}]}`，給 agent 讀同樣的紀錄與答案。
+  每一行寫出補齊的方法與誰做（那台的 second mate、要 captain 同意）。
+- **放到別台**：見下面。
+- `--json` 印 `{"schema":"fm-dispatch-machines.v1","at":…,"machines":[{via, record, verdict, error}],"placements":[…]}`，給 agent 讀同樣的紀錄、答案與 placements。
 - 什麼都不記，每一行都來自這一次的紀錄。
 
 `machine` 在任何一台都能跑：`--json` 印這台的紀錄（第 7 節），不加時印只有這台的檢視，和 `machines` 的那一塊相同。
 
 共用工具清單是 `dispatch-plan/common-tools.tsv`：每行 `<名稱><tab><最低版本或 ->`，`#` 開頭的是說明。
 現在是 `node 22`、`pnpm`、`firefox`、`jq`、`shellcheck 0.11.0`（FORK-SETUP 的 `node` 與 `bin/fm-lint.sh` 要的 ShellCheck）。
-它和 FORK-SETUP 第 1 節對不對得上，由 build 3 加檢查。
+`stage-8-common-list.sh` 檢查它和來源對得上：清單上每個工具 FORK-SETUP 第 1 節都寫了，最低版本相同；ShellCheck 的最低版本等於 `bin/fm-lint.sh --required-version`；第 1 節寫了「`<工具>` <版本> 以上」的，清單上也是那個版本。
+
+### 10.1 項目的需要：`needs:`
+
+項目內文裡單獨一行，和 `topic:` 一樣，一行一個：
+
+| 這一行 | 意思 | 沒有時 |
+| --- | --- | --- |
+| `needs: os=macos`（或 `linux`、`darwin`） | 要那個作業系統；和紀錄的 `platform.os`（`Darwin`、`Linux`）比 | 那台不行 |
+| `needs: machine=<名稱> (<原因>)` | 釘在一台：`<名稱>` 是紀錄的 `machine`，或那台的一個 home（`main`、secondmate id）；原因寫在括號裡（全形半形都可以） | 別台都不行 |
+| `needs: tool=<名稱>` | 共用清單以外的工具 | 待查（紀錄只量清單上的工具） |
+| `needs: project=<名稱>` | 項目自己的 repo 以外，還要另一個 clone | 補齊：clone 它 |
+| `needs: login=<名稱>` | 一個登入，例如 `gh` | 待查（登入量不到） |
+
+- 沒有 `needs:` 的項目只需要共用清單與它自己 repo 的 clone，哪一台都可以。
+- 值只收 `[A-Za-z0-9._+-]`、最多 64 個字，所以路徑、指令不會跟著紀錄送到別台；工具的名稱從不拿來執行。
+  釘機器的原因去掉控制字元、最多 80 個字。
+  其他寫法（一行兩個、多出的字、不認得的種類）是「看不懂」，寫成待查，不算差距也不算不行。
+- `order` 不讀 `needs:`：它照舊排，「可派」裡的項目在這台是不是不行，看 `machines` 的「放到別台」。
+
+### 10.2 `place` 與「放到別台」
+
+`place` 輸入 `machines` 的一台（紀錄、`rule-v1` 的答案、名稱）與任何一台的一個 `ready[]` 項目，輸出一筆 placement：
+
+```
+{"home":"main","id":"mac-build","from":"here","via":"macmate","machine":"mac",
+ "state":"after-setup","load":"room","load_why":[],"why":[],
+ "gaps":[{"kind":"tool","name":"node","what":"把 node 從 20.1.0 升到 22 以上","who":"macmate","cost":"consent"}],
+ "to_check":[]}
+```
+
+- `state`：
+  - `cannot`（不行）：宣告的 `os=` 和量到的作業系統不同，或 `machine=` 不是這台；`why` 每一條都寫「項目宣告 needs: …，<這台> 量到的是 …」，說的是宣告，不是這台的能力。
+  - `after-setup`（補齊後可以）：有差距。
+  - `now`：什麼都不缺。
+- `gaps[]`，每一個有 `what`、`who`、`cost`：
+  - 共用清單上沒裝的（`裝 <工具>`）或比最低版本舊的（`把 <工具> 從 <版本> 升到 <最低版本> 以上`）：那台的第一個 home，`consent`（要 captain 同意）；
+  - 項目的 repo 或宣告的 `project=` 在那台沒有同名的 clone：那台的第一個 home，`minutes`（幾分鐘，不用人）；那台的 home 本身就是它的 clone 時（例如 Mac 上 firstmate fork 的工作，設計第 7 節）不用補，所以這一條寫出來；
+  - 那一台的紀錄沒有 `needs`（程式比這一版舊）：更新那個 home 的程式，`minutes`；所以舊的那一台送來的項目在哪一台都不會讀成可以。
+  - `captain`（要 captain 在場）只出現在登入的待查裡，因為登入量不到。
+- `to_check[]`：量不到的，從不算差距或不行：登入、清單以外的工具、看不懂的 `os=` 或 `needs:` 行、讀不到的作業系統、版本或 clone、那台的清單沒有的工具。
+- `load`：那台的 `rule-v1`；機器是 `room` 而項目的專案上限都佔了時是 `wait`；`load_why` 寫原因。
+- 什麼都不存：每次 `machines` 都從這一次的紀錄算。
+
+「放到別台」每行一個項目，只列它自己那台（送來 `ready[]` 的那一台）先等（`load` 是 `wait`）而別台至少一台不是不行的，或它自己那台不行的：
+
+```
+放到別台（補不補齊、轉不轉過去，由主 first mate 判斷）：
+  main/mac-build（一般，看板）在 seanho-hp-envy 不行（項目宣告 needs: os=macos，seanho-hp-envy 量到的是 Linux）：mac 補齊後可以（把 node 從 20.1.0 升到 22 以上：macmate，要 captain 同意）。要轉過去：bin/fm-backlog-handoff.sh macmate mac-build。
+```
+
+- 每一台寫「可以」（`now` 而且 `load` 是 `room`）、「什麼都不缺，但那台先等（原因）」、「補齊後可以（每個差距）」或「不行（宣告）」，後面加待查。
+- 最後一句是怎麼轉：主 home 的項目用 `bin/fm-backlog-handoff.sh <那台的 second mate> <id>`；在 second mate 手上的項目先請它交回（第 12 節）。
+- 補齊值不值得、要不要轉，由主 first mate 判斷：「幾分鐘，不用人」通常比在滿的那台等好；「要 captain 同意」的，短的項目可能不值得（設計第 1 節）。
+  補齊照它的主人：裝工具要 captain 同意，登入是 captain 的，權限經過 security second mate；被拒絕的指令仍然停下回報，不換別的路做。
+- 連不到或沒有紀錄的那一台不放，和「不算也不轉交」一樣；`rule-v1` 判成 `unknown` 的那一台照放，`load` 寫 `unknown`。
 
 ## 11. 測試
 
@@ -242,12 +324,14 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 
 | 檔 | 測什麼 |
 | --- | --- |
-| `stage-1-order.sh` | 主 home 的各段與「先不派」的原因、封存檔裡已完成的依賴、`topic:` 那一行、壞掉時放行、`--hashtag` 只列那幾行而 second mate 的 home 拒絕、機器先等時的「等機器」（`load1`、`load5` 剛好 0.85 × cores、記憶體、磁碟）與決定留在「可派」、不知道時放行（讀不到記憶體、code root 沒有探測程式）、`--tsv` |
+| `stage-1-order.sh` | 主 home 的各段與「先不派」的原因、`--tsv` 第九欄的 `needs:`（每一種、原因的長度、看不懂的）、封存檔裡已完成的依賴、`topic:` 那一行、壞掉時放行、`--hashtag` 只列那幾行而 second mate 的 home 拒絕、機器先等時的「等機器」（`load1`、`load5` 剛好 0.85 × cores、記憶體、磁碟）與決定留在「可派」、不知道時放行（讀不到記憶體、code root 沒有探測程式）、`--tsv` |
 | `stage-2-sources.sh` | 同機與遠端的 second mate 的來源、第一行、一小時的提醒、等你驗證不出現 |
 | `stage-3-queues-in.sh` | 收下、略過較舊的、拒收壞的與太大的、只在 second mate 的 home 跑 |
 | `stage-4-queues-push.sh` | 第一次送時 stderr 沒有 shell 的錯誤、每台只送一次、沒變不送、30 分鐘再送、失敗下一輪再試、拒收的每小時一次、18 秒、通知只一則、`--to` 只送一台、交給遠端之前先送 |
-| `stage-5-machine.sh` | 紀錄的每個鍵、跨 home 數佔位而 PR 就緒的不佔、secondmate 的紀錄不是 worker、讀不到的訊號是 `null` 並寫原因、沒讀到每個 home、讀不懂的上限檔、沒有路徑、工具清單（找到、比較舊、沒裝、沒有清單）、只有這台的檢視 |
+| `stage-5-machine.sh` | 紀錄的每個鍵（含 `ready[].needs`）、跨 home 數佔位而 PR 就緒的不佔、secondmate 的紀錄不是 worker、讀不到的訊號是 `null` 並寫原因、沒讀到每個 home、讀不懂的上限檔、沒有路徑、工具清單（找到、比較舊、沒裝、沒有清單）、只有這台的檢視 |
 | `stage-6-machines.sh` | 只在主 home、每台遠端只問一次、連不到、舊版、不是紀錄、`rule-v1` 的每一種情形（設計的 run I）從讀的一方判、該轉告、該通知、機器先等時不請人派、環境差異的每一種、`--json` |
+| `stage-7-placements.sh` | 每個項目放到每一台：沒有 `needs:`、沒裝與比較舊的工具、沒有 clone、宣告的 `project=`、舊程式送來沒有 `needs` 的項目、`os=` 與 `machine=` 的不行、讀不到作業系統時的 `os=` 只是待查、登入與清單以外的工具與看不懂的行只是待查、每個差距的 what／who／cost、`rule-v1` 的答案不變；「放到別台」的每一種行與交回的那一句 |
+| `stage-8-common-list.sh` | 共用清單和 FORK-SETUP 第 1 節、`bin/fm-lint.sh` 的 ShellCheck pin 兩個方向都對得上 |
 
 `dispatch-plan/test/helpers.sh` 讓每一次 `order` 與 `machine` 讀一台固定的主機：上游的探測程式在 Linux 上讀 `FM_PROC_ROOT_OVERRIDE` 代替 `/proc`，`DP_HOST/bin` 裡的 `getconf` 與 `df` 回答核心數與磁碟，其他呼叫交給真的那一支；所以斷言不看 runner 真的負載。
 只有 planner 的呼叫拿到這些（`PLAN` 是包著它的小腳本，其他用 `dp_on_host`），因為上游其他讀 `/proc` 的程式遇到假的 `/proc` 時沒有退路；`stage-4` 跑的 `fm-backlog-handoff.sh` 不在固定的主機上。
@@ -260,3 +344,18 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 - 在 Mac 的 bash 3.2 上跑這些測試；macOS 讀 `sysctl`，固定主機的那幾個測試在那裡會讀到真的主機。
 - 離開模式的 daemon 與 supervision host 實際跑這個檢查。
 - 真的 Mac 上的 `machine`（工具、role、clone 的名字）：要等 macmate 那一台的程式更新到這一版。
+- Mac 上的 home 本身算不算 firstmate 的 clone：紀錄只有目錄名，所以「clone firstmate」那一條在 Mac 上會出現，寫著那台的 home 本身就是它的 clone 時不用（設計第 7 節第 3 項的檢查會確認）。
+
+## 12. 交出去的項目怎麼回來
+
+上游的 `bin/fm-backlog-handoff.sh` 只往一個方向搬：主 home 到 second mate；目的地一定是 secondmate home，所以 second mate 不能用它交回主 home，遠端的那一台也不能直接搬另一台的檔。
+「放到別台」說一個 second mate 手上的項目可以到別台時，用現有的工具交回，不需要新工具：
+
+1. 主 first mate 送一則訊息給那個 second mate，請它交回 `<id>`：項目還在 `## Queued`、沒有 `blocked-by` 連到別的項目（也沒有別的項目等它）時，跑 `bin/fm-tasks-axi.sh show <id>`，把整個項目（標題那一行與每一行內文，包括 `topic:` 與 `needs:`）原樣回給主 first mate，然後 `bin/fm-tasks-axi.sh hold <id> --reason "交回主 home"`；已經在跑、有連結的，回一行原因，不交。
+2. 主 first mate 用收到的標題與內文在自己的 backlog 加回同一個 id（`bin/fm-tasks-axi.sh add <id> "<標題>" --kind <種類> --repo <repo> --body-file <內文檔>`），再照「放到別台」交給要去的那台：`bin/fm-backlog-handoff.sh <那台的 second mate> <id>`，或主 home 自己那台時照 `order` 派。
+3. 主 first mate 加好之後，請原來那個 second mate `bin/fm-tasks-axi.sh rm <id>`；所以中間不會有一刻兩邊都沒有這個項目，同一段時間裡原來那邊是 hold 住的，不會被兩邊派。
+
+- 項目的 `topic:` 那一行跟著內文回來，所以 `order` 照原來的議題排；看板上那個 second mate 的 task 標記（`data/<id>/topic`）不搬，主 home 照 `topic:` 那一行排就夠了。
+- 第 1 步的 hold 是 second mate 自己的 backlog 操作，不是新的 second mate 規則：訊息本身寫出要跑什麼，所以共用的規則範本不用改。
+- 缺點：交回靠兩則訊息，不是一次搬完；內文經過訊息，主 first mate 加回時要照原樣。
+  要一次、原樣、可重試地交回，得在上游的 `fm-backlog-handoff.sh` 加一個往回的方向（或讓 `fm-backlog-receive.sh` 收主 home 的 outbox）；那是 Firstmate 自己的工具，不在這個 repo，列為後續。
