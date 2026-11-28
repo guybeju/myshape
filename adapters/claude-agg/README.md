@@ -26,7 +26,8 @@ order new work is handed out in (`dispatch-order.ts`), and then:
 - **plans** each dispatchable topic that has no task with one read-only
   planner session (`Read`, `Grep`, `Glob`, no prompts) in an empty directory of
   its own, allowed to read only the listed repositories' main checkouts,
-  keeping only tasks for those repositories;
+  keeping only tasks for those repositories; the same plan may put hashtags
+  on the topic or take them off (see below);
 - **dispatches** at most 2 sessions in all and 1 per topic (`scheduler.ts`);
   the rest wait in `queued.json` with the reason as `hold`. Nothing new starts
   for a topic in 待辦 or archived, and a running worker is never stopped;
@@ -161,16 +162,43 @@ order new work is handed out in (`dispatch-order.ts`), and then:
   `tasks.json`, and a lock in the worktree root keeps a second supervisor
   away.
 
-`src/supervisor/hashtags.ts` holds the guarded hashtag operation: it puts one
-hashtag on a topic or takes it off through `bin/myshape.sh hashtag`, only
-when the name is a hashtag name and the captain's `aggregator_may_tag`,
-`aggregator_may_create`, lock, per-topic, board-wide and hourly limits (read
-from `hashtags.json` and `events.jsonl`) allow it. A caller that means a name
-as a new hashtag says so, and the command then carries `--new`: the board
-opens a name it does not have only then. Nothing calls it yet: which
-output may ask for a hashtag change comes with the board's tag list. The
-agent creates no topic, and creates, edits, pauses, resumes, skips or deletes
-no schedule: its only schedule commands are `take` and `close … done`.
+`src/supervisor/hashtags.ts` keeps topics tagged. Each time the planner
+plans a topic (its first plan, a plan after the captain writes to the topic,
+and each scheduled occurrence's plan) it is shown the board's hashtags, as
+`bin/myshape.sh hashtags` lists them: most used first, at most 200, each with
+how many topics carry it, whether it is locked, and up to three live topics'
+names as examples, each cut to one plain line of at most 40 characters. It
+may ask for at most three changes to that topic: `listed` puts on one the
+board has, `new` opens one, `remove` takes off one the topic has. The
+supervisor sends them for the topic it planned, never one the model names:
+
+- a name is trimmed, loses one leading `#`, is NFKC-normalized, and has runs
+  of spaces, `-`, `.` and `/` turned into `_` when that makes it a hashtag
+  name; one that still is not is dropped;
+- a name put on matches the board's list by key, then by key without
+  underscores (exactly one), and is sent in the board's spelling; `listed`
+  that matches nothing is dropped, never opened, and only `new` sends
+  `--new`;
+- a name taken off must be on the topic (hashtags left on topics merged into
+  it count) with the same key, and the topic's own spelling is sent;
+- locked hashtags, a key asked both ways in one plan, and a change the
+  captain reverted on the page (same topic, hashtag and kind of change, read
+  from `events.jsonl`) are dropped.
+
+Each change left then goes through the guarded hashtag operation: through
+`bin/myshape.sh hashtag`, one at a time, only when the name is a hashtag name
+and the captain's `aggregator_may_tag`, `aggregator_may_create`, lock,
+per-topic, board-wide and hourly limits (read from `hashtags.json` and
+`events.jsonl`) allow it; nothing is sent once the supervisor is stopping.
+The board records each change `by: aggregator` and lists it on the page,
+where the captain can take it back. A change that is dropped or refused is
+logged, never retried or spelled another way, and every name and board reply
+in a log line is written as a JSON string with control and direction
+characters escaped. A topic in 待辦 with no schedule is not planned, so its
+hashtags are not changed.
+
+The agent creates no topic, and creates, edits, pauses, resumes, skips or
+deletes no schedule: its only schedule commands are `take` and `close … done`.
 
 The model is the user's setting, passed to every session unchanged; with no
 setting, sessions get no model option.
