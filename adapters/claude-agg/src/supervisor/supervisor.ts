@@ -65,13 +65,7 @@ import {
   type ScheduleWork,
   type WorkRef,
 } from "./occurrences.js";
-import {
-  parsePlannerOutput,
-  type HashtagAsk,
-  type PlannedWork,
-  type PlannerOutput,
-  type Todo,
-} from "./outputs.js";
+import { parsePlannerOutput, type HashtagAsk, type PlannedWork, type Todo } from "./outputs.js";
 import {
   livePrompt,
   plannerPrompt,
@@ -1022,8 +1016,7 @@ export class Supervisor {
       for (const item of messages) this.offered.delete(item.file);
       return;
     }
-    const output = this.takePlan(entry.topic, report, purpose?.ref);
-    if (output !== undefined) await this.retag(entry.topic, output.hashtags);
+    await this.retag(entry.topic, this.takePlan(entry.topic, report, purpose?.ref));
     if (report.end.kind === "quota") {
       for (const item of messages) this.offered.delete(item.file);
       return;
@@ -1054,18 +1047,18 @@ export class Supervisor {
    * Takes the planner's tasks for `topic`.
    *
    * Returns:
-   *   The planner's output when it gave a usable one, else undefined.
+   *   The hashtag changes of a usable plan; none for any other ending.
    */
   private takePlan(
     topic: string,
     report: SessionReport,
     ref: WorkRef | undefined,
-  ): PlannerOutput | undefined {
+  ): readonly HashtagAsk[] {
     const { end } = report;
     if (end.kind === "quota") {
       this.planned.delete(topic);
       this.stopForQuota(null, end.resetsAtMs);
-      return undefined;
+      return [];
     }
     const output = end.kind === "output" ? parsePlannerOutput(end.output) : undefined;
     if (output === undefined) {
@@ -1073,7 +1066,7 @@ export class Supervisor {
         `planner for ${topic} gave no usable plan (${end.kind}); not planned again this run`,
       );
       this.notePlanned(ref, "failed");
-      return undefined;
+      return [];
     }
     if (output.question !== null) {
       this.log(
@@ -1081,7 +1074,7 @@ export class Supervisor {
       );
     }
     if (this.queuePlanned(topic, output.tasks, ref) === 0) this.notePlanned(ref, "nothing");
-    return output;
+    return output.hashtags;
   }
 
   /**

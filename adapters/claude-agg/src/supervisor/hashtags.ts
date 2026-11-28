@@ -178,6 +178,15 @@ export function hashtagChangesInLastHour(home: string, nowSeconds: number): numb
  */
 export const PAGE_BY = "captain";
 
+/** The aggregator change `record` takes back on the page, or undefined when it is no such revert. */
+function pageRevertOf(
+  record: EventRecord,
+  changes: ReadonlyMap<unknown, EventRecord>,
+): EventRecord | undefined {
+  if (record["kind"] !== "hashtag.reverted" || record["by"] !== PAGE_BY) return undefined;
+  return typeof record["ref"] === "string" ? changes.get(record["ref"]) : undefined;
+}
+
 /** One change of one hashtag on one topic, as a set of them holds it. */
 export function changeKey(topic: string, key: string, change: HashtagChange): string {
   return `${topic}\t${key}\t${change}`;
@@ -218,8 +227,7 @@ export function revertedChanges(
   }
   const reverted = new Set<string>();
   for (const record of records) {
-    if (record["kind"] !== "hashtag.reverted" || record["by"] !== PAGE_BY) continue;
-    const taken = typeof record["ref"] === "string" ? changes.get(record["ref"]) : undefined;
+    const taken = pageRevertOf(record, changes);
     if (taken === undefined) continue;
     const topic = followMerges(merged, String(taken["topic"]));
     for (const { change, name } of changesOf(taken)) {
@@ -452,19 +460,35 @@ function resolve(ask: HashtagAsk, situation: PickSituation): Resolved {
  */
 export function pickHashtags(asks: readonly HashtagAsk[], situation: PickSituation): Picked {
   const resolved = asks.map((ask) => resolve(ask, situation));
+  const both = askedBothWays(resolved);
+  const picked: Picked = { send: [], dropped: [] };
+  for (const entry of resolved) {
+    const final = finalOf(entry, both, situation);
+    if ("dropped" in final) picked.dropped.push(final.dropped);
+    else picked.send.push(final);
+  }
+  return picked;
+}
+
+/** The keys among `resolved` asked to be put on and taken off both. */
+function askedBothWays(resolved: readonly Resolved[]): Set<string> {
   const ways = new Map<string, Set<HashtagChange>>();
   for (const entry of resolved) {
     if ("dropped" in entry) continue;
     ways.set(entry.key, (ways.get(entry.key) ?? new Set()).add(entry.change));
   }
-  const picked: Picked = { send: [], dropped: [] };
-  for (const entry of resolved) {
-    if ("dropped" in entry) picked.dropped.push(entry.dropped);
-    else if ((ways.get(entry.key)?.size ?? 0) > 1)
-      picked.dropped.push(PICK_REASON.both(entry.name));
-    else if (situation.reverted.has(changeKey(situation.topic, entry.key, entry.change)))
-      picked.dropped.push(PICK_REASON.reverted(entry.change, entry.name));
-    else picked.send.push({ change: entry.change, name: entry.name, opening: entry.opening });
-  }
-  return picked;
+  return new Set([...ways].filter(([, changes]) => changes.size > 1).map(([key]) => key));
+}
+
+/** The change to send, or why it is dropped after all: asked both ways, or reverted. */
+function finalOf(
+  entry: Resolved,
+  both: ReadonlySet<string>,
+  situation: PickSituation,
+): HashtagSend | { dropped: string } {
+  if ("dropped" in entry) return entry;
+  if (both.has(entry.key)) return { dropped: PICK_REASON.both(entry.name) };
+  if (situation.reverted.has(changeKey(situation.topic, entry.key, entry.change)))
+    return { dropped: PICK_REASON.reverted(entry.change, entry.name) };
+  return { change: entry.change, name: entry.name, opening: entry.opening };
 }
