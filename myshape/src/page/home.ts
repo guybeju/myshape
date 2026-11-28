@@ -42,6 +42,7 @@ import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
 import { lifecycleSettings, queueCards, undelivered, waitingCount } from "./cards.js";
 import { usagePanel } from "./usage.js";
+import { waitLists } from "./wait.js";
 
 /** The topics the captain's filter shows, with what each matched; null when nothing is filtered. */
 type Shown = Map<string, string[]> | null;
@@ -177,7 +178,7 @@ const ORDER_LABEL: Record<CardOrder, string> = {
   oldest: "舊的在上",
 };
 
-/** The three orders the queues' cards can be listed in, and what the chosen one means. */
+/** The three orders the queues' and 等你's cards can be listed in, and what the chosen one means. */
 function orderButtons(page: Page, view: View, actions: Actions, order: CardOrder): Child {
   const saved = view.hashtags.views.find((entry) => entry.id === page.filter.view);
   return h(
@@ -200,7 +201,7 @@ function orderButtons(page: Page, view: View, actions: Actions, order: CardOrder
       : h(
           "p",
           { class: "note" },
-          "照建立時間排列只改顯示的順序，優先順序與派工不變；拖到別的佇列會排在那裡的最後。",
+          "照建立時間排列只改顯示的順序，優先順序、派工與哪些決定在前面都不變；佇列與「等你」一起換，拖到別的佇列會排在那裡的最後。",
         ),
     saved === undefined ? null : h("p", { class: "note" }, `排列記在視圖「${saved.name}」`),
   );
@@ -393,10 +394,16 @@ function noTopic(view: View): Child {
   );
 }
 
-/** 等你: what waits on the captain. */
+/**
+ * 等你: what waits on the captain, its cards in the queues' order. Its copy of
+ * the order buttons shows on a narrow screen only, where the sidebar is a tab
+ * of its own (board.css).
+ */
 function waitPart(page: Page, view: View, actions: Actions, shown: Shown): Child {
-  const todos = liveTodos(view).filter((todo) => isShown(shown, todo.topic));
+  const lists = waitLists(page, view, (topic) => isShown(shown, topic));
+  const { todos } = lists;
   return [
+    orderButtons(page, view, actions, lists.order),
     todos.length === 0
       ? null
       : section(
@@ -404,10 +411,7 @@ function waitPart(page: Page, view: View, actions: Actions, shown: Shown): Child
           todos.map((todo) => todoCard(page, view, actions, todo, true)),
         ),
     shown === null ? noTopic(view) : null,
-    section(
-      "等你決定",
-      queueCards(page, view, actions, (topic) => isShown(shown, topic)),
-    ),
+    section("等你決定", queueCards(page, view, actions, lists)),
     undelivered(page, actions),
   ];
 }

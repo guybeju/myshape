@@ -5,6 +5,7 @@ import { QUEUE_LABEL, agentName } from "./state.js";
 import { topicTagEditor } from "./tags.js";
 import { topicSchedule } from "./schedule-parts.js";
 import { queueCards } from "./cards.js";
+import { frontTurns } from "./wait.js";
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
 const MAX_UPDATES = 200;
 /** What differs between editing a topic's name and its goal. */
@@ -113,7 +114,7 @@ function decisions(page, view, actions, id) {
     const deferred = holds.filter((hold) => !hold.live);
     return h("section", {}, h("h2", {}, "待決"), topic?.kept_until == null
         ? null
-        : h("p", { class: "note" }, `先不關，到 ${when(Date.parse(topic.kept_until) / 1000).slice(0, 5)}`), queueCards(page, view, actions, (owner) => owner === id), deferred.length === 0
+        : h("p", { class: "note" }, `先不關，到 ${when(Date.parse(topic.kept_until) / 1000).slice(0, 5)}`), queueCards(page, view, actions, frontTurns(view, (owner) => owner === id, "priority")), deferred.length === 0
         ? null
         : h("details", { "data-key": `deferred:${id}` }, h("summary", {}, `暫緩 ${deferred.length}`), deferred.map((hold) => holdCard(page, view, actions, hold, false))), view.questions
         .filter((question) => question.topic === id)

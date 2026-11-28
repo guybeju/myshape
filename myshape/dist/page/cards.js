@@ -146,14 +146,12 @@ export function waitingCount(view) {
         badWrites(view.writes).length);
 }
 /**
- * The cards of the one queue that `shows` lets through, in its order: the
- * ones in front, then one line for how many wait their turn.
+ * The one queue's cards in front, as frontTurns lists them, then one line for
+ * how many wait their turn.
  */
-export function queueCards(page, view, actions, shows) {
-    const turns = view.turns.filter((turn) => shows(turn.topic));
-    const waiting = turns.filter((turn) => turn.waits_turn).length;
+export function queueCards(page, view, actions, { front, waiting }) {
     return [
-        inFront(turns).map((turn) => turnCard(page, view, actions, turn)),
+        front.map((turn) => turnCard(page, view, actions, turn)),
         waiting === 0
             ? null
             : h("p", { class: "note turns" }, `還有 ${waiting} 個決定排隊，輪到時才顯示`),

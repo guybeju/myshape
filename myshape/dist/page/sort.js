@@ -18,21 +18,24 @@ export function cardOrder(page, views) {
 }
 /** Before every time a Date can hold (±8.64e15 ms), and still a number a difference can be taken of. */
 const BEFORE_ALL = Number.MIN_SAFE_INTEGER;
-/** A creation time as a moment; one that cannot be read is older than every other. */
+/**
+ * A creation time as a moment; none, or one that cannot be read, is older than
+ * every other. null and undefined read as words no time parses as.
+ */
 function moment(created) {
-    const at = Date.parse(created);
+    const at = Date.parse(String(created));
     return Number.isNaN(at) ? BEFORE_ALL : at;
 }
 /**
- * The queue's cards in `order`. By creation time, newest or oldest first;
- * topics created at one moment keep their priority order in both directions,
- * because the sort is stable and they compare equal.
+ * The cards, given in priority order, in `order`. By creation time, newest or
+ * oldest first; cards created at one moment keep their priority order in both
+ * directions, because the sort is stable and they compare equal.
  */
-export function sortCards(queue, order, createdAt) {
+export function sortCards(cards, order, createdAt) {
     if (order === "priority")
-        return [...queue];
+        return [...cards];
     const direction = order === "newest" ? -1 : 1;
-    const cards = queue.map((id) => ({ id, at: moment(createdAt(id)) }));
-    cards.sort((a, b) => direction * (a.at - b.at));
-    return cards.map((card) => card.id);
+    const timed = cards.map((card) => ({ card, at: moment(createdAt(card)) }));
+    timed.sort((a, b) => direction * (a.at - b.at));
+    return timed.map((entry) => entry.card);
 }

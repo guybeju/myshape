@@ -684,7 +684,7 @@ describe("holds and questions", () => {
                 hold("loose-old", { hold_age_days: 5 }),
                 hold("own-wins", { origin: "worker" }),
                 hold("age-unknown", { hold_age_days: null }),
-                hold("via-origin", { origin: "worker" }),
+                hold("via-origin", { origin: "worker", hold_set: "2026-11-20T08:00:00Z" }),
                 hold("origin-unknown", { origin: "nobody" }),
                 hold("later-old", { hold_age_days: 9 }),
                 hold("later-new", { hold_age_days: 2 }),
@@ -751,7 +751,9 @@ describe("holds and questions", () => {
       blockers: [],
       topic: "hi",
       stale: false,
+      hold_set: "2026-11-20T08:00:00Z",
     });
+    expect(byTask["loose"]?.hold_set).toBeNull();
     expect(byTask["normal-1"]?.options).toEqual(["行", "不行"]);
     expect(byTask["loose"]?.topic).toBeNull();
     expect(byTask["own-wins"]?.topic).toBe("n2");
@@ -964,7 +966,11 @@ describe("hands-on items", () => {
           normal: item("n2", { created_at: "2026-07-02T00:00:00Z" }),
           merged: item("old", { created_at: "2026-07-03T00:00:00Z" }),
           early: item("n1", { created_at: "2026-07-01T00:00:00Z" }),
-          high: item("hi", { state: "rejected", reason: "沒起來" }),
+          high: item("hi", {
+            state: "rejected",
+            reason: "沒起來",
+            created_at: "2026-07-02T05:00:00Z",
+          }),
           archived: item("gone"),
         }),
       }),
@@ -986,6 +992,7 @@ describe("hands-on items", () => {
       commands: [],
       state: "rejected",
       reason: "沒起來",
+      created_at: "2026-07-02T05:00:00Z",
     });
   });
 

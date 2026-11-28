@@ -84,10 +84,17 @@ async function openTheSettings(page) {
   if (rows === 0) throw new Error("the deadline settings must show their inputs");
 }
 
+/** Where the order buttons can be seen: the sidebar's and 等你's copies, each true when on screen. */
+const orderSeen = `JSON.stringify([...document.querySelectorAll(".order")].map((box) => [box.closest("#sidebar") === null ? "wait" : "sidebar", box.getClientRects().length > 0]))`;
+
 export default async (page) => {
   await page.waitFor("the board", has("優先順序"));
   await checkScheme(page, "the home page at 1300 px");
   await shot(page, "1300-home");
+  // One set of order buttons per width (spec/card-sort.markdown decision 12): the sidebar's at
+  // 1300 px, beside 等你; 等你's own at 390 px, where the sidebar is a tab of its own.
+  const wideOrder = await page.evaluate(orderSeen);
+  if (wideOrder !== JSON.stringify([["sidebar", true], ["wait", false]])) throw new Error(`at 1300 px only the sidebar's order buttons show, got ${wideOrder}`);
 
   await resize(page, NARROW);
   if ((await page.evaluate(sidebarPlace)) !== "hidden") throw new Error("at 390 px 佇列 is a tab of its own, not under 等你");
@@ -96,6 +103,9 @@ export default async (page) => {
     await fitsTheWidth(page, `the ${label} tab`);
     await checkScheme(page, `the ${label} tab at 390 px`);
   }
+  await showTab(page, "等你");
+  const narrowOrder = await page.evaluate(orderSeen);
+  if (narrowOrder !== JSON.stringify([["sidebar", false], ["wait", true]])) throw new Error(`at 390 px 等你 shows its own order buttons, got ${narrowOrder}`);
   await showTab(page, "佇列");
   if ((await page.evaluate(sidebarPlace)) !== "full") throw new Error("at 390 px the 佇列 tab must be one column as wide as the page (C42)");
   await shot(page, "390-queue");

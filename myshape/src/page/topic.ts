@@ -23,6 +23,7 @@ import { QUEUE_LABEL, agentName } from "./state.js";
 import { topicTagEditor } from "./tags.js";
 import { topicSchedule } from "./schedule-parts.js";
 import { queueCards } from "./cards.js";
+import { frontTurns } from "./wait.js";
 import type { Actions, Page, View } from "./state.js";
 
 /** Ledger lines and summaries shown before the rest fold into 更早的更新; board records always show. */
@@ -208,7 +209,12 @@ function decisions(page: Page, view: View, actions: Actions, id: string): Child 
           { class: "note" },
           `先不關，到 ${when(Date.parse(topic.kept_until) / 1000).slice(0, 5)}`,
         ),
-    queueCards(page, view, actions, (owner) => owner === id),
+    queueCards(
+      page,
+      view,
+      actions,
+      frontTurns(view, (owner) => owner === id, "priority"),
+    ),
     deferred.length === 0
       ? null
       : h(

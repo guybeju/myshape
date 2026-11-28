@@ -149,6 +149,29 @@ export default async function run(page) {
   }
   if (!(await page.evaluate(todo(`card.closest("section").querySelector("h2").textContent === "要你動手"`))))
     throw new Error("a hands-on item belongs in its own section, not among the decisions");
+  // The 等你 cards follow the card order (myshape/spec/card-sort.markdown, decisions 8 to 12).
+  // The topicless item an older board adopted (stage-5-page.sh) is the oldest and last by
+  // priority: 舊的在上 lists it first, 新的在上 last. The decision in front, the one waiting its
+  // turn and the tab's count stay as they are, and 照優先順序 brings the queue's order back.
+  const todoOrder = `[...document.querySelectorAll('.pane[data-pane="wait"] [data-todo]')].map((card) => card.dataset.todo).join(",")`;
+  const waitFacts = `JSON.stringify([document.querySelector('.tabs button[data-tab="wait"] .count').textContent, ${has("還有 1 個決定排隊，輪到時才顯示")}, ${has("要合併嗎？")}, ${has("這個要不要做？")}])`;
+  await page.waitFor("the five hands-on items", `${todoOrder}.split(",").length === 5`);
+  // The three Idea items may share a second, and then their ids order them: read the order.
+  const byPriority = await page.evaluate(todoOrder);
+  if (!byPriority.startsWith("todo-1,") || !byPriority.endsWith(",loose-hand"))
+    throw new Error(`by priority the 高 item comes first and the topicless one last, got ${byPriority}`);
+  const oldestFirst = `loose-hand,${byPriority.slice(0, -",loose-hand".length)}`;
+  const facts = await page.evaluate(waitFacts);
+  if (JSON.stringify(JSON.parse(facts).slice(1)) !== JSON.stringify([true, true, false]))
+    throw new Error(`call-1 must be in front and the loose call waiting its turn, got ${facts}`);
+  await page.click("#sidebar .order button", "舊的在上");
+  await page.waitFor("the hands-on items oldest first", `${todoOrder} === ${JSON.stringify(oldestFirst)}`);
+  if ((await page.evaluate(waitFacts)) !== facts) throw new Error("the order must not change which decisions are in front, nor the 等你 count");
+  await page.click("#sidebar .order button", "新的在上");
+  await page.waitFor("the hands-on items newest first", `${todoOrder}.endsWith(",loose-hand") && ${todoOrder}.split(",").length === 5`);
+  if ((await page.evaluate(waitFacts)) !== facts) throw new Error("the order must not change which decisions are in front, nor the 等你 count");
+  await page.click("#sidebar .order button", "照優先順序");
+  await page.waitFor("the hands-on items by priority again", `${todoOrder} === ${JSON.stringify(byPriority)}`);
   // A closed hands-on item with no topic (one an older board adopted, stage-5-page.sh): 沒有議題,
   // right after 要你動手, folded as 已關 N like a topic page's, each row opening to its records.
   topic("todo", "done", "loose-hand");
@@ -290,12 +313,8 @@ export default async function run(page) {
   // in the card's own queue sends nothing, a drop in another queue lands last there. Back under
   // 照優先順序 the queues show what the board kept; a last drag restores the walk's order.
   const dropOn = (name, queue, onto, half) => `(() => { const d = ${drag(name, queue, onto, half)}; d.fire(d.onto, "drop", 0); d.fire(d.card, "dragend", 0); return true; })()`;
-  // The one-at-a-time cards keep their own order rules: 等你決定 and 要你動手 read the same.
-  const oneAtATime = `JSON.stringify(["等你決定", "要你動手"].map((title) => [...document.querySelectorAll("section")].find((box) => box.querySelector("h2")?.textContent === title)?.innerText ?? ""))`;
-  const before = await page.evaluate(oneAtATime);
   await page.click("#sidebar .order button", "新的在上");
   await page.waitFor("the cards listed by creation time", `document.querySelector('.queue[data-queue="normal"]').dataset.byTime === "true" && document.querySelector('.queue[data-queue="high"] .empty').textContent.startsWith("照建立時間排列中：拖到別的佇列會排在那裡的最後") && ${has("照建立時間排列只改顯示的順序")}`);
-  if ((await page.evaluate(oneAtATime)) !== before) throw new Error("the card order must not touch 等你決定 or 要你動手");
   await page.evaluate(dropOn("Idea", "normal", "Billing", "upper"));
   await page.evaluate(dropOn("Login", "normal", "Billing", "upper"));
   await page.waitFor("the drop into another queue", queueHas("normal", "Login"));

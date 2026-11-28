@@ -184,7 +184,7 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 手機經 `tailscale serve` 打開看板，要在 `config/myshape-remote.json` 寫遠端名稱與 Tailscale 登入，再 `bin/myshape.sh restart`（contracts 第 6.2 節）；服務只在啟動時讀它，`service.log` 記下讀到什麼。遠端名稱下不能確認程式（P-008 的確認只在 PC）。`open` 只印本機的網址，手機的網址要自己把前面換成 `https://<名稱>`。
 
 - aggregator 可以在每個 home 的回報裡帶狀態數字（例如 Claude 的用量與重置時間），首頁側欄最上面的「用量」面板照樣顯示，看板不因為它們做任何事；設計、first mate 這一側推什麼與已知限制（經看板只看得到一個 Claude 帳號、遠端的 home 不推）在 [狀態數字](status-metrics.markdown)，格式在 contracts 第 4.1 節。
-- 側欄的卡片可以照建立時間排列（[卡片排列](card-sort.markdown)），只改顯示；這時拖曳只能換佇列，排在那裡的最後。頁面自己記的排列在瀏覽器的 `localStorage`，換瀏覽器或換埠就回到照優先順序。
+- 側欄與「等你」的卡片可以照建立時間排列（[卡片排列](card-sort.markdown)），只改顯示，兩處是同一個選擇；這時拖曳只能換佇列，排在那裡的最後，「等你決定」哪幾張在前面也不變。頁面自己記的排列在瀏覽器的 `localStorage`，換瀏覽器或換埠就回到照優先順序。
 - 頁面上只能用拖的改順序：沒有鍵盤可用的移法，原生拖放在 Chrome 上也還沒驗（第 3 節）；這兩種情況改用 `bin/myshape.sh move`（C55）。
 - 看板認一個 home 的依據是 `state/myshape/token`：全新的 home 要先 `open` 才能 `create`；`open` 在 secondmate 的 home 也不會被拒絕，那裡會開出另一個看板（沒有規則叫 second mate 跑它）。
 - 「要你動手」的項目存在看板上（contracts 第 3.6 節），每一步都在議題的更新留一筆紀錄；按了「做完了」之後使用者不能自己收回；aggregator 不再需要的項目由它直接撤下，原因記在議題的更新裡，只有看板存項目之前搬上來的舊項目要使用者按「好，撤下」。
