@@ -716,6 +716,79 @@ describe("the planner's hashtag changes", () => {
     expect(hashtagWrites(world)).toEqual([]);
   });
 
+  it("sends each planner's changes to the topic it planned, whatever the names say", async () => {
+    const world = new World({ normal: ["a", "b"] });
+    writeHashtags(world, { b: { key: "b" } }, {});
+    const asks = [
+      { name: "b", change: "listed" },
+      { name: "a", change: "new" },
+    ];
+    for (const id of ["p1", "p2"]) {
+      world.query.planner.push({ messages: [init(id, "default"), result(plan([], asks))] });
+    }
+    await planned(world);
+    expect(hashtagWrites(world).toSorted()).toEqual([
+      ["hashtag", "a", "+a", "--new"],
+      ["hashtag", "a", "+b"],
+      ["hashtag", "b", "+a", "--new"],
+      ["hashtag", "b", "+b"],
+    ]);
+  });
+
+  it("follows a merge made while the planner ran, reverted changes included", async () => {
+    const gate = new Gate();
+    const world = new World({ normal: ["build"] });
+    const asks = [
+      { name: "GPU", change: "listed" },
+      { name: "CI", change: "listed" },
+    ];
+    world.query.planner.push({
+      messages: [init("p1", "default"), result(plan([], asks))],
+      gate,
+    });
+    world.query.planner.push({ messages: [init("p2", "default"), result(plan([]))] });
+    const supervisor = await world.start();
+    supervisor.tick();
+    await vi.waitFor(() => expect(world.query.active.size).toBe(1));
+    const topic = { name: "合併後", goal: "g", created_at: "2026-11-27T00:00:00Z" };
+    const topics = {
+      topics: { other: topic },
+      queues: { high: [], normal: ["other"], later: [] },
+      merged: { build: "other" },
+    };
+    writeFileSync(join(world.home, "data", "topics.json"), JSON.stringify(topics));
+    writeHashtags(world, { GPU: GPU_KEY, CI: { key: "ci" } }, { other: [] });
+    const ts = Math.floor(world.nowMs / 1000) - 7200;
+    writeEvents(world, [
+      {
+        src: "board",
+        rid: "r1",
+        ts,
+        kind: "hashtag.added",
+        by: "aggregator",
+        topic: "other",
+        before: "",
+        after: "GPU",
+      },
+      {
+        src: "board",
+        rid: "r2",
+        ts,
+        kind: "hashtag.reverted",
+        by: PAGE_BY,
+        topic: "other",
+        ref: "r1",
+      },
+    ]);
+    gate.open();
+    await supervisor.idle();
+    supervisor.close();
+    expect(hashtagWrites(world)).toEqual([["hashtag", "other", "+CI"]]);
+    expect(world.logs).toContain(
+      `planner for other: hashtag dropped: ${PICK_REASON.reverted("add", "GPU")}`,
+    );
+  });
+
   it("does not make again at the next occurrence a change the captain reverted on the page", async () => {
     const key = "weekly:20261127T0215Z";
     const at = "2026-11-27T02:15:00Z";

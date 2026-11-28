@@ -1078,17 +1078,20 @@ export class Supervisor {
   }
 
   /**
-   * Sends the planner's hashtag changes for `topic` (merges followed, the
-   * supervisor's own id) one at a time, in its order, as pickHashtags and
-   * the Tagger allow them; nothing more once stopping. What is dropped or
-   * refused is logged, never tried again or spelled another way.
+   * Sends the planner's hashtag changes for `planned`, the supervisor's own
+   * topic id, with the merges the board has now followed (it may have been
+   * merged while its planner ran), one at a time, in the planner's order, as
+   * pickHashtags and the Tagger allow them; nothing more once stopping. What
+   * is dropped or refused is logged, never tried again or spelled another way.
    */
-  private async retag(topic: string, asks: readonly HashtagAsk[]): Promise<void> {
+  private async retag(planned: string, asks: readonly HashtagAsk[]): Promise<void> {
     if (asks.length === 0) return;
     let send: HashtagSend[];
+    let topic = planned;
     try {
       const board = readBoard(this.settings.home);
       const { merged } = board.topics;
+      topic = followMerges(merged, planned);
       const reverted = revertedChanges(this.settings.home, merged);
       const picked = pickHashtags(asks, { hashtags: board.hashtags, topic, merged, reverted });
       for (const line of picked.dropped) this.log(`planner for ${topic}: hashtag dropped: ${line}`);
