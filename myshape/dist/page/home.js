@@ -2,12 +2,12 @@ import { h } from "./dom.js";
 import { agentRow, closedFold, closedTodoEntries, fileMenu, holdCard, inFront, liveTodos, todoCard, needsCaptain, queuedRow, questionRow, summaryRow, topicLink, topicName, untaggedQueued, } from "./parts.js";
 import { BAD_WRITES, LIGHT_LABEL, QUEUES, QUEUE_LABEL } from "./state.js";
 import { dropHint } from "./drop.js";
-import { isShown, resolveFilter, shownTopics } from "./filter.js";
+import { TABS, isShown, resolveFilter, shownTopics } from "./filter.js";
 import { cardOrder, sortCards } from "./sort.js";
-import { filterBar, mergeTagNote, topicChips } from "./tags.js";
+import { FILTER_PANEL, filterPanel, hashtagBar, mergeTagNote, owedLine, topicChips, } from "./tags.js";
 import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
-import { lifecycleSettings, queueCards, undelivered } from "./cards.js";
+import { lifecycleSettings, queueCards, undelivered, waitingCount } from "./cards.js";
 import { usagePanel } from "./usage.js";
 function shownOf(page, view) {
     return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
@@ -80,10 +80,26 @@ function orderButtons(page, view, actions, order) {
         ? null
         : h("p", { class: "note" }, "照建立時間排列只改顯示的順序，優先順序與派工不變；拖到別的佇列會排在那裡的最後。"), saved === undefined ? null : h("p", { class: "note" }, `排列記在視圖「${saved.name}」`));
 }
-export function sidebar(page, view, actions) {
-    const shown = shownOf(page, view);
+const SEGMENT_LABEL = { ...QUEUE_LABEL, schedules: "排程" };
+/** On a narrow screen, the buttons that choose the one box the 佇列 tab shows, each with its count. */
+function segmentButtons(page, actions, counts) {
+    return h("div", { class: "segs" }, Object.keys(SEGMENT_LABEL).map((segment) => h("button", {
+        class: segment === page.segment ? "on" : "",
+        "data-segment": segment,
+        onclick: () => actions.setSegment(segment),
+    }, SEGMENT_LABEL[segment], h("span", { class: "count" }, String(counts[segment])))));
+}
+/** 佇列: the left column on a wide screen. 用量 heads it there; on a narrow screen it is under 更多. */
+function sidebar(page, view, actions, shown) {
     const order = cardOrder(page, view.hashtags.views);
-    return h("div", { id: "sidebar" }, usagePanel(view.metrics, Date.now()), h("h2", {}, "優先順序"), orderButtons(page, view, actions, order), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)), scheduleColumn(view, actions, (id) => isShown(shown, id) && view.topics[id]?.status !== "archived"), archivedBox(view, actions, shown));
+    const scheduled = (id) => isShown(shown, id) && view.topics[id]?.status !== "archived";
+    const counts = {
+        high: queueTopics(view, "high", shown).length,
+        normal: queueTopics(view, "normal", shown).length,
+        later: queueTopics(view, "later", shown).length,
+        schedules: view.schedules.series.filter((card) => scheduled(card.topic)).length,
+    };
+    return h("div", { id: "sidebar", "data-segment": page.segment }, usagePanel(view.metrics, Date.now()), h("h2", {}, "優先順序"), segmentButtons(page, actions, counts), orderButtons(page, view, actions, order), nowStrip(page, view, actions), QUEUES.map((queue) => queueBox(view, actions, queue, shown, order)), scheduleColumn(view, actions, scheduled), archivedBox(view, actions, shown));
 }
 function section(title, ...children) {
     const content = children
@@ -162,21 +178,23 @@ function noTopic(view) {
         return null;
     return section("沒有議題", closedFold("closed-no-topic", closedTodoEntries("closed-no-topic", closed)));
 }
-export function home(page, view, actions) {
-    const active = ["working", "stuck", "unknown", "decide"];
-    const shown = shownOf(page, view);
-    const mine = (items) => items.filter((item) => isShown(shown, item.topic));
-    const todos = mine(liveTodos(view));
+/** 等你: what waits on the captain. */
+function waitPart(page, view, actions, shown) {
+    const todos = liveTodos(view).filter((todo) => isShown(shown, todo.topic));
     return [
-        filterBar(page, view, actions, shown),
-        scheduleBar(page, view, actions),
-        lifecycleSettings(page, actions, view),
         todos.length === 0
             ? null
             : section("要你動手", todos.map((todo) => todoCard(page, view, actions, todo, true))),
         shown === null ? noTopic(view) : null,
         section("等你決定", queueCards(page, view, actions, (topic) => isShown(shown, topic))),
         undelivered(page, actions),
+    ];
+}
+/** 動態: what came back and what is under way. */
+function activityPart(page, view, actions, shown) {
+    const active = ["working", "stuck", "unknown", "decide"];
+    const mine = (items) => items.filter((item) => isShown(shown, item.topic));
+    return [
         section("最近的結果", mine(view.summaries)
             .slice(0, RECENT_SUMMARIES)
             .map((summary) => summaryRow(view, actions, summary, true))),
@@ -187,5 +205,62 @@ export function home(page, view, actions) {
             .filter((hold) => !hold.live && hold.topic !== null)
             .map((hold) => holdCard(page, view, actions, hold, true))),
         shown === null ? unsorted(page, view, actions) : null,
+    ];
+}
+/**
+ * 更多: the programs waiting for the captain's confirmation first, then 用量
+ * (shown here only on a narrow screen) and the settings.
+ */
+function morePart(page, view, actions, confirms) {
+    return [
+        confirms,
+        usagePanel(view.metrics, Date.now()),
+        hashtagBar(page, view, actions),
+        scheduleBar(page, view, actions),
+        lifecycleSettings(page, actions, view),
+    ];
+}
+function waitingPill(view) {
+    const count = waitingCount(view);
+    return h("span", { class: count > 0 ? "count red" : "count" }, count);
+}
+function confirmDot(view) {
+    return view.aggregator.confirm.length > 0
+        ? h("span", { class: "dot-new", title: "有程式等你確認" })
+        : null;
+}
+const TAB_LABEL = {
+    wait: "等你",
+    queue: "佇列",
+    activity: "動態",
+    more: "更多",
+};
+/**
+ * The tabs: above the right column on a wide screen, where 佇列 is the left
+ * column and has none, and at the bottom of a narrow one. 等你 always shows
+ * its count; 更多 has a dot while a program waits for confirmation.
+ */
+function tabBar(page, view, actions) {
+    const marks = {
+        wait: waitingPill(view),
+        queue: null,
+        activity: null,
+        more: confirmDot(view),
+    };
+    return h("nav", { class: "tabs" }, TABS.map((tab) => h("button", {
+        class: tab === page.tab ? "on" : "",
+        "data-tab": tab,
+        onclick: () => actions.setTab(tab),
+    }, TAB_LABEL[tab], marks[tab])));
+}
+function pane(tab, content) {
+    return h("div", { class: "pane", "data-pane": tab }, content);
+}
+/** The home page; `confirms` are the programs waiting for the captain's confirmation (frame.ts). */
+export function home(page, view, actions, confirms) {
+    const shown = shownOf(page, view);
+    return [
+        page.open.has(FILTER_PANEL) ? filterPanel(page, view, actions) : null,
+        h("div", { class: "side home", "data-tab": page.tab }, sidebar(page, view, actions, shown), h("div", { class: "tabbed" }, tabBar(page, view, actions), owedLine(view, actions, shown), pane("wait", waitPart(page, view, actions, shown)), pane("activity", activityPart(page, view, actions, shown)), pane("more", morePart(page, view, actions, confirms)))),
     ];
 }

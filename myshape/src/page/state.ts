@@ -4,7 +4,7 @@ import type { ScheduleView } from "#board/schedule-view.js";
 import type { Queue } from "#board/topics.js";
 import type { BoardView } from "#board/view.js";
 import type { Anchor } from "./drop.js";
-import type { Filter } from "./filter.js";
+import type { Filter, Tab } from "./filter.js";
 
 export interface WriteView {
   id: string;
@@ -92,6 +92,10 @@ export interface Page {
   notice: string | null;
   /** Which topics the home page shows; kept in the URL fragment (filter.ts). */
   filter: Filter;
+  /** The home page's part on screen; kept in the URL fragment with the filter (filter.ts). */
+  tab: Tab;
+  /** On a narrow screen, the one box the 佇列 tab shows: a queue, or 排程. */
+  segment: Segment;
   /** The page's own card order, used when no saved view is chosen; kept in localStorage (sort.ts). */
   order: CardOrder;
   /** Whether the hashtag settings panel, or the list of the agent's recent hashtag changes, is open. */
@@ -101,6 +105,9 @@ export interface Page {
   /** Small in-page questions and forms that are open, by key, such as "close:<occurrence>". */
   open: Set<string>;
 }
+
+/** The boxes of the 佇列 tab on a narrow screen, one at a time. */
+export type Segment = Queue | "schedules";
 
 export interface Actions {
   open: (topic: string | null) => void;
@@ -124,6 +131,9 @@ export interface Actions {
   /** Sends one change to any route, for the hashtag and view operations. */
   send: (path: string, body: Record<string, unknown>) => void;
   setFilter: (filter: Filter) => void;
+  /** Shows another part of the home page and keeps it in the URL fragment. */
+  setTab: (tab: Tab) => void;
+  setSegment: (segment: Segment) => void;
   /** Lists the queues' cards in `order`, remembered in the chosen saved view or by the page. */
   setOrder: (order: CardOrder) => void;
   setTagPanel: (panel: Page["tagPanel"]) => void;

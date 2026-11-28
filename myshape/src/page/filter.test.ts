@@ -4,7 +4,9 @@ import {
   cycleHashtag,
   filterHash,
   owedOutside,
+  hasFilter,
   parseFilterHash,
+  parseTab,
   resolveFilter,
   shownTopics,
   topicMatch,
@@ -195,10 +197,10 @@ describe("the filter", () => {
       text: "gpu 叢集&x",
       view: "w",
     });
-    expect(parseFilterHash(filterHash(chosen))).toEqual(chosen);
-    expect(filterHash(NO_FILTER)).toBe("");
+    expect(parseFilterHash(filterHash(chosen, "wait"))).toEqual(chosen);
+    expect(filterHash(NO_FILTER, "wait")).toBe("");
     expect(parseFilterHash("#/topic/gpu")).toBeNull();
-    expect(parseFilterHash("#/f/")).toEqual(NO_FILTER);
+    expect(parseFilterHash("#/f/")).toBeNull();
   });
 
   it("spells hashtags as the board does, and drops ones it lacks", () => {
@@ -224,13 +226,58 @@ describe("the filter", () => {
 
 describe("the URL fragment", () => {
   it("names only the parts of the filter that are set", () => {
-    expect(filterHash(filter({ text: "gpu" }))).toBe("#/f/text=gpu");
-    expect(filterHash(filter({ any: ["A"] }))).toBe("#/f/any=A");
-    expect(filterHash(filter({ none: ["A"] }))).toBe("#/f/none=A");
+    expect(filterHash(filter({ text: "gpu" }), "wait")).toBe("#/f/text=gpu");
+    expect(filterHash(filter({ any: ["A"] }), "wait")).toBe("#/f/any=A");
+    expect(filterHash(filter({ none: ["A"] }), "wait")).toBe("#/f/none=A");
     expect(topicMatch(source(), "nope", NO_FILTER)).toBeNull();
-    expect(filterHash(filter({ untagged: true }))).toBe("#/f/untagged=1");
-    expect(filterHash(filter({ none: ["A", "B"] }))).toBe("#/f/none=A%2CB");
-    expect(filterHash(filter({ view: "w" }))).toBe("#/f/view=w");
+    expect(filterHash(filter({ untagged: true }), "wait")).toBe("#/f/untagged=1");
+    expect(filterHash(filter({ none: ["A", "B"] }), "wait")).toBe("#/f/none=A%2CB");
+    expect(filterHash(filter({ view: "w" }), "wait")).toBe("#/f/view=w");
     expect(parseFilterHash("#/f/any=A,,B&untagged=0")).toEqual(filter({ any: ["A", "B"] }));
+  });
+});
+
+describe("the header's 篩選", () => {
+  it("says a filter is on for a keyword, a hashtag, 沒標 or a saved view, but not for blank text", () => {
+    expect(hasFilter(NO_FILTER)).toBe(false);
+    expect(hasFilter(filter({ text: "  " }))).toBe(false);
+    for (const on of [
+      { text: "gpu" },
+      { any: ["A"] },
+      { none: ["A"] },
+      { untagged: true },
+      { view: "w" },
+    ])
+      expect(hasFilter(filter(on))).toBe(true);
+  });
+});
+
+describe("the tab in the URL fragment", () => {
+  it("keeps the tab beside the filter, and leaves 等你 out", () => {
+    const chosen = filter({ any: ["A"], text: "gpu" });
+    expect(filterHash(chosen, "queue")).toBe("#/f/any=A&text=gpu&tab=queue");
+    expect(filterHash(chosen, "wait")).toBe("#/f/any=A&text=gpu");
+    expect(filterHash(NO_FILTER, "more")).toBe("#/f/tab=more");
+    expect(filterHash(filter({ text: "  " }), "queue")).toBe("#/f/tab=queue");
+    expect(parseTab(filterHash(chosen, "activity"))).toBe("activity");
+    expect(parseFilterHash(filterHash(chosen, "activity"))).toEqual(chosen);
+  });
+
+  it("reads a fragment with only a tab as no filter chosen, so the default view still applies", () => {
+    expect(parseFilterHash("#/f/tab=queue")).toBeNull();
+    expect(parseTab("#/f/tab=queue")).toBe("queue");
+  });
+
+  it("falls back to 等你 for a missing, unknown or misplaced tab", () => {
+    for (const hash of [
+      "",
+      "#/f/any=A",
+      "#/f/tab=",
+      "#/f/tab=Queue",
+      "#/f/tab=sidebar",
+      "#/topic/tab=more",
+    ])
+      expect(parseTab(hash)).toBe("wait");
+    expect(parseTab("#/f/tab=more&tab=queue")).toBe("more");
   });
 });

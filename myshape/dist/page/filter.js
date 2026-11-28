@@ -1,16 +1,25 @@
 export const NO_FILTER = { any: [], none: [], untagged: false, text: "", view: null };
 const PREFIX = "#/f/";
+export const TABS = ["wait", "queue", "activity", "more"];
+/** The fragment's keys that belong to the filter; `tab` is the only other one. */
+const FILTER_KEYS = ["any", "none", "untagged", "text", "view"];
 export function isActive(filter) {
     return (filter.any.length > 0 || filter.none.length > 0 || filter.untagged || filter.text.trim() !== "");
 }
 function list(value) {
     return value === null || value === "" ? [] : value.split(",").filter((name) => name !== "");
 }
-/** The filter in a URL fragment (`#/f/any=A,B&none=C&untagged=1&text=gpu&view=w`), or null. */
+function queryOf(hash) {
+    return hash.startsWith(PREFIX) ? new URLSearchParams(hash.slice(PREFIX.length)) : null;
+}
+/**
+ * The filter in a URL fragment (`#/f/any=A,B&none=C&untagged=1&text=gpu&view=w`),
+ * or null when the fragment names no part of a filter, such as one with only a tab.
+ */
 export function parseFilterHash(hash) {
-    if (!hash.startsWith(PREFIX))
+    const query = queryOf(hash);
+    if (query === null || !FILTER_KEYS.some((name) => query.has(name)))
         return null;
-    const query = new URLSearchParams(hash.slice(PREFIX.length));
     return {
         any: list(query.get("any")),
         none: list(query.get("none")),
@@ -19,11 +28,20 @@ export function parseFilterHash(hash) {
         view: query.get("view"),
     };
 }
-/** The URL fragment for `filter`; empty for no filter. */
-export function filterHash(filter) {
-    if (!isActive(filter) && filter.view === null)
-        return "";
+/** The tab in a URL fragment (`#/f/…&tab=queue`); 等你 when it names none or one the page lacks. */
+export function parseTab(hash) {
+    const named = queryOf(hash)?.get("tab");
+    return TABS.find((tab) => tab === named) ?? "wait";
+}
+/** True when the captain chose a filter or a saved view: the header's 篩選 says so. */
+export function hasFilter(filter) {
+    return isActive(filter) || filter.view !== null;
+}
+/** The fragment's filter part; empty for no filter. */
+function filterQuery(filter) {
     const query = new URLSearchParams();
+    if (!hasFilter(filter))
+        return query;
     if (filter.any.length > 0)
         query.set("any", filter.any.join(","));
     if (filter.none.length > 0)
@@ -34,7 +52,14 @@ export function filterHash(filter) {
         query.set("text", filter.text);
     if (filter.view !== null)
         query.set("view", filter.view);
-    return `${PREFIX}${query.toString()}`;
+    return query;
+}
+/** The home page's URL fragment for `filter` and `tab`; empty for no filter on 等你. */
+export function filterHash(filter, tab) {
+    const query = filterQuery(filter);
+    if (tab !== "wait")
+        query.set("tab", tab);
+    return query.size === 0 ? "" : `${PREFIX}${query.toString()}`;
 }
 export function viewFilter(view) {
     return {

@@ -1,10 +1,13 @@
 // The page around the content: header, the banners that say what is wrong, and
-// the choice between the home page and a topic page.
+// the choice between the home page and a topic page. The programs waiting for
+// the captain's confirmation go to the home page's 更多 tab.
 import { h } from "./dom.js";
 import type { Child } from "./dom.js";
-import { home, sidebar } from "./home.js";
+import { hasFilter } from "./filter.js";
+import { home } from "./home.js";
 import { currentTopic } from "./state.js";
 import type { Actions, Page, ProgramView, View } from "./state.js";
+import { FILTER_PANEL } from "./tags.js";
 import { topicPage } from "./topic.js";
 
 function staleBanner(view: View): Child {
@@ -138,13 +141,7 @@ function banners(page: Page, actions: Actions): Child {
       : null,
     view === null
       ? null
-      : [
-          notConnectedNote(view),
-          programConfirms(page, actions),
-          staleBanner(view),
-          versionBanner(view),
-          ledgerBanner(view),
-        ],
+      : [notConnectedNote(view), staleBanner(view), versionBanner(view), ledgerBanner(view)],
     page.notice === null
       ? null
       : h(
@@ -157,32 +154,48 @@ function banners(page: Page, actions: Actions): Child {
   ];
 }
 
+/** The header's 篩選: it opens the filter panel and says when a filter is on. */
+function filterButton(page: Page, actions: Actions): Child {
+  const [look, word] = hasFilter(page.filter) ? ["primary", "篩選中"] : ["", "篩選"];
+  return h(
+    "button",
+    { class: look, "data-open": FILTER_PANEL, onclick: () => actions.toggle(FILTER_PANEL) },
+    word,
+  );
+}
+
+/** Whether the home page is on screen: the filter applies only there. */
+function onTheHomePage(page: Page, topic: string | null): boolean {
+  return page.view !== null && topic === null;
+}
+
+function header(page: Page, actions: Actions, topic: string | null): Child {
+  return h(
+    "header",
+    {},
+    h("h1", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "議題看板")),
+    h("span", { class: "spacer" }),
+    h("span", { class: "note poll-note" }, "每 5 秒自動更新"),
+    onTheHomePage(page, topic) ? filterButton(page, actions) : null,
+    h("button", { onclick: actions.refresh }, "立刻更新"),
+  );
+}
+
+function loading(page: Page): Child {
+  return h("p", { class: "note" }, page.tokenBad || page.down ? "" : "載入中…");
+}
+
+function content(page: Page, view: View, actions: Actions, topic: string | null): Child {
+  return topic === null
+    ? home(page, view, actions, programConfirms(page, actions))
+    : topicPage(page, view, actions, topic);
+}
+
 export function frame(page: Page, actions: Actions): Child {
-  const view = page.view;
   const topic = currentTopic();
   return [
-    h(
-      "header",
-      {},
-      h("h1", {}, h("button", { class: "link", onclick: () => actions.open(null) }, "議題看板")),
-      h("span", { class: "spacer" }),
-      h("span", { class: "note" }, "每 5 秒自動更新"),
-      h("button", { onclick: actions.refresh }, "立刻更新"),
-    ),
+    header(page, actions, topic),
     banners(page, actions),
-    view === null
-      ? h("main", {}, h("p", { class: "note" }, page.tokenBad || page.down ? "" : "載入中…"))
-      : h(
-          "main",
-          {},
-          topic === null
-            ? h(
-                "div",
-                { class: "side" },
-                sidebar(page, view, actions),
-                h("div", {}, home(page, view, actions)),
-              )
-            : topicPage(page, view, actions, topic),
-        ),
+    h("main", {}, page.view === null ? loading(page) : content(page, page.view, actions, topic)),
   ];
 }

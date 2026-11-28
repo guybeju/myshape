@@ -146,8 +146,8 @@ function keywordRow(page: Page, view: View, actions: Actions): Child {
   );
 }
 
-/** The line that never lets a filter hide what waits on the captain. */
-function owedLine(view: View, actions: Actions, shown: Map<string, string[]> | null): Child {
+/** The line that never lets a filter hide what waits on the captain; it stays when the panel is closed. */
+export function owedLine(view: View, actions: Actions, shown: Map<string, string[]> | null): Child {
   if (shown === null) return null;
   const owed = owedOutside(view, shown);
   const parts = [
@@ -162,6 +162,25 @@ function owedLine(view: View, actions: Actions, shown: Map<string, string[]> | n
       "button",
       { class: "link", onclick: () => actions.setFilter(NO_FILTER) },
       `這個篩選之外還有：${parts.join("、")}`,
+    ),
+  );
+}
+
+/** The key the filter panel is open under, in `page.open`; the header's 篩選 opens it. */
+export const FILTER_PANEL = "filter-panel";
+
+/** The filter panel the header's 篩選 opens: views, hashtag buttons and the keyword. */
+export function filterPanel(page: Page, view: View, actions: Actions): Child {
+  return h(
+    "section",
+    { class: "filterbar filterpanel", "data-panel": "filter" },
+    viewButtons(page, view, actions),
+    hashtagButtons(page, view, actions),
+    keywordRow(page, view, actions),
+    h(
+      "div",
+      { class: "btns" },
+      h("button", { onclick: () => actions.toggle(FILTER_PANEL) }, "收起"),
     ),
   );
 }
@@ -184,20 +203,11 @@ function panelButtons(page: Page, view: View, actions: Actions): Child {
   );
 }
 
-/** The filter bar above the home page. */
-export function filterBar(
-  page: Page,
-  view: View,
-  actions: Actions,
-  shown: Map<string, string[]> | null,
-): Child {
+/** The agent's recent hashtag changes and the hashtag settings, under 更多. */
+export function hashtagBar(page: Page, view: View, actions: Actions): Child {
   return h(
     "section",
-    { class: "filterbar" },
-    viewButtons(page, view, actions),
-    hashtagButtons(page, view, actions),
-    keywordRow(page, view, actions),
-    owedLine(view, actions, shown),
+    { class: "filterbar", "data-bar": "hashtags" },
     panelButtons(page, view, actions),
     page.tagPanel === "recent"
       ? recentCard(view, actions, {
