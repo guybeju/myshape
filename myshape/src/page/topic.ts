@@ -39,9 +39,19 @@ function editable(
   const key = `${field}:${id}`;
   const op = field === "name" ? "rename" : "goal";
   if (!page.editing.has(key)) {
+    const label = field === "name" ? "編輯名稱" : "編輯目標";
     return [
       h(field === "name" ? "h2" : "span", { class: field === "goal" ? "goal" : "" }, text),
-      h("button", { class: "link", onclick: () => actions.edit(key, true) }, "編輯"),
+      h(
+        "button",
+        {
+          class: "link edit",
+          "aria-label": label,
+          title: label,
+          onclick: () => actions.edit(key, true),
+        },
+        "✎",
+      ),
     ];
   }
   const save = (): void => {
@@ -297,7 +307,7 @@ function agentCard(page: Page, actions: Actions, agent: AgentView): Child {
       : h(
           "div",
           { class: "note" },
-          "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。",
+          `「已送達」只代表訊息到了轉達的 ${agent.home}，它再轉給這個 agent 可能還要一點時間。`,
         ),
     writeRows(
       page,

@@ -12,9 +12,15 @@ function editable(page, actions, id, field, text) {
     const key = `${field}:${id}`;
     const op = field === "name" ? "rename" : "goal";
     if (!page.editing.has(key)) {
+        const label = field === "name" ? "編輯名稱" : "編輯目標";
         return [
             h(field === "name" ? "h2" : "span", { class: field === "goal" ? "goal" : "" }, text),
-            h("button", { class: "link", onclick: () => actions.edit(key, true) }, "編輯"),
+            h("button", {
+                class: "link edit",
+                "aria-label": label,
+                title: label,
+                onclick: () => actions.edit(key, true),
+            }, "✎"),
         ];
     }
     const save = () => {
@@ -154,7 +160,7 @@ function agentCard(page, actions, agent) {
         ? null
         : h("span", { class: "note" }, `最後更新 ${when(agent.updated_at)}`), agent.stale ? h("span", { class: "pill warn" }, "資料過期") : null), h("div", { class: "note" }, `${agent.state} ${agent.detail}`), h("div", { class: "btns" }, draftInput(page, actions, key, "只給這個 agent 的訊息", send), h("button", { onclick: send }, agent.home === "main" ? "直送" : `經 ${agent.home} 轉達`)), agent.home === "main"
         ? null
-        : h("div", { class: "note" }, "「已送達」只代表訊息到了 secondmate 的收件匣，它轉給 worker 可能還要一點時間。"), writeRows(page, actions, (write) => write.kind === "direct" && write.home === agent.home && write.task === agent.task));
+        : h("div", { class: "note" }, `「已送達」只代表訊息到了轉達的 ${agent.home}，它再轉給這個 agent 可能還要一點時間。`), writeRows(page, actions, (write) => write.kind === "direct" && write.home === agent.home && write.task === agent.task));
 }
 /** Backlog items of this topic that no worker has been dispatched for, folded by default. */
 function queued(view, id) {
