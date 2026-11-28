@@ -48,6 +48,10 @@
 
 `list [--all] [--json] [--hashtag <名稱>]`：讀 `data/topics.json`（`--all` 加讀封存檔）與 `data/myshape/schedules.json`，每行印 id、狀態、佇列、位置、名稱。`--hashtag` 只列貼著那個 hashtag 的議題，用 jq 讀 `data/myshape/hashtags.json`（[contracts](contracts.markdown) 第 3.8 節），比對的方式和 `fm-dispatch-plan.sh order --hashtag` 相同；沒有一個議題貼著時印「沒有議題貼著 #<名稱>。」並回 0。有開著的場次時，最前面先為每一場印一行 id、`now`、那一場的狀態、它的鍵、名稱（rt 不是 `none` 時名稱後加「（hard-rt）」），先 `hard-rt`、再 `soft-rt`、再沒有 rt，同一級照時刻；超過 `closes_by` 的不算開著。`--json` 仍是一個議題一列的陣列，每列多 `schedule`（沒有排程時是 `null`，有的話是 `id`、`rule`、`tz`、`state`、`rt`、`locked`）與 `occurrence`（沒有開著的場次時是 `null`，有的話是 `key`、`at`、`state`、`closes_by`、`taken_at`、`note`）（[contracts](contracts.markdown) 第 3.9 節）。唯讀，不經服務。沒有議題檔時印「還沒有議題」並回 0。在 secondmate home 印「議題檔只在主 home」，exit 1。沒有 `jq` 時印原因與安裝方式（文字比照上游 `bin/fm-bootstrap.sh:872`），exit 1。
 
+### `hashtags`
+
+`hashtags`：用 jq 讀 `data/myshape/hashtags.json`、`data/topics.json` 與封存檔（[contracts](contracts.markdown) 第 3.8 節），列出看板上的每個 hashtag，一個一行：名稱、貼在幾個議題（議題 id 先過 `merged` 表，只算看板認得的議題）、鎖不鎖、誰開的，以及最多三個貼著它、還沒封存的議題名稱；貼在越多議題的越前面，再照 `key`。最後一行是共幾個與設定（可以貼撕、可以開新的、開新的要明說、一個議題最多幾個、全看板最多幾個、每小時最多改幾次；沒有或不合法的照預設）。不收參數。唯讀，不經服務。沒有這個檔或一個 hashtag 都沒有時印「看板還沒有 hashtag。」並回 0。和 `list` 一樣，沒有看板的 home（例如 secondmate home，沒有 `state/myshape/token`）exit 1；沒有 `jq` 時印原因與安裝方式，exit 1；讀不懂檔時 exit 1。
+
 ### `order`
 
 唯讀，不改 backlog，不經服務。讀三樣：議題檔與封存檔、這個 home 的 `data/*/topic`、`fm-fleet-snapshot.sh --json` 的 `backlog.records[]`（設 `FM_CREW_STATE_NO_FORGE=1`，`FM_SNAPSHOT_SECONDMATES` 同彙整腳本）。只看 `state` 是 `queued` 的紀錄。輸出五段，每行 `<task-id> <議題名稱> <佇列>`：
