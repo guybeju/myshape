@@ -2,7 +2,8 @@
 // headless Firefox for stage-7-page.sh. TB_PAGE_MODE=connected walks a board
 // fed by stub-plain, bound outside the root as TB_PROGRAM and confirmed on the
 // page first, on a PC's 1300 px; TB_PAGE_MODE=alone walks a board with nothing
-// connected on a phone's 390 px; TB_PAGE_MODE=remote opens a board whose
+// connected on a phone's 390 px with a touch screen (TB_POINTER=coarse), where
+// a finger drags cards by their ⠿; TB_PAGE_MODE=remote opens a board whose
 // program waits for confirmation by its remote name, through
 // serve-stand-in.mjs, on a phone's 390 px.
 import { execFileSync } from "node:child_process";
@@ -63,6 +64,84 @@ function dropOnQueue(name, queue) {
     fire(card, "dragend");
     return true;
   })()`;
+}
+
+/** Drags a topic card onto the upper half of another card with synthetic drag events, as the mouse does. */
+function dropOnCard(name, ontoName) {
+  return `(() => {
+    const card = [...document.querySelectorAll(".topic")].find((entry) => entry.innerText.includes(${JSON.stringify(name)}));
+    const onto = [...document.querySelectorAll(".topic")].find((entry) => entry.innerText.includes(${JSON.stringify(ontoName)}));
+    const data = new DataTransfer();
+    const fire = (target, type) => target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: data, clientY: onto.getBoundingClientRect().top + 1 }));
+    fire(card, "dragstart");
+    fire(onto, "dragover");
+    fire(onto, "drop");
+    fire(card, "dragend");
+    return true;
+  })()`;
+}
+
+/** Keeps the body of every move the page asks the board for, in window.__moves. */
+const RECORD_MOVES = `(() => {
+  window.__moves = [];
+  const send = window.fetch;
+  window.fetch = (url, init) => {
+    if (String(url).endsWith("/topics/move")) window.__moves.push(init.body);
+    return send(url, init);
+  };
+  return true;
+})()`;
+const LAST_MOVE = "window.__moves.at(-1) ?? null";
+/** A queue's cards on the page, by topic id. */
+const order = (queue) =>
+  `[...document.querySelectorAll('.queue[data-queue="${queue}"] .topic')].map((card) => card.dataset.topic).join(",")`;
+
+/** The middle and the top of the first element `css` matches, in the window. */
+async function spot(page, css) {
+  return JSON.parse(await page.evaluate(`(() => { const box = document.querySelector(${JSON.stringify(css)}).getBoundingClientRect(); return JSON.stringify({ x: box.left + box.width / 2, y: box.top + box.height / 2, top: box.top }); })()`));
+}
+
+/** A finger holds a card's ⠿ past the long press, slides it to `to` and lets go. */
+async function fingerDrag(page, id, to) {
+  const handle = await spot(page, `.topic[data-topic="${id}"] .handle`);
+  const away = { x: handle.x, y: handle.y + (to.y > handle.y ? 30 : -30) };
+  await page.touchDrag([handle, away, to], 600);
+}
+
+/**
+ * A finger's long press on ⠿ drags a card on a phone: within the list it
+ * reorders, and on the 待辦 segment button it puts the card last there. Each
+ * asks the board for exactly what the mouse's drag of the same move does.
+ * Starts and ends on 佇列 with 一般 shown, 一 in 待辦 and 二 in 一般.
+ */
+async function fingerDrags(page) {
+  await page.evaluate(RECORD_MOVES);
+  await page.evaluate("window.scrollTo(0, 0)");
+  await page.waitFor("一 and 二 in 一般", `${order("normal")} === "one,two"`);
+  await page.evaluate(dropOnCard("二", "一"));
+  await page.waitFor("the mouse's reorder", `${order("normal")} === "two,one"`, 15000);
+  const mouseReorder = await page.evaluate(LAST_MOVE);
+  topic("move", "one", "normal", "--first");
+  await page.waitFor("一 back first in 一般", `${order("normal")} === "one,two"`, 15000);
+  const one = await spot(page, '.topic[data-topic="one"]');
+  await fingerDrag(page, "two", { x: one.x, y: one.top + 8 });
+  await page.waitFor("the finger's reorder", `${order("normal")} === "two,one"`, 15000);
+  const fingerReorder = await page.evaluate(LAST_MOVE);
+  if (fingerReorder !== mouseReorder || mouseReorder !== JSON.stringify({ id: "two", queue: "normal", before: "one" }))
+    throw new Error(`a finger's reorder must ask what the mouse's does: finger ${fingerReorder}, mouse ${mouseReorder}`);
+
+  await page.evaluate(dropOnQueue("一", "later"));
+  await page.waitFor("一 in 待辦 by the mouse", `${order("later")} === "one"`, 15000);
+  const mouseToLater = await page.evaluate(LAST_MOVE);
+  topic("move", "one", "normal");
+  await page.waitFor("一 back in 一般", `${order("normal")} === "two,one"`, 15000);
+  await fingerDrag(page, "one", await spot(page, '.segs button[data-segment="later"]'));
+  await page.waitFor("一 in 待辦 by the finger", `${order("later")} === "one"`, 15000);
+  const fingerToLater = await page.evaluate(LAST_MOVE);
+  if (fingerToLater !== mouseToLater || mouseToLater !== JSON.stringify({ id: "one", queue: "later" }))
+    throw new Error(`a finger's drop on 待辦 must ask what the mouse's drag to its end does: finger ${fingerToLater}, mouse ${mouseToLater}`);
+  const listed = JSON.parse(topic("list", "--json")).find((entry) => entry.id === "one");
+  if (listed?.queue !== "later") throw new Error(`list --json must agree with the finger's drop, got ${JSON.stringify(listed)}`);
 }
 
 /**
@@ -261,6 +340,7 @@ async function alone(page) {
   await phoneTabs(page);
   await page.evaluate(dropOnQueue("二", "normal"));
   await page.waitFor("一 on screen in 一般", visible('.queue[data-queue="normal"] .topic[data-topic="one"]'));
+  await fingerDrags(page);
   await page.click(".topic button", "一");
   await page.waitFor("the topic page", has("關聯 agent"));
   if (await page.evaluate(`document.querySelector(".tabs") !== null`)) throw new Error("a topic page has no tabs");
