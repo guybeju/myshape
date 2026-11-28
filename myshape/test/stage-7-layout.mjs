@@ -15,7 +15,7 @@ const WIDE = [1300, 950];
 
 async function resize(page, [width, height]) {
   await page.setViewport(width, height);
-  await page.waitFor(`the window at ${width} px`, `document.documentElement.clientWidth === ${width}`);
+  await page.waitFor(`the window at ${width} px`, `innerWidth === ${width}`);
   await sleep(300);
 }
 
