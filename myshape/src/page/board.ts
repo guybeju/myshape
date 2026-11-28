@@ -393,12 +393,19 @@ function lastIn(queue: string, card: HTMLElement): string | null {
  * it stays where it was) is a drop at that list's end.
  */
 function targetAt(element: Element | null, card: HTMLElement): Target | null {
+  return segmentAt(element, card) ?? listAt(element, card);
+}
+
+function segmentAt(element: Element | null, card: HTMLElement): Target | null {
   const button = element?.closest<HTMLElement>(".segs button[data-segment]");
   const segment = button?.dataset["segment"] as Segment | undefined;
-  if (segment !== undefined) return { kind: "segment", segment, last: lastIn(segment, card) };
-  const box = element?.closest<HTMLElement>(".queue[data-queue]");
-  const queue = box?.dataset["queue"] as Queue | undefined;
-  if (box === null || box === undefined || queue === undefined) return null;
+  return segment === undefined ? null : { kind: "segment", segment, last: lastIn(segment, card) };
+}
+
+function listAt(element: Element | null, card: HTMLElement): Target | null {
+  const box = element?.closest<HTMLElement>(".queue[data-queue]") ?? null;
+  if (box === null) return null;
+  const queue = box.dataset["queue"] as Queue;
   const slot = box.contains(card) ? slotOf(card) : null;
   return { kind: "list", slot: slot ?? { queue, above: lastIn(queue, card), below: null } };
 }
@@ -477,16 +484,18 @@ app.addEventListener("dragend", endDrag);
 
 /** A finger places the card by height alone: a box's title or a gap between cards is no jump. */
 function slideCard(card: HTMLElement, element: Element | null, y: number): void {
-  const box = element?.closest<HTMLElement>(".queue");
-  const list = box?.querySelector(".list");
-  if (box === null || box === undefined || list === null || list === undefined) return;
-  if (box.dataset["byTime"] === "true") return;
+  // Listed by creation time, a place in the list is no priority: the card stays where it was.
+  const box = element?.closest<HTMLElement>('.queue[data-by-time="false"]') ?? null;
+  const list = box?.querySelector(".list") ?? null;
+  if (box === null || list === null) return;
   const others = othersIn(box, card);
-  const middles = others.map((entry) => {
-    const rect = entry.getBoundingClientRect();
-    return rect.top + rect.height / 2;
-  });
-  list.insertBefore(card, others[indexAt(middles, y)] ?? list.querySelector(".empty"));
+  const at = indexAt(others.map(middleOf), y);
+  list.insertBefore(card, others[at] ?? list.querySelector(".empty"));
+}
+
+function middleOf(element: Element): number {
+  const box = element.getBoundingClientRect();
+  return box.top + box.height / 2;
 }
 
 /** Marks the segment button under the finger when letting go there would move the card. */
@@ -497,43 +506,52 @@ function markDrop(card: HTMLElement, element: Element | null, start: Slot): void
   element?.closest(".segs button")?.classList.add("drop");
 }
 
+/** The top of the tab bar where it is fixed at the window's bottom (a phone); else the window's bottom. */
+function bottomBar(): number {
+  const tabs = app.querySelector(".tabs")?.getBoundingClientRect();
+  const fixed = tabs !== undefined && tabs.bottom >= window.innerHeight - 1;
+  return fixed ? tabs.top : window.innerHeight;
+}
+
 /** The part of the window between the sticky header and, on a phone, the tab bar at the bottom. */
 function band(): Band {
-  const top = document.querySelector("header")?.getBoundingClientRect().bottom ?? 0;
-  const tabs = app.querySelector(".tabs")?.getBoundingClientRect();
-  const atBottom = tabs !== undefined && tabs.bottom >= window.innerHeight - 1;
-  return { top: Math.max(0, top), bottom: atBottom ? tabs.top : window.innerHeight };
+  const header = document.querySelector("header")?.getBoundingClientRect().bottom ?? 0;
+  return { top: Math.max(0, header), bottom: bottomBar() };
+}
+
+/** The card a finger lifted and where it started; null when no card is lifted. */
+function lifted(): { card: HTMLElement; start: Slot; id: string } | null {
+  const card = app.querySelector<HTMLElement>(".topic.dragging");
+  return dragged === null || card === null ? null : { card, ...dragged };
+}
+
+function liftCard(card: HTMLElement): boolean {
+  const start = slotOf(card);
+  if (start === null) return false;
+  startDrag(card, start);
+  card.classList.add("lifted");
+  return true;
+}
+
+function fingerAt(x: number, y: number): void {
+  const held = lifted();
+  if (held === null) return;
+  const element = document.elementFromPoint(x, y);
+  slideCard(held.card, element, y);
+  markDrop(held.card, element, held.start);
+}
+
+function fingerUp(x: number, y: number): void {
+  const held = lifted();
+  const target = held === null ? null : targetAt(document.elementFromPoint(x, y), held.card);
+  const place = held === null || target === null ? null : placeAt(target, held.card, held.start);
+  if (held !== null && place !== null) actions.move(held.id, place.queue, place.anchor);
+  endDrag();
 }
 
 listenForTouchDrag(
   app,
-  {
-    lift: (card) => {
-      const start = slotOf(card);
-      if (start === null) return false;
-      startDrag(card, start);
-      card.classList.add("lifted");
-      return true;
-    },
-    hover: (x, y) => {
-      const card = app.querySelector<HTMLElement>(".topic.dragging");
-      if (dragged === null || card === null) return;
-      const element = document.elementFromPoint(x, y);
-      slideCard(card, element, y);
-      markDrop(card, element, dragged.start);
-    },
-    release: (x, y) => {
-      const card = app.querySelector<HTMLElement>(".topic.dragging");
-      const target = card === null ? null : targetAt(document.elementFromPoint(x, y), card);
-      const place =
-        dragged === null || card === null || target === null
-          ? null
-          : placeAt(target, card, dragged.start);
-      if (dragged !== null && place !== null) actions.move(dragged.id, place.queue, place.anchor);
-      endDrag();
-    },
-    cancel: endDrag,
-  },
+  { lift: liftCard, hover: fingerAt, release: fingerUp, cancel: endDrag },
   band,
 );
 

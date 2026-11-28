@@ -66,18 +66,20 @@ export interface Place {
   anchor: Anchor;
 }
 
+/** The place in a list a target stands for: a segment button is its queue's end; 排程 is none. */
+function targetSlot(target: Target): Slot | null {
+  if (target.kind === "list") return target.slot;
+  if (target.segment === "schedules") return null;
+  return { queue: target.segment, above: target.last, below: null };
+}
+
 /**
  * The move a card that started at `start` asks for when let go on `target`;
  * null when it sends nothing. A segment button is the end of its queue's
  * list, so it follows the same rules as a drop there; 排程 takes no drop.
  */
 export function dropPlace(start: Slot, target: Target, listing: Listing): Place | null {
-  const slot =
-    target.kind === "list"
-      ? target.slot
-      : target.segment === "schedules"
-        ? null
-        : { queue: target.segment, above: target.last, below: null };
+  const slot = targetSlot(target);
   if (slot === null) return null;
   const anchor = listing.byTime
     ? timeDropAnchor(start.queue, slot.queue)

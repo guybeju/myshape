@@ -18,9 +18,9 @@ export function movedAway(dx: number, dy: number): boolean {
   return Math.hypot(dx, dy) > SLOP_PX;
 }
 
-/** The scroll for one frame when the finger is `depth` px into an edge's band. */
-function step(depth: number): number {
-  return Math.ceil((Math.min(depth, EDGE_PX) / EDGE_PX) * MAX_STEP_PX);
+/** The scroll for one frame when the finger is `depth` px into an edge's band; 0 outside it. */
+function scrollStep(depth: number): number {
+  return Math.ceil((Math.min(Math.max(depth, 0), EDGE_PX) / EDGE_PX) * MAX_STEP_PX);
 }
 
 /**
@@ -29,9 +29,7 @@ function step(depth: number): number {
  * down near the bottom, faster the closer to the edge; 0 in between.
  */
 export function edgeScroll(y: number, top: number, bottom: number): number {
-  if (y < top + EDGE_PX) return -step(top + EDGE_PX - y);
-  if (y > bottom - EDGE_PX) return step(y - bottom + EDGE_PX);
-  return 0;
+  return scrollStep(y - bottom + EDGE_PX) - scrollStep(top + EDGE_PX - y);
 }
 
 /**
@@ -62,10 +60,173 @@ export interface Band {
   bottom: number;
 }
 
-type Gesture =
+/** The pointer holding a card's ⠿, and where it is: pressing until the long press ends, then dragging. */
+export type Gesture =
   | { state: "idle" }
-  | { state: "pressing"; pointer: number; card: HTMLElement; x: number; y: number; timer: number }
-  | { state: "dragging"; pointer: number; card: HTMLElement; x: number; y: number; frame: number };
+  | { state: "pressing" | "dragging"; pointer: number; x: number; y: number };
+
+/**
+ * What reaches the gesture: a pointer going down (`onHandle` when it is a
+ * finger or a pen on ⠿), moving, lifting, the browser cancelling it, and the
+ * long press ending with the card lifted or not.
+ */
+export type Input =
+  | { type: "down"; pointer: number; x: number; y: number; onHandle: boolean }
+  | { type: "move" | "up" | "cancel"; pointer: number; x: number; y: number }
+  | { type: "held"; lifted: boolean };
+
+/**
+ * What the page does: start the long press on the card under the pointer
+ * going down, give it up, lift the card, follow the finger, drop the card at
+ * (x, y), or put it back.
+ */
+export interface Effect {
+  kind: "press" | "unpress" | "lift" | "hover" | "drop" | "cancel";
+  x: number;
+  y: number;
+}
+
+/** A gesture's next state and what the page does on the way. */
+export interface Step {
+  gesture: Gesture;
+  effects: Effect[];
+}
+
+const IDLE: Gesture = { state: "idle" };
+const effect = (kind: Effect["kind"], x = 0, y = 0): Effect => ({ kind, x, y });
+
+/** What undoes the gesture that is on. */
+function ending(gesture: Gesture): Effect[] {
+  if (gesture.state === "pressing") return [effect("unpress")];
+  return gesture.state === "dragging" ? [effect("cancel")] : [];
+}
+
+/** A pointer goes down: it ends any gesture (a second finger ends a drag) and presses ⠿ or nothing. */
+function down(gesture: Gesture, input: Extract<Input, { type: "down" }>): Step {
+  const ended = ending(gesture);
+  if (!input.onHandle) return { gesture: IDLE, effects: ended };
+  const { pointer, x, y } = input;
+  return {
+    gesture: { state: "pressing", pointer, x, y },
+    effects: [...ended, effect("press", x, y)],
+  };
+}
+
+/** The long press ended: the card is lifted where the finger is, unless the page refused it. */
+function held(gesture: Gesture, lifted: boolean): Step {
+  if (gesture.state !== "pressing") return { gesture, effects: [] };
+  if (!lifted) return { gesture: IDLE, effects: [effect("unpress")] };
+  return {
+    gesture: { ...gesture, state: "dragging" },
+    effects: [effect("lift", gesture.x, gesture.y)],
+  };
+}
+
+/** The pointer holding ⠿ moves, lifts or is cancelled. */
+function follow(
+  gesture: Extract<Gesture, { state: "pressing" | "dragging" }>,
+  input: Extract<Input, { type: "move" | "up" | "cancel" }>,
+): Step {
+  const { x, y } = input;
+  if (gesture.state === "pressing") {
+    const still = input.type === "move" && !movedAway(x - gesture.x, y - gesture.y);
+    return still ? { gesture, effects: [] } : { gesture: IDLE, effects: [effect("unpress")] };
+  }
+  if (input.type === "move")
+    return { gesture: { ...gesture, x, y }, effects: [effect("hover", x, y)] };
+  return {
+    gesture: IDLE,
+    effects: [input.type === "up" ? effect("drop", x, y) : effect("cancel")],
+  };
+}
+
+/**
+ * The gesture after `input`. A press lasts until `PRESS_MS` passes (held),
+ * the finger wanders past the slop, or it lifts; a drag until the finger
+ * lifts (drop) or the browser cancels. Other pointers' moves are ignored.
+ */
+export function step(gesture: Gesture, input: Input): Step {
+  if (input.type === "down") return down(gesture, input);
+  if (input.type === "held") return held(gesture, input.lifted);
+  if (gesture.state === "idle" || input.pointer !== gesture.pointer)
+    return { gesture, effects: [] };
+  return follow(gesture, input);
+}
+
+/** The pointer's input for the gesture, with where it is. */
+function pointerInput(type: "move" | "up" | "cancel", event: PointerEvent): Input {
+  return { type, pointer: event.pointerId, x: event.clientX, y: event.clientY };
+}
+
+/** The card whose ⠿ a finger or a pen went down on; null for a mouse or anywhere else. */
+function pressedCard(event: PointerEvent): HTMLElement | null {
+  if (event.pointerType === "mouse") return null;
+  const handle = (event.target as Element).closest(".topic .handle");
+  return handle?.closest<HTMLElement>(".topic[data-topic]") ?? null;
+}
+
+/** One page's finger drags: the gesture, the card it holds, and its press timer and scroll loop. */
+class Fingers {
+  gesture: Gesture = IDLE;
+  /** The card under the pointer that went down last. */
+  pressed: HTMLElement | null = null;
+  /** The card the gesture holds. */
+  card: HTMLElement | null = null;
+  timer = 0;
+  frame = 0;
+
+  constructor(
+    private readonly drag: TouchDrag,
+    private readonly band: () => Band,
+  ) {}
+
+  apply(input: Input): void {
+    const next = step(this.gesture, input);
+    this.gesture = next.gesture;
+    for (const done of next.effects) this.run(done);
+  }
+
+  private run({ kind, x, y }: Effect): void {
+    if (kind === "press") this.press();
+    else if (kind === "lift") this.lift(x, y);
+    else if (kind === "hover") this.drag.hover(x, y);
+    else this.letGo(kind, x, y);
+  }
+
+  /** The card's native drag is off while the finger is down on its ⠿. */
+  private press(): void {
+    this.card = this.pressed;
+    this.card?.setAttribute("draggable", "false");
+    this.timer = window.setTimeout(() => {
+      const card = this.card;
+      this.apply({ type: "held", lifted: card !== null && this.drag.lift(card) });
+    }, PRESS_MS);
+  }
+
+  private lift(x: number, y: number): void {
+    this.frame = window.requestAnimationFrame(this.scroll);
+    this.drag.hover(x, y);
+  }
+
+  /** Ends the press or the drag, gives the card its native drag back, then drops it or puts it back. */
+  private letGo(kind: "unpress" | "drop" | "cancel", x: number, y: number): void {
+    window.clearTimeout(this.timer);
+    window.cancelAnimationFrame(this.frame);
+    this.card?.setAttribute("draggable", "true");
+    if (kind === "drop") this.drag.release(x, y);
+    if (kind === "cancel") this.drag.cancel();
+  }
+
+  private readonly scroll = (): void => {
+    if (this.gesture.state === "idle") return;
+    const { x, y } = this.gesture;
+    const { top, bottom } = this.band();
+    const by = edgeScroll(y, top, bottom);
+    window.scrollBy(0, by);
+    if (by !== 0) this.drag.hover(x, y);
+    this.frame = window.requestAnimationFrame(this.scroll);
+  };
+}
 
 /**
  * Makes a long press on a card's `.handle` under `root` drag the card for
@@ -73,90 +234,19 @@ type Gesture =
  * is down, so the phone's own long-press drag cannot take the gesture over.
  */
 export function listenForTouchDrag(root: HTMLElement, drag: TouchDrag, band: () => Band): void {
-  let gesture: Gesture = { state: "idle" };
-
-  /** Ends the gesture, whatever state it is in, and gives the card its native drag back. */
-  const stop = (): void => {
-    if (gesture.state === "idle") return;
-    if (gesture.state === "pressing") window.clearTimeout(gesture.timer);
-    else window.cancelAnimationFrame(gesture.frame);
-    gesture.card.draggable = true;
-    gesture = { state: "idle" };
-  };
-
-  const scroll = (): void => {
-    if (gesture.state !== "dragging") return;
-    const { top, bottom } = band();
-    const by = edgeScroll(gesture.y, top, bottom);
-    if (by !== 0) {
-      window.scrollBy(0, by);
-      drag.hover(gesture.x, gesture.y);
-    }
-    gesture.frame = window.requestAnimationFrame(scroll);
-  };
-
-  const lift = (): void => {
-    if (gesture.state !== "pressing") return;
-    const { pointer, card, x, y } = gesture;
-    if (!drag.lift(card)) {
-      stop();
-      return;
-    }
-    gesture = {
-      state: "dragging",
-      pointer,
-      card,
-      x,
-      y,
-      frame: window.requestAnimationFrame(scroll),
-    };
-    drag.hover(x, y);
-  };
-
-  /** Ends the gesture; `finish` runs only when the card was lifted. */
-  const end = (finish: () => void): void => {
-    const lifted = gesture.state === "dragging";
-    stop();
-    if (lifted) finish();
-  };
-  const ours = (event: PointerEvent): boolean =>
-    gesture.state !== "idle" && event.pointerId === gesture.pointer;
-
+  const fingers = new Fingers(drag, band);
   root.addEventListener("pointerdown", (event) => {
-    // A second finger ends the drag of the first.
-    end(drag.cancel);
-    const handle = (event.target as Element).closest(".topic .handle");
-    const card = handle?.closest<HTMLElement>(".topic[data-topic]");
-    if (event.pointerType === "mouse" || card === null || card === undefined) return;
-    event.preventDefault();
-    card.draggable = false;
-    const timer = window.setTimeout(lift, PRESS_MS);
-    gesture = {
-      state: "pressing",
-      pointer: event.pointerId,
-      card,
-      x: event.clientX,
-      y: event.clientY,
-      timer,
-    };
+    fingers.pressed = pressedCard(event);
+    if (fingers.pressed !== null) event.preventDefault();
+    const { pointerId: pointer, clientX: x, clientY: y } = event;
+    fingers.apply({ type: "down", pointer, x, y, onHandle: fingers.pressed !== null });
   });
   window.addEventListener("pointermove", (event) => {
-    if (!ours(event) || gesture.state === "idle") return;
-    if (gesture.state === "pressing") {
-      if (movedAway(event.clientX - gesture.x, event.clientY - gesture.y)) stop();
-      return;
-    }
-    event.preventDefault();
-    gesture.x = event.clientX;
-    gesture.y = event.clientY;
-    drag.hover(gesture.x, gesture.y);
+    if (fingers.gesture.state === "dragging") event.preventDefault();
+    fingers.apply(pointerInput("move", event));
   });
-  window.addEventListener("pointerup", (event) => {
-    if (ours(event)) end(() => drag.release(event.clientX, event.clientY));
-  });
-  window.addEventListener("pointercancel", (event) => {
-    if (ours(event)) end(drag.cancel);
-  });
+  window.addEventListener("pointerup", (event) => fingers.apply(pointerInput("up", event)));
+  window.addEventListener("pointercancel", (event) => fingers.apply(pointerInput("cancel", event)));
   // A long press on a phone otherwise opens the browser's own menu over ⠿.
   root.addEventListener("contextmenu", (event) => {
     if ((event.target as Element).closest(".topic .handle") !== null) event.preventDefault();
