@@ -155,13 +155,17 @@ export default async function run(page) {
   // turn and the tab's count stay as they are, and 照優先順序 brings the queue's order back.
   const todoOrder = `[...document.querySelectorAll('.pane[data-pane="wait"] [data-todo]')].map((card) => card.dataset.todo).join(",")`;
   const waitFacts = `JSON.stringify([document.querySelector('.tabs button[data-tab="wait"] .count').textContent, ${has("還有 1 個決定排隊，輪到時才顯示")}, ${has("要合併嗎？")}, ${has("這個要不要做？")}])`;
-  const byPriority = "todo-1,old-note,old-only,new-note,loose-hand";
-  await page.waitFor("the hands-on items by priority", `${todoOrder} === ${JSON.stringify(byPriority)}`);
+  await page.waitFor("the five hands-on items", `${todoOrder}.split(",").length === 5`);
+  // The three Idea items may share a second, and then their ids order them: read the order.
+  const byPriority = await page.evaluate(todoOrder);
+  if (!byPriority.startsWith("todo-1,") || !byPriority.endsWith(",loose-hand"))
+    throw new Error(`by priority the 高 item comes first and the topicless one last, got ${byPriority}`);
+  const oldestFirst = `loose-hand,${byPriority.slice(0, -",loose-hand".length)}`;
   const facts = await page.evaluate(waitFacts);
   if (JSON.stringify(JSON.parse(facts).slice(1)) !== JSON.stringify([true, true, false]))
     throw new Error(`call-1 must be in front and the loose call waiting its turn, got ${facts}`);
   await page.click("#sidebar .order button", "舊的在上");
-  await page.waitFor("the hands-on items oldest first", `${todoOrder} === "loose-hand,todo-1,old-note,old-only,new-note"`);
+  await page.waitFor("the hands-on items oldest first", `${todoOrder} === ${JSON.stringify(oldestFirst)}`);
   if ((await page.evaluate(waitFacts)) !== facts) throw new Error("the order must not change which decisions are in front, nor the 等你 count");
   await page.click("#sidebar .order button", "新的在上");
   await page.waitFor("the hands-on items newest first", `${todoOrder}.endsWith(",loose-hand") && ${todoOrder}.split(",").length === 5`);
