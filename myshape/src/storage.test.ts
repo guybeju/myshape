@@ -182,6 +182,7 @@ describe("layout", () => {
       todos: "/d/myshape/todos.json",
       decisions: "/d/myshape/decisions.json",
       binding: "/c/myshape-aggregator.json",
+      remote: "/c/myshape-remote.json",
       confirmations: "/d/myshape/confirmations.json",
       hashtags: "/d/myshape/hashtags.json",
       schedules: "/d/myshape/schedules.json",

@@ -47,6 +47,12 @@ const ROLE_WORD = { feed: "讀取", deliver: "送出" };
 function onThePc() {
     return location.hostname === "127.0.0.1" || location.hostname === "localhost";
 }
+/** The first step's button; under the remote name the board refuses it, so the page says where to go instead. */
+function confirmStart(actions, key, role) {
+    if (!onThePc())
+        return "只能在 PC 上確認：在 PC 的瀏覽器打開看板再按「確認…」。";
+    return h("button", { onclick: () => actions.ask(key, "programs/confirm", { role }) }, "確認…");
+}
 /**
  * A program the board may run only once the captain confirms it, in two
  * steps that show its full path; the board checks both steps against the
@@ -58,9 +64,7 @@ function programConfirm(page, actions, program) {
     const key = `program:${program.path}`;
     const role = program.roles[0] ?? "deliver";
     if (!page.pending.has(key)) {
-        return h("p", { class: "note program-confirm" }, `要接上 ${name}，看板得在${roles}時執行 `, h("code", {}, program.path), "。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。", onThePc()
-            ? h("button", { onclick: () => actions.ask(key, "programs/confirm", { role }) }, "確認…")
-            : "只能在 PC 上確認：在 PC 的瀏覽器打開看板再按「確認…」。");
+        return h("p", { class: "note program-confirm" }, `要接上 ${name}，看板得在${roles}時執行 `, h("code", {}, program.path), "。這支程式不是看板程式目錄 bin/ 裡、和 commit 相同的檔，要你確認一次才會執行。", confirmStart(actions, key, role));
     }
     return h("div", { class: "confirm" }, `確定讓看板在每次${roles}時執行 `, h("code", {}, program.path), ` 嗎？確認的是它現在的內容（SHA-256 ${program.sha256}）與 config/myshape-aggregator.json 現在的內容；之後兩者有一個改了，看板就不執行，再問你一次。`, h("span", { class: "btns" }, h("button", { class: "danger", onclick: () => actions.confirm(key) }, "確定執行"), h("button", { onclick: () => actions.cancel(key) }, "取消")));
 }
