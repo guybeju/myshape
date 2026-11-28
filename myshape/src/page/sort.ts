@@ -1,7 +1,7 @@
-// How the sidebar lists the cards in each queue: in the queue's own order, or
-// by when each topic was created. Only what is shown changes; the queue, and
-// the order the aggregator dispatches in, stay as they are. Pure, so it is
-// tested on its own. The reasons are in spec/card-sort.markdown.
+// How the sidebar lists the cards in each queue, and 等你 its cards: in the
+// queue's own order, or by when each card was created. Only what is shown
+// changes; the queue, and the order the aggregator dispatches in, stay as they
+// are. Pure, so it is tested on its own. The reasons are in spec/card-sort.markdown.
 import type { CardOrder, SavedView } from "#board/hashtags.js";
 import type { Page } from "./state.js";
 
@@ -48,18 +48,18 @@ function moment(created: string): number {
 }
 
 /**
- * The queue's cards in `order`. By creation time, newest or oldest first;
- * topics created at one moment keep their priority order in both directions,
- * because the sort is stable and they compare equal.
+ * The cards, given in priority order, in `order`. By creation time, newest or
+ * oldest first; cards created at one moment keep their priority order in both
+ * directions, because the sort is stable and they compare equal.
  */
-export function sortCards(
-  queue: readonly string[],
+export function sortCards<Card>(
+  cards: readonly Card[],
   order: CardOrder,
-  createdAt: (id: string) => string,
-): string[] {
-  if (order === "priority") return [...queue];
+  createdAt: (card: Card) => string,
+): Card[] {
+  if (order === "priority") return [...cards];
   const direction = order === "newest" ? -1 : 1;
-  const cards = queue.map((id) => ({ id, at: moment(createdAt(id)) }));
-  cards.sort((a, b) => direction * (a.at - b.at));
-  return cards.map((card) => card.id);
+  const timed = cards.map((card) => ({ card, at: moment(createdAt(card)) }));
+  timed.sort((a, b) => direction * (a.at - b.at));
+  return timed.map((entry) => entry.card);
 }

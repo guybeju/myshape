@@ -133,6 +133,8 @@ export interface TodoView {
   reason: string | null;
   /** The state word todos.json holds for an item in the "unknown" state (O6); only such an item has it. */
   unknown_state?: string;
+  /** When the item was put on the board (todos.json); the page lists 要你動手 by it. */
+  created_at: string;
 }
 
 export interface HoldView {
@@ -159,6 +161,8 @@ export interface HoldView {
   blockers: string[];
   topic: string | null;
   stale: boolean;
+  /** When the hold was set, as the home reported it, or null; the page lists 等你決定 by it. */
+  hold_set: string | null;
 }
 
 export interface QuestionView {
@@ -624,6 +628,7 @@ function holdsOf(home: HomeSnapshot, stale: boolean, placer: Placer, nowMs: numb
         waits_turn: false,
         topic: placement.topic,
         stale,
+        hold_set: hold.hold_set,
       },
     };
   });
@@ -1176,6 +1181,7 @@ function todoViews(input: ViewInput, view: BoardView): TodoView[] {
       state: item.state,
       reason: item.reason,
       ...(item.unknown_state === undefined ? {} : { unknown_state: item.unknown_state }),
+      created_at: item.created_at,
     },
   }));
   return entries

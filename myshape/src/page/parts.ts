@@ -229,7 +229,7 @@ export function needsCaptain(todo: TodoView): boolean {
 }
 
 /** The hands-on items, every one on the home page or a topic's own, the ones waiting on the captain first. */
-export function liveTodos(view: View, topic?: string): TodoView[] {
+export function liveTodos(view: Pick<View, "todos">, topic?: string): TodoView[] {
   const todos = view.todos.filter((todo) => topic === undefined || todo.topic === topic);
   return [...todos.filter(needsCaptain), ...todos.filter((todo) => !needsCaptain(todo))];
 }

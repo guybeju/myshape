@@ -163,6 +163,7 @@ table.settings td[data-label]::before{content:attr(data-label) "：";color:var(-
 .pane{display:none}
 .home[data-tab="wait"] .pane[data-pane="wait"],.home[data-tab="activity"] .pane[data-pane="activity"],.home[data-tab="more"] .pane[data-pane="more"]{display:block}
 .pane[data-pane="more"]>.usage{display:none}
+.pane[data-pane="wait"]>.order{display:none}
 .segs{display:none}
 .filterpanel{margin-bottom:12px}
 @media (min-width:641px){
@@ -174,6 +175,7 @@ table.settings td[data-label]::before{content:attr(data-label) "：";color:var(-
 .home:not([data-tab="queue"]) #sidebar{display:none}
 #sidebar>.usage{display:none}
 .pane[data-pane="more"]>.usage{display:block}
+.pane[data-pane="wait"]>.order{display:block}
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;margin:0;gap:0;background:var(--card);border-top:1px solid var(--line);border-bottom:0;padding:0 0 env(safe-area-inset-bottom)}
 .tabs button{flex:1;min-height:52px;padding:4px 2px;border-bottom:0;border-top:3px solid transparent}
 .tabs button.on{border-top-color:var(--accent)}

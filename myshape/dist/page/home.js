@@ -9,6 +9,7 @@ import { nowStrip, scheduleBar, scheduleColumn } from "./schedule-parts.js";
 import { scheduledTopics } from "./schedules.js";
 import { lifecycleSettings, queueCards, undelivered, waitingCount } from "./cards.js";
 import { usagePanel } from "./usage.js";
+import { waitLists } from "./wait.js";
 function shownOf(page, view) {
     return shownTopics(view, resolveFilter(page.filter, view.hashtags.hashtags));
 }
@@ -75,12 +76,12 @@ const ORDER_LABEL = {
     newest: "新的在上",
     oldest: "舊的在上",
 };
-/** The three orders the queues' cards can be listed in, and what the chosen one means. */
+/** The three orders the queues' and 等你's cards can be listed in, and what the chosen one means. */
 function orderButtons(page, view, actions, order) {
     const saved = view.hashtags.views.find((entry) => entry.id === page.filter.view);
     return h("div", { class: "order" }, h("div", { class: "btns" }, h("span", { class: "note" }, "排列："), Object.keys(ORDER_LABEL).map((entry) => h("button", { class: entry === order ? "primary" : "", onclick: () => actions.setOrder(entry) }, ORDER_LABEL[entry]))), order === "priority"
         ? null
-        : h("p", { class: "note" }, "照建立時間排列只改顯示的順序，優先順序與派工不變；拖到別的佇列會排在那裡的最後。"), saved === undefined ? null : h("p", { class: "note" }, `排列記在視圖「${saved.name}」`));
+        : h("p", { class: "note" }, "照建立時間排列只改顯示的順序，優先順序、派工與哪些決定在前面都不變；佇列與「等你」一起換，拖到別的佇列會排在那裡的最後。"), saved === undefined ? null : h("p", { class: "note" }, `排列記在視圖「${saved.name}」`));
 }
 const SEGMENT_LABEL = { ...QUEUE_LABEL, schedules: "排程" };
 /** On a narrow screen, the buttons that choose the one box the 佇列 tab shows, each with its count. */
@@ -180,15 +181,21 @@ function noTopic(view) {
         return null;
     return section("沒有議題", closedFold("closed-no-topic", closedTodoEntries("closed-no-topic", closed)));
 }
-/** 等你: what waits on the captain. */
+/**
+ * 等你: what waits on the captain, its cards in the queues' order. Its copy of
+ * the order buttons shows on a narrow screen only, where the sidebar is a tab
+ * of its own (board.css).
+ */
 function waitPart(page, view, actions, shown) {
-    const todos = liveTodos(view).filter((todo) => isShown(shown, todo.topic));
+    const lists = waitLists(page, view, (topic) => isShown(shown, topic));
+    const { todos } = lists;
     return [
+        orderButtons(page, view, actions, lists.order),
         todos.length === 0
             ? null
             : section("要你動手", todos.map((todo) => todoCard(page, view, actions, todo, true))),
         shown === null ? noTopic(view) : null,
-        section("等你決定", queueCards(page, view, actions, (topic) => isShown(shown, topic))),
+        section("等你決定", queueCards(page, view, actions, lists)),
         undelivered(page, actions),
     ];
 }

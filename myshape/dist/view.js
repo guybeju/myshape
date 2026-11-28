@@ -311,6 +311,7 @@ function holdsOf(home, stale, placer, nowMs) {
                 waits_turn: false,
                 topic: placement.topic,
                 stale,
+                hold_set: hold.hold_set,
             },
         };
     });
@@ -809,6 +810,7 @@ function todoViews(input, view) {
             state: item.state,
             reason: item.reason,
             ...(item.unknown_state === undefined ? {} : { unknown_state: item.unknown_state }),
+            created_at: item.created_at,
         },
     }));
     return entries
