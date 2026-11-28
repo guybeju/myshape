@@ -437,7 +437,8 @@ test_tsv_lists_the_items_for_a_program() {
     "$(printf '%s\n' "$out" | awk -F'\t' '{ printf "%s:%s ", $1, $2 }')" "every section must be listed in order"
   assert_contains "$out" "$(printf 'dispatch\th1\tbilling\t帳務重構\thigh\t0\tsample\twork')" "a line must carry every column"
   assert_contains "$out" "$(printf 'dispatch\td1\t\t（未分類）\tnone\t0\tsample\tdecision')" "an answered decision must say so"
-  assert_equals "8" "$(printf '%s\n' "$out" | awk -F'\t' '{ print NF }' | sort -u)" "every line must have eight columns"
+  assert_equals "9" "$(printf '%s\n' "$out" | awk -F'\t' '{ print NF }' | sort -u)" "every line must have nine columns"
+  assert_equals "[]" "$(printf '%s\n' "$out" | awk -F'\t' '$2 == "h1" { print $9; exit }')" "an item with no needs line must need nothing"
   dp_host 9.19 9.19 50 102400 4
   out=$(tb_run "$home" "$PLAN" order --tsv)
   dp_calm_host
@@ -447,8 +448,53 @@ test_tsv_lists_the_items_for_a_program() {
   pass "order --tsv lists every item with its section for a program"
 }
 
+# order --tsv's ninth column: each "needs:" body line, one need per line, as
+# labels only; a pin keeps its reason, bounded; anything else is unreadable.
+test_tsv_carries_the_needs_lines() {
+  local home out long
+  home=$(tb_make_home order-needs)
+  tb_write_topics "$home"
+  long=$(printf '很長%.0s' $(seq 1 60))
+  cat > "$home/data/backlog.md" <<EOF
+## In flight
+
+## Queued
+- [ ] m1 - Mac only (repo: sample) (kind: ship)
+  needs: os=MacOS
+  needs: tool=pnpm
+  needs: project=other
+  needs: login=gh
+- [ ] p1 - Pinned (repo: sample) (kind: ship)
+  needs: machine=pc（主 home 的看板）
+- [ ] p2 - Pinned at length (repo: sample) (kind: ship)
+  needs: machine=pc ($long)
+- [ ] p3 - Pinned without a reason (repo: sample) (kind: ship)
+  needs: machine=pc
+- [ ] x1 - Unreadable needs (repo: sample) (kind: ship)
+  needs: tool=/bin/rm
+  needs: a gpu
+  needs: os=linux and more
+
+## Done
+EOF
+  out=$(tb_run "$home" "$PLAN" order --tsv) || fail "order --tsv failed"
+  assert_equals '[{"kind":"os","value":"macos"},{"kind":"tool","value":"pnpm"},{"kind":"project","value":"other"},{"kind":"login","value":"gh"}]' \
+    "$(printf '%s\n' "$out" | awk -F'\t' '$2 == "m1" { print $9 }')" "each needs line must be one need, os in lower case"
+  assert_equals '[{"kind":"machine","value":"pc","reason":"主 home 的看板"}]' \
+    "$(printf '%s\n' "$out" | awk -F'\t' '$2 == "p1" { print $9 }')" "a pin must keep its reason"
+  assert_equals "80" "$(printf '%s\n' "$out" | awk -F'\t' '$2 == "p2" { print $9 }' | jq '.[0].reason | length')" \
+    "a pin's reason must be cut at 80 characters"
+  assert_equals '[{"kind":"machine","value":"pc","reason":null}]' \
+    "$(printf '%s\n' "$out" | awk -F'\t' '$2 == "p3" { print $9 }')" "a pin without a reason must still pin"
+  assert_equals '[{"kind":"unreadable"},{"kind":"unreadable"},{"kind":"unreadable"}]' \
+    "$(printf '%s\n' "$out" | awk -F'\t' '$2 == "x1" { print $9 }')" "a path, an unknown kind or extra words must be unreadable"
+  assert_not_contains "$out" "/bin/rm" "no path may be carried"
+  pass "order --tsv carries each item's needs lines as labels"
+}
+
 fm_test_run test_sections test_lists_hands_on_items_waiting_for_a_check test_lists_only_a_hashtag_when_asked \
   test_falls_open_without_a_usable_topic_file test_ranks_an_untagged_item_by_its_topic_line \
   test_resolves_archived_blockers_and_lists_every_item \
   test_falls_open_when_the_snapshot_fails test_asks_for_board_input_when_the_snapshot_offers_it \
-  test_waits_for_the_machine test_falls_open_when_the_machine_is_unknown test_tsv_lists_the_items_for_a_program
+  test_waits_for_the_machine test_falls_open_when_the_machine_is_unknown test_tsv_lists_the_items_for_a_program \
+  test_tsv_carries_the_needs_lines

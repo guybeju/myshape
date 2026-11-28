@@ -1016,7 +1016,7 @@ MACHINES_VIEW_JQ='
       ($ms[] | (header, (select(.record != null) | workers_line, project_lines))),
       "該轉告：", ($ms[] | tell_lines),
       "該通知（同一件事只說一次）：", ($ms[] | notify_lines),
-      "放到別台（自己那台先等或不行的項目；要不要補齊、轉過去，由主 first mate 判斷）：", move_lines($ms; $placements),
+      "放到別台（補不補齊、轉不轉過去，由主 first mate 判斷）：", move_lines($ms; $placements),
       "環境差異：", ($ms[] | env_lines($list; $main)),
       (if ($platforms | map(.p) | unique | length) > 1
        then "  作業系統：" + ($platforms | map("\(.label) 是 \(.p)") | join("，")) + "。" else empty end),
