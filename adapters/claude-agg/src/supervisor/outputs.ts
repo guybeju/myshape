@@ -2,7 +2,12 @@
 // 4.2 and 4.5), parsed once where they come in. Anything that does not match
 // is not used: a worker's becomes 「worker 沒有交回合格的結果」.
 
-import { SUMMARY_MAX } from "./session-options.js";
+import {
+  HASHTAG_ASK_CHANGES,
+  HASHTAG_ASKED_MAX,
+  HASHTAG_ASKS_MAX,
+  SUMMARY_MAX,
+} from "./session-options.js";
 
 export interface Question {
   title: string;
@@ -30,10 +35,17 @@ export interface PlannedWork {
   prompt: string;
 }
 
+/** One hashtag change the planner asks for, its name as the model wrote it. */
+export interface HashtagAsk {
+  name: string;
+  change: (typeof HASHTAG_ASK_CHANGES)[number];
+}
+
 export interface PlannerOutput {
   tasks: PlannedWork[];
   question: Question | null;
   nothing: boolean;
+  hashtags: HashtagAsk[];
 }
 
 type Json = Record<string, unknown>;
@@ -99,12 +111,32 @@ function parseWork(value: unknown): PlannedWork | undefined {
   return { title: value["title"], repo: value["repo"], kind, prompt: value["prompt"] };
 }
 
+/**
+ * One change of the schema's shape: exactly `name` and `change`. Only the
+ * shape is checked here; whether the name is a hashtag name is the
+ * supervisor's to decide, so one bad name never voids the whole plan.
+ */
+function parseHashtagAsk(value: unknown): HashtagAsk | undefined {
+  if (!isRecord(value) || Object.keys(value).length !== 2) return undefined;
+  const { name } = value;
+  const change = HASHTAG_ASK_CHANGES.find((candidate) => candidate === value["change"]);
+  if (typeof name !== "string" || name === "" || change === undefined) return undefined;
+  return [...name].length <= HASHTAG_ASKED_MAX ? { name, change } : undefined;
+}
+
+function parseHashtagAsks(value: unknown): HashtagAsk[] | undefined {
+  if (!Array.isArray(value) || value.length > HASHTAG_ASKS_MAX) return undefined;
+  const asks = value.map(parseHashtagAsk);
+  return asks.some((ask) => ask === undefined) ? undefined : (asks as HashtagAsk[]);
+}
+
 /** The planner's output, or undefined when it is not one. */
 export function parsePlannerOutput(value: unknown): PlannerOutput | undefined {
   if (!isRecord(value) || !Array.isArray(value["tasks"])) return undefined;
   const question = parseQuestion(value["question"]);
   if (question === undefined || typeof value["nothing"] !== "boolean") return undefined;
+  const hashtags = parseHashtagAsks(value["hashtags"]);
   const tasks = value["tasks"].map(parseWork);
-  if (tasks.some((task) => task === undefined)) return undefined;
-  return { tasks: tasks as PlannedWork[], question, nothing: value["nothing"] };
+  if (hashtags === undefined || tasks.some((task) => task === undefined)) return undefined;
+  return { tasks: tasks as PlannedWork[], question, nothing: value["nothing"], hashtags };
 }

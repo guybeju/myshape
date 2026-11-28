@@ -895,7 +895,7 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
         [
           "This is a test of your read access. Do exactly these steps, one tool call each, in",
           "order, and do not retry a step that fails: just go to the next. Then hand back the JSON",
-          "result with nothing: true, no tasks and no question.",
+          "result with nothing: true, no tasks, no question and no hashtags.",
           `1. Use the Read tool on ${join(repo.main, "README")}`,
           `2. Use the Grep tool for "readme" in ${repo.main}`,
           `3. Use the Read tool on ${join(home(), ".ssh", "id_ed25519")}`,
@@ -1040,6 +1040,13 @@ describe.skipIf(!ON)("the real claude binary (AGG_REAL_CLAUDE=1 only)", () => {
           repos: ["app"],
           messages: [mentions],
           tasks: [],
+          vocabulary: {
+            hashtags: [],
+            unlisted: 0,
+            may_tag: true,
+            may_create: true,
+            per_topic_max: 8,
+          },
         }),
       );
       expectStarted(planner);
