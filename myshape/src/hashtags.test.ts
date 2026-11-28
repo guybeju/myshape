@@ -372,6 +372,17 @@ describe("hashtags close to a name", () => {
     expect(line).toContain("看板上相近的：#GPUB（2 個議題；鎖上：只有使用者能貼）");
   });
 
+  it("orders by key where the tier and the use are the same, whatever order they were made", () => {
+    const store = registry({ GPU2: 0, gpu_b: 0, GPU1: 0 });
+    expect(nearHashtags(store, "gpu").map((entry) => entry.name)).toEqual([
+      "GPU1",
+      "GPU2",
+      "gpu_b",
+    ]);
+    const used = registry({ Z: 1, B: 1, M: 1 });
+    expect(mostUsedHashtags(used, 10).map((entry) => entry.name)).toEqual(["B", "M", "Z"]);
+  });
+
   it("names at most five", () => {
     const store = registry({ GPU1: 0, GPU2: 0, GPU3: 0, GPU4: 0, GPU5: 0, GPU6: 0 });
     expect(nearHashtags(store, "gpu").map((entry) => entry.name)).toEqual([
@@ -385,6 +396,7 @@ describe("hashtags close to a name", () => {
 
   it("holds containment to a shorter side of two code points or more", () => {
     expect(nearTier("ab", "xaby")).toBe(1);
+    expect(nearTier("xaby", "ab")).toBe(1);
     expect(nearTier("a", "xay")).toBeNull();
     expect(nearTier("𠀀", "𠀀𠀁")).toBe(2);
     expect(nearTier("𠀀𠀁", "𠀂𠀀𠀁")).toBe(1);
@@ -410,7 +422,7 @@ describe("hashtags close to a name", () => {
 
   it("lists the most used apart from the unused, most first, then by key", () => {
     const store = registry({ B: 2, A: 2, C: 3, D: 0 });
-    expect(mostUsedHashtags(store, 3).map((entry) => entry.name)).toEqual(["C", "A", "B"]);
+    expect(mostUsedHashtags(store, 10).map((entry) => entry.name)).toEqual(["C", "A", "B"]);
     expect(mostUsedHashtags(store, 2).map((entry) => entry.name)).toEqual(["C", "A"]);
   });
 

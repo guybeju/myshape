@@ -174,18 +174,18 @@ function bare(key: string): string[] {
 /**
  * The edit distance of two code-point lists, counting a swap of two
  * neighbours as one edit (Damerau-Levenshtein, optimal string alignment).
+ * A read before the start of a list is undefined, which matches no code
+ * point, so the first row and column take no swap.
  */
 export function editDistance(a: readonly string[], b: readonly string[]): number {
   let before: number[] = [];
   let row = Array.from({ length: b.length + 1 }, (_, j) => j);
-  for (let i = 1; i <= a.length; i += 1) {
-    const next = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      let best = Math.min((row[j] as number) + 1, (next[j - 1] as number) + 1);
-      best = Math.min(best, (row[j - 1] as number) + cost);
-      const swapped = i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1];
-      if (swapped) best = Math.min(best, (before[j - 2] as number) + 1);
+  for (const [i, x] of a.entries()) {
+    const next = [i + 1];
+    for (const [j, y] of b.entries()) {
+      const kept = (row[j] as number) + (x === y ? 0 : 1);
+      let best = Math.min((row[j + 1] as number) + 1, (next[j] as number) + 1, kept);
+      if (x === b[j - 1] && a[i - 1] === y) best = Math.min(best, (before[j - 1] as number) + 1);
       next.push(best);
     }
     before = row;
@@ -203,21 +203,23 @@ export function editDistance(a: readonly string[], b: readonly string[]): number
 export function nearTier(one: string, two: string): 0 | 1 | 2 | null {
   const a = bare(one);
   const b = bare(two);
-  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
-  if (short.join("") === long.join("")) return 0;
-  if (short.length >= 2 && long.join("").includes(short.join(""))) return 1;
-  if (short.length === 0) return null;
-  return editDistance(a, b) <= (short.length <= 5 ? 1 : 2) ? 2 : null;
+  const x = a.join("");
+  const y = b.join("");
+  if (x === y) return 0;
+  const shorter = Math.min(a.length, b.length);
+  if (shorter >= 2 && (x.includes(y) || y.includes(x))) return 1;
+  if (shorter === 0) return null;
+  return editDistance(a, b) <= (shorter <= 5 ? 1 : 2) ? 2 : null;
 }
 
-function byKey(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
-
-function listed(store: Frozen<HashtagStore>, name: string): ListedHashtag {
-  const entry = store.hashtags[name] as Frozen<HashtagEntry>;
-  return { name, topics: topicsWith(store, name).length, locked: entry.locked };
+/** The board's hashtags in the order of their keys (one hashtag per key). */
+function inKeyOrder(store: Frozen<HashtagStore>): { key: string; hashtag: ListedHashtag }[] {
+  const byKey = new Map(Object.entries(store.hashtags).map(([name, entry]) => [entry.key, name]));
+  return [...byKey.keys()].toSorted().map((key) => {
+    const name = byKey.get(key) as string;
+    const entry = store.hashtags[name] as Frozen<HashtagEntry>;
+    return { key, hashtag: { name, topics: topicsWith(store, name).length, locked: entry.locked } };
+  });
 }
 
 /**
@@ -227,27 +229,24 @@ function listed(store: Frozen<HashtagStore>, name: string): ListedHashtag {
  * order to show; it decides nothing.
  */
 export function nearHashtags(store: Frozen<HashtagStore>, key: string): ListedHashtag[] {
-  const found: { tier: number; key: string; hashtag: ListedHashtag }[] = [];
-  for (const [name, entry] of Object.entries(store.hashtags)) {
+  const found: { tier: number; hashtag: ListedHashtag }[] = [];
+  for (const entry of inKeyOrder(store)) {
     const tier = entry.key === key ? null : nearTier(key, entry.key);
-    if (tier !== null) found.push({ tier, key: entry.key, hashtag: listed(store, name) });
+    if (tier !== null) found.push({ tier, hashtag: entry.hashtag });
   }
   return found
-    .toSorted(
-      (a, b) => a.tier - b.tier || b.hashtag.topics - a.hashtag.topics || byKey(a.key, b.key),
-    )
+    .toSorted((a, b) => a.tier - b.tier || b.hashtag.topics - a.hashtag.topics)
     .slice(0, NEAR_MAX)
     .map((entry) => entry.hashtag);
 }
 
 /** The hashtags on at least one topic, the most used first, then by key; at most `max`. */
 export function mostUsedHashtags(store: Frozen<HashtagStore>, max: number): ListedHashtag[] {
-  return Object.entries(store.hashtags)
-    .map(([name, entry]) => ({ key: entry.key, hashtag: listed(store, name) }))
-    .filter((entry) => entry.hashtag.topics > 0)
-    .toSorted((a, b) => b.hashtag.topics - a.hashtag.topics || byKey(a.key, b.key))
-    .slice(0, max)
-    .map((entry) => entry.hashtag);
+  return inKeyOrder(store)
+    .map((entry) => entry.hashtag)
+    .filter((hashtag) => hashtag.topics > 0)
+    .toSorted((a, b) => b.topics - a.topics)
+    .slice(0, max);
 }
 
 // ---- reading the file ----

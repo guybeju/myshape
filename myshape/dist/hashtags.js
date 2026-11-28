@@ -95,19 +95,19 @@ function bare(key) {
 /**
  * The edit distance of two code-point lists, counting a swap of two
  * neighbours as one edit (Damerau-Levenshtein, optimal string alignment).
+ * A read before the start of a list is undefined, which matches no code
+ * point, so the first row and column take no swap.
  */
 export function editDistance(a, b) {
     let before = [];
     let row = Array.from({ length: b.length + 1 }, (_, j) => j);
-    for (let i = 1; i <= a.length; i += 1) {
-        const next = [i];
-        for (let j = 1; j <= b.length; j += 1) {
-            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-            let best = Math.min(row[j] + 1, next[j - 1] + 1);
-            best = Math.min(best, row[j - 1] + cost);
-            const swapped = i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1];
-            if (swapped)
-                best = Math.min(best, before[j - 2] + 1);
+    for (const [i, x] of a.entries()) {
+        const next = [i + 1];
+        for (const [j, y] of b.entries()) {
+            const kept = row[j] + (x === y ? 0 : 1);
+            let best = Math.min(row[j + 1] + 1, next[j] + 1, kept);
+            if (x === b[j - 1] && a[i - 1] === y)
+                best = Math.min(best, before[j - 1] + 1);
             next.push(best);
         }
         before = row;
@@ -124,23 +124,25 @@ export function editDistance(a, b) {
 export function nearTier(one, two) {
     const a = bare(one);
     const b = bare(two);
-    const [short, long] = a.length <= b.length ? [a, b] : [b, a];
-    if (short.join("") === long.join(""))
+    const x = a.join("");
+    const y = b.join("");
+    if (x === y)
         return 0;
-    if (short.length >= 2 && long.join("").includes(short.join("")))
+    const shorter = Math.min(a.length, b.length);
+    if (shorter >= 2 && (x.includes(y) || y.includes(x)))
         return 1;
-    if (short.length === 0)
+    if (shorter === 0)
         return null;
-    return editDistance(a, b) <= (short.length <= 5 ? 1 : 2) ? 2 : null;
+    return editDistance(a, b) <= (shorter <= 5 ? 1 : 2) ? 2 : null;
 }
-function byKey(a, b) {
-    if (a === b)
-        return 0;
-    return a < b ? -1 : 1;
-}
-function listed(store, name) {
-    const entry = store.hashtags[name];
-    return { name, topics: topicsWith(store, name).length, locked: entry.locked };
+/** The board's hashtags in the order of their keys (one hashtag per key). */
+function inKeyOrder(store) {
+    const byKey = new Map(Object.entries(store.hashtags).map(([name, entry]) => [entry.key, name]));
+    return [...byKey.keys()].toSorted().map((key) => {
+        const name = byKey.get(key);
+        const entry = store.hashtags[name];
+        return { key, hashtag: { name, topics: topicsWith(store, name).length, locked: entry.locked } };
+    });
 }
 /**
  * The board's hashtags whose key is close to `key` (nearTier), at most
@@ -150,24 +152,23 @@ function listed(store, name) {
  */
 export function nearHashtags(store, key) {
     const found = [];
-    for (const [name, entry] of Object.entries(store.hashtags)) {
+    for (const entry of inKeyOrder(store)) {
         const tier = entry.key === key ? null : nearTier(key, entry.key);
         if (tier !== null)
-            found.push({ tier, key: entry.key, hashtag: listed(store, name) });
+            found.push({ tier, hashtag: entry.hashtag });
     }
     return found
-        .toSorted((a, b) => a.tier - b.tier || b.hashtag.topics - a.hashtag.topics || byKey(a.key, b.key))
+        .toSorted((a, b) => a.tier - b.tier || b.hashtag.topics - a.hashtag.topics)
         .slice(0, NEAR_MAX)
         .map((entry) => entry.hashtag);
 }
 /** The hashtags on at least one topic, the most used first, then by key; at most `max`. */
 export function mostUsedHashtags(store, max) {
-    return Object.entries(store.hashtags)
-        .map(([name, entry]) => ({ key: entry.key, hashtag: listed(store, name) }))
-        .filter((entry) => entry.hashtag.topics > 0)
-        .toSorted((a, b) => b.hashtag.topics - a.hashtag.topics || byKey(a.key, b.key))
-        .slice(0, max)
-        .map((entry) => entry.hashtag);
+    return inKeyOrder(store)
+        .map((entry) => entry.hashtag)
+        .filter((hashtag) => hashtag.topics > 0)
+        .toSorted((a, b) => b.topics - a.topics)
+        .slice(0, max);
 }
 // ---- reading the file ----
 function parseEntry(raw, key) {
