@@ -239,5 +239,5 @@ export function recentCard(view, actions, list) {
 }
 /** Each setting with its current value, its default and the control that changes it. */
 export function settingsTable(rows) {
-    return h("table", { class: "settings" }, h("tr", {}, h("th", {}, "設定"), h("th", {}, "現在"), h("th", {}, "預設"), h("th", {}, "")), rows.map((row) => h("tr", {}, h("td", {}, row.label), h("td", {}, row.current), h("td", {}, row.fallback), h("td", {}, row.control))));
+    return h("table", { class: "settings" }, h("tr", {}, h("th", {}, "設定"), h("th", {}, "現在"), h("th", {}, "預設"), h("th", {}, "")), rows.map((row) => h("tr", {}, h("td", {}, row.label), h("td", { "data-label": "現在" }, row.current), h("td", { "data-label": "預設" }, row.fallback), h("td", {}, row.control))));
 }
