@@ -60,6 +60,11 @@ build 2 已經有的：
 - 「這台先等、需要的都有」不是第四種答案：`state` 是 `now`，`load` 寫 `wait`，文字不寫「可以」而寫「什麼都不缺，但那台先等」。
 - 規則範本主 home 那段從 v15 到 v16，只在第 4 行加「放到別台」；設計寫的「約 1445／1450」是舊的算法，現在三個範本是 1598／1600，靠刪五個多餘的字讓總數不變。
 - 交出去的項目回到主 home 的路不需要新工具（第 12 節）。
+- 第 0 節留給 build 3 的「PC 等而 Mac 有空時告訴 captain 一次」，在答案 B 之下不是給 captain 的一行，而是主 first mate 照「放到別台」決定要不要轉過去；所以「該通知」不加這一行。
+- 設計第 1 節說檢視要給「是什麼佔著那台、從什麼時候起」：「放到別台」寫出那台先等的原因（`rule-v1` 的原因或專案上限），佔著的 worker 與它們的狀態在那台的區塊裡；從什麼時候起沒有寫，因為紀錄不記上一次的答案。
+
+照設計寫的結果，先寫在這裡：每個沒有 `needs:` 的項目都需要整份共用清單，所以一台缺了清單上任何一個工具（例如這台 PC 的 PATH 上沒有 ShellCheck），它的每一個項目在那台都是「補齊後可以」，「可以」只出現在清單五個工具都裝了的那一台。
+這是設計第 6 節第 2 層要的：缺的工具一裝就沒有這條差距；「放到別台」只列自己那台先等或不行的項目，所以這條差距不會讓每個項目都多一行。
 
 ## 1. 五個子命令
 
@@ -351,11 +356,13 @@ watcher 每 5 分鐘（`CHECK_INTERVAL`）跑一次，最多 30 秒，丟掉 exi
 上游的 `bin/fm-backlog-handoff.sh` 只往一個方向搬：主 home 到 second mate；目的地一定是 secondmate home，所以 second mate 不能用它交回主 home，遠端的那一台也不能直接搬另一台的檔。
 「放到別台」說一個 second mate 手上的項目可以到別台時，用現有的工具交回，不需要新工具：
 
-1. 主 first mate 送一則訊息給那個 second mate，請它交回 `<id>`：項目還在 `## Queued`、沒有 `blocked-by` 連到別的項目（也沒有別的項目等它）時，跑 `bin/fm-tasks-axi.sh show <id>`，把整個項目（標題那一行與每一行內文，包括 `topic:` 與 `needs:`）原樣回給主 first mate，然後 `bin/fm-tasks-axi.sh hold <id> --reason "交回主 home"`；已經在跑、有連結的，回一行原因，不交。
-2. 主 first mate 用收到的標題與內文在自己的 backlog 加回同一個 id（`bin/fm-tasks-axi.sh add <id> "<標題>" --kind <種類> --repo <repo> --body-file <內文檔>`），再照「放到別台」交給要去的那台：`bin/fm-backlog-handoff.sh <那台的 second mate> <id>`，或主 home 自己那台時照 `order` 派。
+1. 主 first mate 送一則訊息給那個 second mate，請它交回 `<id>`：項目還在 `## Queued`、沒有 `blocked-by` 連到別的項目（也沒有別的項目等它）時，跑 `bin/fm-tasks-axi.sh show <id>`，把它印的 `title`、`kind`、`repo` 與 `body`（內文，`\n` 是換行，包括 `topic:` 與 `needs:`）原樣回給主 first mate，然後 `bin/fm-tasks-axi.sh hold <id> --reason "交回主 home"`；已經在跑、有連結的，回一行原因，不交。
+   這個 hold 不帶 `--kind`，所以 `fm-wait-relay.sh` 不把它當成等主 home 的事轉上來；那個 home 的 `order` 把它列在「先不派」。
+2. 主 first mate 把內文一行一行寫進一個暫存檔，在自己的 backlog 加回同一個 id（`bin/fm-tasks-axi.sh add <id> "<標題>" --kind <種類> --repo <repo> --body-file <內文檔>`），再照「放到別台」交給要去的那台：`bin/fm-backlog-handoff.sh <那台的 second mate> <id>`，或主 home 自己那台時照 `order` 派。
 3. 主 first mate 加好之後，請原來那個 second mate `bin/fm-tasks-axi.sh rm <id>`；所以中間不會有一刻兩邊都沒有這個項目，同一段時間裡原來那邊是 hold 住的，不會被兩邊派。
 
 - 項目的 `topic:` 那一行跟著內文回來，所以 `order` 照原來的議題排；看板上那個 second mate 的 task 標記（`data/<id>/topic`）不搬，主 home 照 `topic:` 那一行排就夠了。
 - 第 1 步的 hold 是 second mate 自己的 backlog 操作，不是新的 second mate 規則：訊息本身寫出要跑什麼，所以共用的規則範本不用改。
-- 缺點：交回靠兩則訊息，不是一次搬完；內文經過訊息，主 first mate 加回時要照原樣。
+- 在暫時的檔上走過一次（`tasks-axi show`、`hold`、`add --body-file`、`rm`）：加回的項目內文一行不差，主 home 的 `order --tsv` 照 `topic:` 排、第九欄有它的 `needs:`。
+- 缺點：交回靠兩則訊息，不是一次搬完；內文經過訊息，主 first mate 加回時要照原樣；加回的項目多一個 `(since <日期>)`。
   要一次、原樣、可重試地交回，得在上游的 `fm-backlog-handoff.sh` 加一個往回的方向（或讓 `fm-backlog-receive.sh` 收主 home 的 outbox）；那是 Firstmate 自己的工具，不在這個 repo，列為後續。
