@@ -5,7 +5,8 @@
 // and stops dispatching while the quota or rate limit says so. It takes the
 // captain's actions from inbox/ (messages, directs, answers, 要你動手 notices),
 // opens holds for workers' questions, keeps workers' 要你動手 items on the
-// board, and proposes closing a topic whose tasks have all landed. For the
+// board, proposes closing a topic whose tasks have all landed, and puts on or
+// takes off the hashtags a topic's planner asks for (hashtags.ts). For the
 // board's schedules it takes an occurrence, keeps a place free for it, starts
 // its work at its time, closes it when the work ends, and answers a missed one
 // by its rt (schedule-step.ts, occurrences.ts). It is the only writer of the
@@ -37,6 +38,14 @@ import {
 import { dispatchOrder, followMerges, topicEntry, type OrderEntry } from "./dispatch-order.js";
 import { ensurePushRepo, Forge } from "./forge.js";
 import {
+  hashtagList,
+  pickHashtags,
+  quoted,
+  revertedChanges,
+  Tagger,
+  type HashtagSend,
+} from "./hashtags.js";
+import {
   endingOf,
   TEXT,
   TEXT_PREFIX,
@@ -56,7 +65,13 @@ import {
   type ScheduleWork,
   type WorkRef,
 } from "./occurrences.js";
-import { parsePlannerOutput, type PlannedWork, type Todo } from "./outputs.js";
+import {
+  parsePlannerOutput,
+  type HashtagAsk,
+  type PlannedWork,
+  type PlannerOutput,
+  type Todo,
+} from "./outputs.js";
 import {
   livePrompt,
   plannerPrompt,
@@ -206,6 +221,7 @@ export class Supervisor {
   private readonly deps: Deps;
   private readonly store: StateStore;
   private readonly board: BoardCommand;
+  private readonly tagger: Tagger;
   private readonly git: Git;
   private readonly redact: (text: string) => string;
   private readonly release: () => void;
@@ -240,8 +256,8 @@ export class Supervisor {
   private todoItems: ReadonlyMap<string, TodoItem> = new Map();
   /** The board's merges as the last pass read them. */
   private merged: ReadonlyMap<string, string> = new Map();
-  /** The board's live and archived topics as the last pass read them. */
-  private boardNow: Pick<Board, "topics" | "archived"> | undefined;
+  /** The board's files as the last pass read them. */
+  private boardNow: Board | undefined;
   /** The board's schedules as the last pass read them. */
   private schedules: SchedulesFile = NO_SCHEDULES;
   private readonly step: ScheduleStep;
@@ -260,6 +276,7 @@ export class Supervisor {
       Math.floor(deps.nowMs() / 1000),
     );
     this.board = new BoardCommand(deps.run, settings.boardCommand, settings.home, deps.env);
+    this.tagger = new Tagger(settings.home, this.board, deps.nowMs);
     this.git = new Git(deps.run, deps.env);
     this.step = new ScheduleStep({
       board: this.board,
@@ -1005,7 +1022,8 @@ export class Supervisor {
       for (const item of messages) this.offered.delete(item.file);
       return;
     }
-    this.takePlan(entry.topic, report, purpose?.ref);
+    const output = this.takePlan(entry.topic, report, purpose?.ref);
+    if (output !== undefined) await this.retag(entry.topic, output.hashtags);
     if (report.end.kind === "quota") {
       for (const item of messages) this.offered.delete(item.file);
       return;
@@ -1024,6 +1042,7 @@ export class Supervisor {
       repos: Object.keys(this.settings.repos),
       messages: messages.map((item) => item.text),
       tasks: this.topicTasks(entry.topic),
+      vocabulary: hashtagList(this.boardNow ?? readBoard(this.settings.home)),
     };
     if (purpose !== undefined) {
       brief.occurrence = { key: purpose.ref.key, at: purpose.at, makeUp: purpose.ref.makeUp };
@@ -1031,12 +1050,22 @@ export class Supervisor {
     return brief;
   }
 
-  private takePlan(topic: string, report: SessionReport, ref: WorkRef | undefined): void {
+  /**
+   * Takes the planner's tasks for `topic`.
+   *
+   * Returns:
+   *   The planner's output when it gave a usable one, else undefined.
+   */
+  private takePlan(
+    topic: string,
+    report: SessionReport,
+    ref: WorkRef | undefined,
+  ): PlannerOutput | undefined {
     const { end } = report;
     if (end.kind === "quota") {
       this.planned.delete(topic);
       this.stopForQuota(null, end.resetsAtMs);
-      return;
+      return undefined;
     }
     const output = end.kind === "output" ? parsePlannerOutput(end.output) : undefined;
     if (output === undefined) {
@@ -1044,7 +1073,7 @@ export class Supervisor {
         `planner for ${topic} gave no usable plan (${end.kind}); not planned again this run`,
       );
       this.notePlanned(ref, "failed");
-      return;
+      return undefined;
     }
     if (output.question !== null) {
       this.log(
@@ -1052,6 +1081,46 @@ export class Supervisor {
       );
     }
     if (this.queuePlanned(topic, output.tasks, ref) === 0) this.notePlanned(ref, "nothing");
+    return output;
+  }
+
+  /**
+   * Sends the planner's hashtag changes for `topic` (merges followed, the
+   * supervisor's own id) one at a time, in its order, as pickHashtags and
+   * the Tagger allow them; nothing more once stopping. What is dropped or
+   * refused is logged, never tried again or spelled another way.
+   */
+  private async retag(topic: string, asks: readonly HashtagAsk[]): Promise<void> {
+    if (asks.length === 0) return;
+    let send: HashtagSend[];
+    try {
+      const board = readBoard(this.settings.home);
+      const { merged } = board.topics;
+      const reverted = revertedChanges(this.settings.home, merged);
+      const picked = pickHashtags(asks, { hashtags: board.hashtags, topic, merged, reverted });
+      for (const line of picked.dropped) this.log(`planner for ${topic}: hashtag dropped: ${line}`);
+      send = picked.send;
+    } catch (error) {
+      this.log(`planner for ${topic}: no hashtag sent: ${quoted((error as Error).message)}`);
+      return;
+    }
+    for (const change of send) {
+      if (this.stopping) return;
+      await this.sendHashtag(topic, change);
+    }
+  }
+
+  private async sendHashtag(topic: string, { change, name, opening }: HashtagSend): Promise<void> {
+    const what = `${change === "add" ? "+" : "-"}${quoted(name)}${opening ? " (new)" : ""}`;
+    try {
+      const outcome = await this.tagger.change(topic, change, name, opening);
+      if (outcome.sent) this.log(`planner for ${topic}: hashtag ${what} sent`);
+      else this.log(`planner for ${topic}: hashtag ${what} not sent: ${quoted(outcome.reason)}`);
+    } catch (error) {
+      this.log(
+        `planner for ${topic}: hashtag ${what} not sent: ${quoted((error as Error).message)}`,
+      );
+    }
   }
 
   /** Remembers, for this run, that an occurrence's planner gave no work. */

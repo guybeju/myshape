@@ -38,6 +38,11 @@ export const PLANNER_MAX_TURNS = 20;
 export const MAX_SUBAGENT_DEPTH = "1";
 export const MAX_CONCURRENT_SUBAGENTS = "2";
 export const SUMMARY_MAX = 600;
+/** The most hashtag changes one plan may ask for, put on and taken off together. */
+export const HASHTAG_ASKS_MAX = 3;
+/** The longest name a plan may write; the supervisor makes it a 1 to 32 code point name. */
+export const HASHTAG_ASKED_MAX = 64;
+export const HASHTAG_ASK_CHANGES = ["listed", "new", "remove"] as const;
 
 /** A question for the captain, or null. */
 const QUESTION_SCHEMA: Record<string, unknown> = {
@@ -83,11 +88,15 @@ export const WORKER_OUTPUT_SCHEMA: Record<string, unknown> = {
   },
 };
 
-/** What the planner hands back for one topic (plan section 4.2). */
+/**
+ * What the planner hands back for one topic (plan section 4.2), with at most
+ * three hashtag changes for it: `listed` puts on one the board has, `new`
+ * opens one, `remove` takes off one the topic has.
+ */
 export const PLANNER_OUTPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
-  required: ["tasks", "question", "nothing"],
+  required: ["tasks", "question", "nothing", "hashtags"],
   properties: {
     tasks: {
       type: "array",
@@ -105,6 +114,19 @@ export const PLANNER_OUTPUT_SCHEMA: Record<string, unknown> = {
     },
     question: QUESTION_SCHEMA,
     nothing: { type: "boolean" },
+    hashtags: {
+      type: "array",
+      maxItems: HASHTAG_ASKS_MAX,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "change"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: HASHTAG_ASKED_MAX },
+          change: { enum: [...HASHTAG_ASK_CHANGES] },
+        },
+      },
+    },
   },
 };
 

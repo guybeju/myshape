@@ -112,8 +112,11 @@ export function workerOutput(outcome: string, extra: Record<string, unknown> = {
   };
 }
 
-export function plan(tasks: { title: string; repo: string; kind: string; prompt: string }[]) {
-  return { tasks, question: null, nothing: tasks.length === 0 };
+export function plan(
+  tasks: { title: string; repo: string; kind: string; prompt: string }[],
+  hashtags: { name: string; change: string }[] = [],
+) {
+  return { tasks, question: null, nothing: tasks.length === 0, hashtags };
 }
 
 // --- hooks ---------------------------------------------------------------------
@@ -386,6 +389,7 @@ export class FakeCommands {
     if (command === "open") return done(0, "http://127.0.0.1:1/\n");
     if (command === "schedule" && this.throwOnSchedule) throw new Error("spawn failed");
     if (command === "schedule") return this.schedule(request);
+    if (command === "hashtag" && this.summaryStatus === 0) this.recordHashtag(request);
     if (command === "summary" && this.summaryStatus === 0) {
       this.summaries.push({ task, kind, text: request.input ?? "" });
       const file = `${request.env["MYSHAPE_HOME"] ?? ""}/data/myshape/summaries.jsonl`;
@@ -393,6 +397,29 @@ export class FakeCommands {
       if (existsSync(dirname(file))) appendFileSync(file, `${JSON.stringify(line)}\n`);
     }
     return done(this.summaryStatus, "", this.summaryStatus === 0 ? "" : "refused");
+  }
+
+  /**
+   * `hashtag <topic> +<name> [--new]` or `hashtag <topic> --remove <name>`:
+   * the aggregator's record in events.jsonl, as the board saves it, so the
+   * hourly cap counts it.
+   */
+  private recordHashtag(request: CommandRequest): void {
+    const [, topic, first = "", second = ""] = request.args;
+    const file = `${request.env["MYSHAPE_HOME"] ?? ""}/data/myshape/events.jsonl`;
+    const removed = first === "--remove";
+    const name = removed ? second : first.slice(1);
+    const record = {
+      src: "board",
+      rid: `r-fake-${this.calls.length}`,
+      ts: Math.floor(this.nowMs() / 1000),
+      kind: removed ? "hashtag.removed" : "hashtag.added",
+      by: "aggregator",
+      topic,
+      before: removed ? name : "",
+      after: removed ? "" : name,
+    };
+    if (existsSync(dirname(file))) appendFileSync(file, `${JSON.stringify(record)}\n`);
   }
 
   /** `schedule take <key> --note <n>` and `schedule close <key> done|skipped --note <n>`. */

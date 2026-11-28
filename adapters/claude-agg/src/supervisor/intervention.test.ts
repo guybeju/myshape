@@ -326,6 +326,26 @@ describe("message", () => {
     supervisor.close();
   });
 
+  it("has the planner it starts retag the topic as the captain's message asks", async () => {
+    const world = oneTask([init("w1"), result(workerOutput("report"))]);
+    const doc = { v: 1, hashtags: { 文件: { key: "文件" } }, topics: {} };
+    writeFileSync(join(world.home, "data", "myshape", "hashtags.json"), JSON.stringify(doc));
+    const retag = plan([], [{ name: "文件", change: "listed" }]);
+    world.query.planner.push({ messages: [init("p2", "default"), result(retag)] });
+    const supervisor = await run(world);
+    expect(world.boardWrites().filter((args) => args[0] === "hashtag")).toEqual([]);
+    world.deliver({
+      kind: "message",
+      topic: { id: "build", name: "議題 build" },
+      text: "這個議題是在寫文件",
+    });
+    await pass(supervisor);
+    expect(world.boardWrites().filter((args) => args[0] === "hashtag")).toEqual([
+      ["hashtag", "build", "+文件"],
+    ]);
+    supervisor.close();
+  });
+
   it("is given to a planner once even when its file cannot be moved, so nothing loops", async () => {
     const world = oneTask([init("w1"), result(workerOutput("report"))]);
     world.query.planner.push({ messages: [init("p2", "default"), result(plan([]))] });

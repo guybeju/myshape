@@ -193,12 +193,43 @@ describe("outputs", () => {
 
   it("takes the planner's output only in its schema", () => {
     const task = { title: "t", repo: "app", kind: "ship", prompt: "p" };
-    expect(parsePlannerOutput({ tasks: [task], question: null, nothing: false })?.tasks).toEqual([
-      task,
-    ]);
+    const base = { question: null, nothing: false, hashtags: [] };
+    expect(parsePlannerOutput({ ...base, tasks: [task] })?.tasks).toEqual([task]);
+    expect(parsePlannerOutput({ ...base, tasks: [{ ...task, kind: "merge" }] })).toBeUndefined();
+    expect(parsePlannerOutput({ tasks: [], question: null, hashtags: [] })).toBeUndefined();
+    expect(parsePlannerOutput({ tasks: [], question: null, nothing: true })).toBeUndefined();
+  });
+
+  it("takes the planner's hashtag changes in their schema's shape, whatever the name says", () => {
+    const base = { tasks: [], question: null, nothing: true };
+    const asks = [
+      { name: "AI INFRA", change: "listed" },
+      { name: " ", change: "new" },
+      { name: "x".repeat(64), change: "remove" },
+    ];
+    expect(parsePlannerOutput({ ...base, hashtags: asks })?.hashtags).toEqual(asks);
     expect(
-      parsePlannerOutput({ tasks: [{ ...task, kind: "merge" }], question: null, nothing: false }),
+      parsePlannerOutput({
+        ...base,
+        hashtags: ["🙂".repeat(64)].map((name) => ({ name, change: "new" })),
+      })?.hashtags,
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ["more than three", [1, 2, 3, 4].map((n) => ({ name: `T${n}`, change: "new" }))],
+    ["a name past 64 code points", [{ name: "x".repeat(65), change: "new" }]],
+    ["an empty name", [{ name: "", change: "new" }]],
+    ["a name that is not a string", [{ name: 7, change: "new" }]],
+    ["another change", [{ name: "GPU", change: "rename" }]],
+    ["no change", [{ name: "GPU" }]],
+    ["another field", [{ name: "GPU", change: "new", why: "x" }]],
+    ["an item that is not an object", ["GPU"]],
+    ["not an array", { name: "GPU", change: "new" }],
+  ])("voids the whole plan for hashtag changes with %s", (_case, hashtags) => {
+    const task = { title: "t", repo: "app", kind: "ship", prompt: "p" };
+    expect(
+      parsePlannerOutput({ tasks: [task], question: null, nothing: false, hashtags }),
     ).toBeUndefined();
-    expect(parsePlannerOutput({ tasks: [], question: null })).toBeUndefined();
   });
 });

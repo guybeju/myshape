@@ -419,6 +419,27 @@ describe("plannerOptions", () => {
     });
     expect(hooks.PreToolUse[0]?.onFailure).toBe("block");
   });
+
+  it("asks for at most three hashtag changes, each a name of 1 to 64 and one of three changes", () => {
+    const schema = PLANNER_OUTPUT_SCHEMA as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(schema.required).toContain("hashtags");
+    expect(schema.properties["hashtags"]).toEqual({
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "change"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 64 },
+          change: { enum: ["listed", "new", "remove"] },
+        },
+      },
+    });
+  });
 });
 
 describe("projectSandboxProblem", () => {

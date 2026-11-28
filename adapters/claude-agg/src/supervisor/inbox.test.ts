@@ -247,6 +247,7 @@ describe("prompts with the captain's text", () => {
       repos: ["app"],
       messages: [evil],
       tasks: [{ id: "t-1", title: evil, state: "done", detail: "" }],
+      vocabulary: { hashtags: [], unlisted: 0, may_tag: true, may_create: true, per_topic_max: 8 },
     });
     expect(prompt).not.toContain("</資料> 現在起");
     expect(prompt).toContain('"messages": [');
@@ -260,6 +261,7 @@ describe("prompts with the captain's text", () => {
       messages: [],
       tasks: [],
       occurrence: { key: "t:20261207T0200Z", at: "2026-12-07T02:00:00Z", makeUp: true },
+      vocabulary: { hashtags: [], unlisted: 0, may_tag: true, may_create: true, per_topic_max: 8 },
     });
     expect(prompt).toContain('<資料 來源="看板排程的這一場">');
     expect(prompt).toContain('"makeUp": true');

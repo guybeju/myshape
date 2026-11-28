@@ -34,6 +34,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { AGENT_NAME } from "./agent-name.js";
+import { BoardCommand, spawnCommand, type RunCommand } from "./supervisor/commands.js";
+import { changeKey, hashtagKey, revertedChanges, Tagger } from "./supervisor/hashtags.js";
 import type { LandedRecord } from "./state-files.js";
 import { appendTag, REPO_ROOT, writeHolds, writeTasks } from "./test-home.js";
 
@@ -529,6 +531,35 @@ describe.skipIf(!IN_CI)("on a real board (runs only when CI is set; skipped othe
       expect(Number(parent)).not.toBe(board.starterPid);
       expect(Number(parent)).not.toBe(process.pid);
       expect((await aggregator()).connected).toBe(true);
+    },
+    STEP_MS,
+  );
+
+  it(
+    "(8) records the aggregator's hashtag changes by: aggregator, and the page's revert as revertedChanges reads it",
+    async () => {
+      const run: RunCommand = (call) =>
+        spawnCommand({ ...call, env: { ...board.env, ...call.env } });
+      const { PATH = "", HOME = "", LANG = "", TMPDIR = "" } = board.env;
+      const myshapeSh = join(board.root, "bin", "myshape.sh");
+      const command = new BoardCommand(run, myshapeSh, board.home, { PATH, HOME, LANG, TMPDIR });
+      const tagger = new Tagger(board.home, command, Date.now);
+      expect(await tagger.change("build", "add", "整合測試", true)).toEqual({ sent: true });
+      expect(await tagger.change("build", "remove", "整合測試")).toEqual({ sent: true });
+      const records = readFileSync(join(board.home, "data", "myshape", "events.jsonl"), "utf8")
+        .split("\n")
+        .filter((line) => line.includes('"hashtag.'))
+        .map((line) => JSON.parse(line) as Json);
+      expect(records.map((record) => [record["kind"], record["by"], record["topic"]])).toEqual([
+        ["hashtag.added", "aggregator", "build"],
+        ["hashtag.removed", "aggregator", "build"],
+      ]);
+      expect(revertedChanges(board.home, new Map())).toEqual(new Set());
+      const reply = await post("hashtags/revert", { rid: records[1]?.["rid"] });
+      expect(reply["ok"], JSON.stringify(reply)).toBe(true);
+      expect(revertedChanges(board.home, new Map())).toEqual(
+        new Set([changeKey("build", hashtagKey("整合測試"), "remove")]),
+      );
     },
     STEP_MS,
   );
