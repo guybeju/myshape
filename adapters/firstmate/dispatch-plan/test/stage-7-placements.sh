@@ -147,7 +147,7 @@ test_places_each_item_on_each_machine() {
     "a declared project with no clone must be a gap"
   assert_equals "now room gaps= check=1 why=0" "$(placement "$out" main/odd farok)" \
     "an unreadable needs line must be to check"
-  assert_equals "after-setup room gaps=clone:other check=0 why=0" "$(placement "$out" main/other farbare)" \
+  assert_equals "after-setup room gaps=tool:jq,tool:dp-tool,clone:other check=0 why=0" "$(placement "$out" main/other farbare)" \
     "the item's own repo with no clone must be a gap"
   assert_equals "after-setup room gaps=needs:,tool:dp-tool,clone:farbare check=0 why=0" "$(placement "$out" farbare/old1 here)" \
     "an item whose machine sent no needs must not read as runnable anywhere"
