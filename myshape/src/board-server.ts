@@ -44,6 +44,7 @@ import { DEFAULT_TIMINGS, Poller } from "./poller.js";
 import type { PollTimings } from "./poller.js";
 import { parseAggregator } from "./report.js";
 import type { Aggregator, HomeReport } from "./report.js";
+import { remoteAccess } from "./remote.js";
 import { DecisionStore, decisionStep } from "./decisions.js";
 import type { PageAnswer } from "./decisions.js";
 import { applyOperation, operationOf } from "./ops.js";
@@ -1319,6 +1320,7 @@ function serveBrowser(service: Service): void {
     tokenFile: service.paths.token,
     assetDirs: [publicDir, path.join(dist, "page")],
     indexFile: path.join(publicDir, "index.html"),
+    remote: remoteAccess(service.paths.remote, log),
     api: createApi({
       bootId: service.bootId,
       version: () => viewVersion(service),

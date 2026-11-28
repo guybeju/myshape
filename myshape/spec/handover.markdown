@@ -172,11 +172,14 @@ C19 在 2026-11-18 改定：作答時送 `done` 還是 `release`，照開 hold �
 - 進入點 `board-server.ts`、`board-client.ts` 與 `src/page/` 沒有單元測試，由 Bash 與瀏覽器的整合測試覆蓋；CRAP 與 mutation 的關卡只管函式庫模組（C28）。
 - 窄視窗的版面沒有自動測試（C42）。
 - 頁面在佇列裡有上百個項目時的速度沒有量過。
+- 遠端名稱（contracts 第 6.2 節）只用 `curl` 自己帶 header 測過，沒有經真的 `tailscale serve` 與手機跑過。tailscaled 會先刪掉用戶端自帶的 `Tailscale-User-Login`、`Tailscale-Funnel-Request`，Funnel 的請求帶 `Tailscale-Funnel-Request: ?1` 而不帶登入，每個轉送的請求都設 `X-Forwarded-Host`：這些讀自 tailscale 的原始碼 `ipn/ipnlocal/serve.go`（v1.104.7 的 `addTailscaleIdentityHeaders`、`addProxyForwardedHeaders`）與 Serve 的文件，Tailscale 改了這些行為，這裡的測試看不出來。Serve 有沒有原樣轉 `Origin` 也沒驗：沒轉的話手機上的改動會被 403 擋下（不會放寬）。
+  這些只在 Serve 的 HTTP 轉送（`tailscale serve --bg <埠>`）成立：TCP 轉送（`--tcp`、`--tls-terminated-tcp`）不讀 HTTP，不刪也不加任何 header，用戶端可以自己帶 `Tailscale-User-Login` 或本機的 `Host`，看板分不出來。這個埠只能用 HTTP 的那一種。
 
 行為上的：
 
 - 主 home 的 checkout 裡改了 `bin/fm-board.sh` 而沒提交，下一次看板啟動時它就不是「不用確認」的程式；這台 PC 的 checkout 群組能寫，要確認的程式會被拒絕，看板就接不上（寫入等著、不讀 home），直到那個改動提交或還原，再跑一個看板指令。
 - `MYSHAPE_ROOT_OVERRIDE` 指向 `bin/myshape.sh` 自己的位置以外的目錄時，沒有程式不用確認（contracts 第 7 節）；它擋不住把指令本身放在別處啟動的人。
+- 手機經 `tailscale serve` 打開看板，要在 `config/myshape-remote.json` 寫遠端名稱與 Tailscale 登入，再 `bin/myshape.sh restart`（contracts 第 6.2 節）；服務只在啟動時讀它，`service.log` 記下讀到什麼。遠端名稱下不能確認程式（P-008 的確認只在 PC）。`open` 只印本機的網址，手機的網址要自己把前面換成 `https://<名稱>`。
 
 - aggregator 可以在每個 home 的回報裡帶狀態數字（例如 Claude 的用量與重置時間），首頁側欄最上面的「用量」面板照樣顯示，看板不因為它們做任何事；設計、first mate 這一側推什麼與已知限制（經看板只看得到一個 Claude 帳號、遠端的 home 不推）在 [狀態數字](status-metrics.markdown)，格式在 contracts 第 4.1 節。
 - 側欄的卡片可以照建立時間排列（[卡片排列](card-sort.markdown)），只改顯示；這時拖曳只能換佇列，排在那裡的最後。頁面自己記的排列在瀏覽器的 `localStorage`，換瀏覽器或換埠就回到照優先順序。

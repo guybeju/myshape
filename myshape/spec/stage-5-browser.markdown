@@ -185,6 +185,21 @@
    | `curl -H 'Connection: Upgrade' -H 'Upgrade: websocket' …` | 400 |
    | `curl 'http://127.0.0.1:<p>/assets/..%2f..%2fstate%2fmyshape%2ftoken'` | 404 |
    | 用原始 socket 送一個 `Host:` 值是亂碼的請求 | 4xx，服務沒當掉 |
+   | 帶對的 token、`-H 'X-Forwarded-Host: 127.0.0.1:<p>'` 的 `GET /api/state` | 403 |
+
+   遠端名稱（contracts 第 6.2 節），`<n>` 是範例名稱 `board-pc.example-tailnet.ts.net`、`<l>` 是範例登入。沒有 `config/myshape-remote.json`、或它讀不懂時，下面每一條都是 403；寫了 `{"host":"<n>","login":"<l>"}` 並重啟之後：
+
+   | 請求（都帶 `-H 'Host: <n>'`） | 預期 |
+   | --- | --- |
+   | `-H 'Tailscale-User-Login: <l>'` 的 `GET /` | 200 |
+   | 同上，帶對的 token 的 `GET /api/state` | 200 |
+   | 同上，`Origin: https://<n>`、`Content-Type: application/json` 的 `POST /api/refresh` | 200 |
+   | 沒有 `Tailscale-User-Login` 的 `GET /` | 403 |
+   | `Tailscale-User-Login` 是別人 | 403 |
+   | 對的登入、加 `Tailscale-Funnel-Request: ?1` | 403 |
+   | 對的登入、`Origin: http://<n>` 的 `POST /api/refresh` | 403 |
+   | 對的登入、`Origin: https://<n>` 的 `POST /api/programs/confirm` | 403；本機名稱的同一個請求照舊交給 API |
+   | `Host: <n>:8443` 或 `Host: other.example-tailnet.ts.net` | 403 |
 
    另外確認：每個回應都有 CSP 與 `X-Frame-Options: DENY`；`ss -ltn` 顯示服務只聽 `127.0.0.1`；`index.html` 的原始碼裡沒有 token、沒有任何議題資料；每筆被拒的請求在 `audit.jsonl` 有一行，而且那一行沒有 token。
 3. 兩步確認：沒有確認碼直接送作答、確認碼用第二次、確認碼過期、兩步之間 hold 的問題或處理方式變了、服務重啟後用舊的確認碼，全部被拒；請求裡帶的 `mode` 不影響送出的處理方式。

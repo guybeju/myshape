@@ -63,6 +63,7 @@ fork 裡看板新增的檔案、改到上游檔案的三處例外與 fork 的硬
 | `state/myshape/service.log`、`service.log.1` | 0600 | 服務的 stdio | 服務 |
 | `state/myshape/audit.jsonl` | 0600 | 稽核紀錄，只追加 | 服務 |
 | `config/myshape-port` | — | 選用，一行埠號 | 使用者 |
+| `config/myshape-remote.json` | — | 選用，瀏覽器除了本機以外唯一能用的名稱與 Tailscale 登入（第 6.2 節）；服務啟動時讀一次，看板只讀 | 使用者 |
 | `config/myshape-aggregator.json` | 0644，別的帳號不能寫 | 看板接哪個 aggregator：名稱與 feed、deliver 兩支程式的路徑（第 7 節）；看板只讀 | 使用者，或 aggregator 照使用者的意思寫（first mate 是 `fm-board.sh setup`、`bind` 與 session start） |
 | `config/fleet-ledger` | — | 上游的帳本旗標，每個 home 各一 | `fm-board.sh setup`（first mate 這一側） |
 
@@ -428,15 +429,26 @@ socket 上改議題的操作寫進議題更新的紀錄都註明「<aggregator �
 
 只綁 `127.0.0.1:<埠>`。預設埠 47819，可用主 home 的 `config/myshape-port` 改。每個請求都過下面的檢查，任何一項不過就回 4xx 並記入稽核紀錄，不讓服務當掉：
 
-1. `Host` 精確等於 `127.0.0.1:<埠>` 或 `localhost:<埠>`。
+1. `Host` 精確等於 `127.0.0.1:<埠>` 或 `localhost:<埠>`，或等於下面「遠端名稱」設的那一個名稱。本機名稱的請求帶 `X-Forwarded-Host` 時回 403（「forwarded request names a local host」），不論有沒有設遠端名稱：`tailscale serve` 依 TLS 的名稱選轉給誰，用戶端送的 `Host` 原樣轉來，所以經它轉來的請求可以自稱本機；它對每個轉送的請求都設 `X-Forwarded-Host`。
 2. `/api/` 底下的所有請求（含讀取）都要 `Authorization: Bearer <token>`，用固定時間比較。
-3. 改變狀態的請求（非 GET）要求 `Origin` 精確等於 `http://127.0.0.1:<埠>` 或 `http://localhost:<埠>`；缺少或是 `null` 一律拒絕。
+3. 改變狀態的請求（非 GET）要求 `Origin` 精確等於和 `Host` 同一邊的來源：本機名稱是 `http://127.0.0.1:<埠>` 或 `http://localhost:<埠>`，遠端名稱只有 `https://<名稱>`；缺少或是 `null` 一律拒絕。
 4. 改變狀態的請求 `Content-Type` 只收 `application/json`，body 上限 64 KiB，解析失敗回 400。
 5. 靜態頁面不需要 token，但仍檢查 `Host`，而且不內嵌任何資料。
 6. 每個回應都帶 `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`、`X-Frame-Options: DENY`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`Cache-Control: no-store`。不設任何 CORS header。不回應 `OPTIONS` 預檢（回 405）。
 7. 不提供 WebSocket 或 SSE；`Upgrade` 請求回 400。
 
-token 是 32 位元組亂數的十六進位，第一次啟動時產生，之後不變，直到 `reset-token`。`myshape.sh open` 印出 `http://127.0.0.1:<埠>/#t=<token>`；頁面讀到後存進 `sessionStorage`、把 fragment 從網址列拿掉，之後用 header 帶。已經開著的分頁只把 fragment 換成 `#t=<token>` 時（例如 `reset-token` 之後把新網址貼進同一個分頁），頁面重新載入，照第一次載入的方式讀它。
+**遠端名稱**（讓手機經 `tailscale serve` 打開看板）：主 home 的 `config/myshape-remote.json` 寫成 `{"host":"<電腦>.<tailnet>.ts.net","login":"<Tailscale 登入>"}`，只有這兩個文字欄位。
+`host` 是一個完整的小寫 `ts.net` 名稱，不帶 `https://`、埠號、萬用字元或第二個名稱；`login` 是不含空白的 ASCII（tailscaled 對非 ASCII 的登入會改用 RFC 2047 編碼，比對不到）。
+服務啟動時讀一次，改了要 `myshape.sh restart`；讀到的結果寫進 `state/myshape/service.log`：`remote access on for <名稱>`，或 `remote access off: <路徑> <原因>`。
+沒有這個檔、檔是空的或只有空白：和沒有這一段一樣，只認本機名稱。檔讀不懂（不是 JSON、多或少欄位、`host` 或 `login` 不合上面的形狀、讀不到）：同樣只認本機名稱，`service.log` 寫原因，從不放寬。
+`Host` 是那個名稱的請求，在第 2 到 7 項之外還要全部通過，否則 403，在任何 API 處理之前：
+
+- 沒有 `Tailscale-Funnel-Request`（值是什麼都一樣）：「Funnel request」。Funnel 把同一個名稱開給網際網路，它轉來的請求帶 `Tailscale-Funnel-Request: ?1`、不帶登入。
+- `Tailscale-User-Login` 精確等於 `login`：沒有這個 header 是「no Tailscale login」，不相等（含大小寫不同、帶了兩份）是「Tailscale login is not the captain's」。tailscaled 轉送之前先刪掉用戶端自己帶的這些 header，再依來源設定；tag 過的裝置與 Funnel 都不設登入，所以都進不來。
+- 有 `Origin` 時（含 GET）精確等於 `https://<名稱>`：「origin is not this board」。
+- 讓看板執行程式的確認（`POST /api/programs/confirm`，第 8 節）兩步都拒絕：「program confirmation is only on the PC」，在 token 檢查之前；頁面在遠端名稱下不顯示「確認…」，改寫「只能在 PC 上確認」。作答、直送、送訊息與其他動作照常。
+
+token 是 32 位元組亂數的十六進位，第一次啟動時產生，之後不變，直到 `reset-token`。`myshape.sh open` 印出 `http://127.0.0.1:<埠>/#t=<token>`（遠端名稱不印：手機用的網址是把前面換成 `https://<名稱>`，`#t=` 之後不變）；頁面讀到後存進 `sessionStorage`、把 fragment 從網址列拿掉，之後用 header 帶。已經開著的分頁只把 fragment 換成 `#t=<token>` 時（例如 `reset-token` 之後把新網址貼進同一個分頁），頁面重新載入，照第一次載入的方式讀它。
 
 API 的路徑與 body 由第五段定；這裡只定兩件事：
 
@@ -576,7 +588,7 @@ first mate 這一側的 `deliver` 每一種跑哪個指令、怎麼對應結果�
 | 要你動手的「不做了」「好，撤下」 | (動作, 項目 id) |
 | 改名、合併、刪掉整個 hashtag（第 3.8 節） | (動作, 名稱, 另一個名稱, 會動到的議題 id；合併另加併進去的那個 hashtag 的議題 id)，議題清單由服務當下讀出，第一步回給頁面顯示 |
 | 使用者在頁面上刪掉一筆排程（第 3.9 節；頁面上撤不回來，撤回只撤 aggregator 的改動） | (動作, 議題 id, 那個議題現在的排程 id)，排程 id 由服務當下讀出；兩步之間排程刪了又建就拒絕 |
-| 讓看板執行一支要確認的程式（第 7 節） | (程式的完整路徑, 程式內容的 SHA-256, 設定檔內容的 SHA-256)，兩步都由服務當下讀檔算出，請求只說是 feed 還是 deliver |
+| 讓看板執行一支要確認的程式（第 7 節；只在本機名稱，遠端名稱兩步都回 403，第 6.2 節） | (程式的完整路徑, 程式內容的 SHA-256, 設定檔內容的 SHA-256)，兩步都由服務當下讀檔算出，請求只說是 feed 還是 deliver |
 
 作答一律兩步（採建議 C12）：答案送出就會關掉或解除那個 hold，不能收回。
 答了之後這一項怎麼處理，由開 hold 的人用 `fm-captain-hold.sh hold --on-answer close|release` 記在 hold 上（第 4 節的 `on_answer`），看板照著送，使用者不選：`close` 送 `done`，被 hold 的項目標成完成；`release` 送 `release`，解除 hold、項目回到排隊中。
