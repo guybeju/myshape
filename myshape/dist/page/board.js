@@ -1,10 +1,11 @@
 import { getJson, postJson, takeToken, tokenInHash } from "./api.js";
 import { h, replaceChildren } from "./dom.js";
-import { dropAnchor, timeDropAnchor } from "./drop.js";
+import { dropPlace } from "./drop.js";
 import { frame } from "./frame.js";
 import { NO_FILTER, filterHash, parseFilterHash, parseTab, viewFilter } from "./filter.js";
 import { ORDER_KEY, parseOrder } from "./sort.js";
 import { QUEUES, agentName, currentTopic, setAgentLabel } from "./state.js";
+import { indexAt, listenForTouchDrag } from "./touch.js";
 const POLL_MS = 5000;
 /** How often the 用量 panel is redrawn so its times stay current. */
 const USAGE_REDRAW_MS = 30_000;
@@ -348,6 +349,47 @@ function slotOf(card) {
         below: topicOf(card.nextElementSibling),
     };
 }
+/** The cards a queue's box lists, without the one being dragged. */
+function othersIn(box, card) {
+    const cards = box?.querySelectorAll(".topic[data-topic]") ?? [];
+    return [...cards].filter((entry) => entry !== card);
+}
+/** The last card a queue lists, not counting the dragged one: a segment drop lands after it. */
+function lastIn(queue, card) {
+    const box = app.querySelector(`.queue[data-queue="${CSS.escape(queue)}"]`);
+    return topicOf(othersIn(box, card).at(-1) ?? null);
+}
+/**
+ * What a drop on `element` lands on: a segment button, or a queue's list at
+ * the card's place in it. A box the card is not in (listed by creation time
+ * it stays where it was) is a drop at that list's end.
+ */
+function targetAt(element, card) {
+    const button = element?.closest(".segs button[data-segment]");
+    const segment = button?.dataset["segment"];
+    if (segment !== undefined)
+        return { kind: "segment", segment, last: lastIn(segment, card) };
+    const box = element?.closest(".queue[data-queue]");
+    const queue = box?.dataset["queue"];
+    if (box === null || box === undefined || queue === undefined)
+        return null;
+    const slot = box.contains(card) ? slotOf(card) : null;
+    return { kind: "list", slot: slot ?? { queue, above: lastIn(queue, card), below: null } };
+}
+/**
+ * How the queues list their cards, which the drop reads: under a filter
+ * (spec/drag-under-filter.markdown), by creation time (spec/card-sort.markdown).
+ */
+function listingOf(card) {
+    const box = card.closest(".queue");
+    return {
+        filtered: box?.dataset["filtered"] === "true",
+        byTime: box?.dataset["byTime"] === "true",
+    };
+}
+function placeAt(target, card, start) {
+    return dropPlace(start, target, listingOf(card));
+}
 /** While dragging, the card itself is moved in the DOM so the order updates under the pointer. */
 function dragOver(event) {
     if (dragged === null)
@@ -369,53 +411,101 @@ function dragOver(event) {
         over.parentElement?.insertBefore(card, event.clientY < box.top + box.height / 2 ? over : over.nextSibling);
     }
 }
-/**
- * The queue a drop lands in and where (null: nowhere). Under a filter it is
- * placed among the cards shown (spec/drag-under-filter.markdown); listed by
- * creation time, only a move to another queue counts (spec/card-sort.markdown).
- */
-function placeOf(event, card, start) {
-    if (card.closest(".queue")?.dataset["byTime"] === "true") {
-        const box = event.target.closest(".queue");
-        const queue = box?.dataset["queue"];
-        return queue === undefined ? null : { queue, anchor: timeDropAnchor(start.queue, queue) };
-    }
-    const slot = slotOf(card);
-    if (slot === null)
-        return null;
-    const filtered = card.closest(".queue")?.dataset["filtered"] === "true";
-    return { queue: slot.queue, anchor: dropAnchor(start, slot, filtered) };
-}
 function drop(event) {
     const card = app.querySelector(".topic.dragging");
     if (dragged === null || card === null)
         return;
-    const place = placeOf(event, card, dragged.start);
-    if (place === null)
+    const target = targetAt(event.target, card);
+    if (target === null)
         return;
     event.preventDefault();
-    if (place.anchor !== null)
+    const place = placeAt(target, card, dragged.start);
+    if (place !== null)
         actions.move(dragged.id, place.queue, place.anchor);
+}
+function startDrag(card, start) {
+    dragged = { id: card.dataset["topic"] ?? "", start };
+    card.classList.add("dragging");
+    app.classList.add("dragging-now");
+}
+/** Without a drop (Esc, or let go outside a queue) the redraw puts the card back. */
+function endDrag() {
+    dragged = null;
+    app.classList.remove("dragging-now");
+    render();
 }
 app.addEventListener("dragstart", (event) => {
     const card = topicCardAt(event);
     const start = card === null ? null : slotOf(card);
     if (card === null || start === null || event.dataTransfer === null)
         return;
-    dragged = { id: card.dataset["topic"] ?? "", start };
-    event.dataTransfer.setData("text/plain", dragged.id);
+    startDrag(card, start);
+    event.dataTransfer.setData("text/plain", card.dataset["topic"] ?? "");
     event.dataTransfer.effectAllowed = "move";
-    card.classList.add("dragging");
-    app.classList.add("dragging-now");
 });
 app.addEventListener("dragover", dragOver);
 app.addEventListener("drop", drop);
-app.addEventListener("dragend", () => {
-    // Without a drop (Esc, or released outside a queue) the redraw puts the card back.
-    dragged = null;
-    app.classList.remove("dragging-now");
-    render();
-});
+app.addEventListener("dragend", endDrag);
+/** A finger places the card by height alone: a box's title or a gap between cards is no jump. */
+function slideCard(card, element, y) {
+    const box = element?.closest(".queue");
+    const list = box?.querySelector(".list");
+    if (box === null || box === undefined || list === null || list === undefined)
+        return;
+    if (box.dataset["byTime"] === "true")
+        return;
+    const others = othersIn(box, card);
+    const middles = others.map((entry) => {
+        const rect = entry.getBoundingClientRect();
+        return rect.top + rect.height / 2;
+    });
+    list.insertBefore(card, others[indexAt(middles, y)] ?? list.querySelector(".empty"));
+}
+/** Marks the segment button under the finger when letting go there would move the card. */
+function markDrop(card, element, start) {
+    for (const button of app.querySelectorAll(".segs button.drop"))
+        button.classList.remove("drop");
+    const target = targetAt(element, card);
+    if (target?.kind !== "segment" || placeAt(target, card, start) === null)
+        return;
+    element?.closest(".segs button")?.classList.add("drop");
+}
+/** The part of the window between the sticky header and, on a phone, the tab bar at the bottom. */
+function band() {
+    const top = document.querySelector("header")?.getBoundingClientRect().bottom ?? 0;
+    const tabs = app.querySelector(".tabs")?.getBoundingClientRect();
+    const atBottom = tabs !== undefined && tabs.bottom >= window.innerHeight - 1;
+    return { top: Math.max(0, top), bottom: atBottom ? tabs.top : window.innerHeight };
+}
+listenForTouchDrag(app, {
+    lift: (card) => {
+        const start = slotOf(card);
+        if (start === null)
+            return false;
+        startDrag(card, start);
+        card.classList.add("lifted");
+        return true;
+    },
+    hover: (x, y) => {
+        const card = app.querySelector(".topic.dragging");
+        if (dragged === null || card === null)
+            return;
+        const element = document.elementFromPoint(x, y);
+        slideCard(card, element, y);
+        markDrop(card, element, dragged.start);
+    },
+    release: (x, y) => {
+        const card = app.querySelector(".topic.dragging");
+        const target = card === null ? null : targetAt(document.elementFromPoint(x, y), card);
+        const place = dragged === null || card === null || target === null
+            ? null
+            : placeAt(target, card, dragged.start);
+        if (dragged !== null && place !== null)
+            actions.move(dragged.id, place.queue, place.anchor);
+        endDrag();
+    },
+    cancel: endDrag,
+}, band);
 window.addEventListener("hashchange", () => {
     // A link from `open` pasted into this tab changes only the fragment; loading
     // the page again takes its token the way the first load does.

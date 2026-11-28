@@ -25,6 +25,10 @@ section{margin-bottom:20px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:8px}
 .topic{cursor:grab}
 .topic.dragging{opacity:.45;outline:2px dashed var(--accent);background:var(--drag)}
+/* A card a finger lifted by its ⠿ (touch.ts) shows in the inverse colours. */
+.topic.dragging.lifted{opacity:1;background:var(--ink);color:var(--bg);outline:2px solid var(--accent);box-shadow:0 6px 18px var(--shadow)}
+.topic.lifted .link,.topic.lifted .note,.topic.lifted .handle{color:inherit}
+.topic .handle{display:none}
 .topic .name{font-weight:600}
 .goal{color:var(--mute);font-size:13px}
 .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;margin-top:4px}
@@ -130,6 +134,8 @@ button.link{padding:10px 6px}
 details>summary{padding:10px 0}
 textarea,input,select{font-size:16px}
 input[type=text],input[type=number],select{min-height:44px}
+.topic{position:relative;padding-right:52px}
+.topic .handle{display:flex;position:absolute;top:2px;right:2px;width:44px;height:44px;align-items:center;justify-content:center;font-size:20px;color:var(--mute);border-radius:6px;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 }
 @media (max-width:640px){
 body{overflow-wrap:break-word}
@@ -173,6 +179,7 @@ table.settings td[data-label]::before{content:attr(data-label) "：";color:var(-
 .segs{display:flex;gap:4px;margin-bottom:8px}
 .segs button{flex:1;padding:6px 2px}
 .segs button.on{background:var(--accent);color:var(--on-color);border-color:var(--accent)}
+.segs button.drop{outline:3px dashed var(--accent);outline-offset:-3px;background:var(--drag);color:var(--ink)}
 .segs .count{margin-left:4px;font-size:12px}
 #sidebar[data-segment="high"] .queue:not([data-queue="high"]),#sidebar[data-segment="normal"] .queue:not([data-queue="normal"]),#sidebar[data-segment="later"] .queue:not([data-queue="later"]),#sidebar[data-segment="schedules"] .queue{display:none}
 #sidebar:not([data-segment="schedules"]) [data-column="schedules"]{display:none}
